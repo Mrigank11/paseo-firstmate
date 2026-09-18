@@ -45,6 +45,8 @@ Flag anything you could not confirm as unverified in the digest, e.g. `Unverifie
 
 A scout never produces a PR and never mutates a repo; if its finding implies a code change, frame that as a proposed NEW `ship` task for the captain to approve, with scope and rationale, and stop there.
 
+A **planning** scout is this pattern's engine: its report *is* a design/plan, and a follow-on `ship` task in the contributor lane implements it — the plan-only scout itself still never touches code.
+
 Never let a scout roll into implementation on its own initiative, even for a trivial fix — the task shape boundary is absolute.
 
 ## Fanning out multiple scouts

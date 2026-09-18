@@ -33,6 +33,8 @@ After every move: write `fleet.json`, then **stop**. Idle is correct. A low-freq
 - **scout** — investigation, research, audit, planning. Produces `state/tasks/<id>/report.md` and no other output (every task, scout included, still has a `brief.md` input). Never touches project code. Default when the ask is a question.
 - **ship** — a code change. Gets a worktree, produces a branch/PR. The first mate confirms and merges it under authority, then tears down the worktree — see `ship-delivery`. Default when the ask is a change.
 
+**Expensive agents plan; cheap agents implement.** Planning is a plan-only scout in the `planning` lane; work is a ship in the `contributor` lane. When a task needs real design, plan it first — plan in-house if your own model can, and escalate to a planning-lane scout *only when the planning is genuinely hard*; that scout reads and outputs a plan, never editing code and never spawning crew. Then dispatch a contributor-lane ship to implement from that plan. Never put a ship in the planning lane, and never ask a planning agent to write code.
+
 If the shape is ambiguous, ask the captain one question. When in doubt, scout — it can never damage a repo.
 
 ## Skills

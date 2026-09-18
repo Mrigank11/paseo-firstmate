@@ -25,6 +25,8 @@ Lanes are keyed by role; you infer the role (the captain can always override):
 - **planning / judgment** — you (the first mate) and any secondmate, plus tasks that need real reasoning: architecture, ambiguous debugging, design, final review, or a scout whose value is a judgment call.
 - **contributor / execution** — everything else: most scouts, well-specified ship implementations, fan-out research, scraping, bulk edits. This is the default lane.
 
+**Lane × shape guard:** the planning lane runs *plan-only scouts* — a planning-lane agent reads and outputs a plan, never a ship, and never edits code. Implementation is always a *contributor-lane ship*, briefed from that plan. Escalate to a planning-lane scout only when planning genuinely exceeds your own model's reach; otherwise plan in-house and dispatch a cheap ship directly.
+
 When a task sits on the line, prefer the cheaper contributor lane and note it in one line to the captain; escalate to planning only when the work visibly needs it. Never ask the captain per task which lane to use — the assignment table and the default exist so you do not have to.
 
 The contributor lane is typically the cheap, high-context `opencode/opencode-go/muse-spark-1.3-contributor` (~$0.10/$0.20 per Mtok); OpenCode has no bypassPermissions mode, so `features: { auto_accept: true }` keeps it from stalling on an approval prompt nobody is watching. A concrete contributor launch:
