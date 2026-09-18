@@ -35,19 +35,19 @@ Expensive agents plan, cheap agents implement: hard planning goes to a plan-only
 
 ## Quickstart
 
-**Requirements:** a Paseo-capable Claude session (open this repo as a Claude Code project, or spawn it as a Paseo agent — a Paseo agent *is* a Claude session with the Paseo MCP wired in), plus the GitHub CLI (`gh auth login`) for PR/merge operations.
+**Requirements:** a Paseo-capable Claude session, plus the GitHub CLI (authenticated through `gh auth login`) for PR/merge operations. A Paseo agent *is* a Claude session with the Paseo MCP wired in.
+
+Point your agent at this repo — `CLAUDE.md` takes over from there:
 
 ```bash
 git clone <this-repo>
-cd paseo-firstmate
-cp state/decisions.example.md state/decisions.md   # gitignored runtime policy — edit to taste
-# open the repo as a Claude Code project, or spawn it as a Paseo agent, then:
-# > ahoy! scout the auth flow in my xyz repo, then ship a fix for the flaky login test
 ```
 
-1. Copy `state/decisions.example.md` → `state/decisions.md` and set your **routing lanes** (`planning` vs `contributor`), permission posture, and merge authority.
-2. Talk to the first mate. It writes `state/tasks/<id>/brief.md`, spawns the crew member, records it in `state/fleet.json`, and ends its turn.
-3. Paseo wakes it on finish/error/permission — it harvests scout reports, confirms ship PRs, merges only under authority (your explicit word, or a standing `auto-merge: green-only` posture — red PRs never auto-merge), and tears down worktrees.
+Then open the checkout as a Claude Code project, or spawn it as a Paseo agent, and say:
+
+> ahoy! scout the auth flow in my xyz repo, then ship a fix for the flaky login test
+
+The first mate handles setup itself (asking before changing anything): it copies `state/decisions.example.md` → `state/decisions.md` (gitignored runtime policy — edit to taste) and sets your **routing lanes** (`planning` vs `contributor`), permission posture, and merge authority. Then it writes `state/tasks/<id>/brief.md` per task, spawns the crew member, records it in `state/fleet.json`, and ends its turn. Paseo wakes it on finish/error/permission — it harvests scout reports, confirms ship PRs, merges only under authority (your explicit word, or a standing `auto-merge: green-only` posture — red PRs never auto-merge), and tears down worktrees.
 
 Try `/bearings` anytime for a one-screen fleet digest, `/afk` before stepping away for batched digests, `/ahoy` when you're back.
 
