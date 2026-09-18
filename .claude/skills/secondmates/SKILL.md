@@ -13,6 +13,8 @@ Appoint a secondmate when a whole sub-domain of work — a full repo, programme,
 
 Do not appoint for a handful of tasks — that is just crew. One level of nesting is the norm; deeper nesting needs a real reason written down.
 
+A planning-lane scout is **not** a secondmate: it plans once and exits, and never spawns its own crew. Ongoing sub-fleets are appointed secondmates only — a planning agent never self-orchestrates.
+
 ## Appointing
 
 Spawn with `mcp__paseo__create_agent` a Claude session (a reasoning model, e.g. `claude/claude-opus-5` or `claude/claude-sonnet-5`) in its own paseo-firstmate workspace — a checkout whose own `state/` dir keeps its fleet isolated from yours — with title, provider, and initialPrompt, leaving `notifyOnFinish` true.

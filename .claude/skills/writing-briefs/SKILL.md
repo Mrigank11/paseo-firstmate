@@ -23,7 +23,9 @@ Always name the task shape (`scout` vs `ship`), the target repo and paths to rea
 
 A `scout` is investigation/research, report-only: it is READ-ONLY on project code, never edits it, and must produce `state/tasks/<id>/report.md`.
 
-A `ship` is a code change in its own worktree: it opens a branch and PR, then stops — the captain merges, and the first mate never merges in v1.
+A **planning** task is a scout in the `planning` lane: its brief says explicitly *produce a plan/design as the report; do not implement, do not edit code, do not spawn sub-agents.* A contributor `ship` that implements a plan cites the plan's `report.md` path in its brief.
+
+A `ship` is a code change in its own worktree: it opens a branch and PR, then stops — delivery (merge under authority, then teardown) is handled per the `ship-delivery` skill.
 
 ## Anti-pattern: over-specifying the solution
 
