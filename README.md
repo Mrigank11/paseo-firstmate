@@ -67,7 +67,7 @@ Everything the captain can tune lives in `state/decisions.md` (from the example 
 
 ## Status
 
-All three phases are built: (1) spawn + supervise crew, scout/ship shapes, permission auto-handling; (2) PR/merge authority under the two-source rule with delivery modes and worktree teardown; (3) `/bearings` digest, `/afk` + `/ahoy` away-mode, and subordinate secondmate sub-fleets. Validated end-to-end: a real Paseo agent cold-started from `CLAUDE.md` correctly delegates a scout and drives the fleet. Expect rough edges — this is an early open-source snapshot, and issues/PRs describing what broke (with your `fleet.json` task entry and brief) are the most useful contributions.
+Working today: the first mate dispatches and supervises crew as isolated Paseo agents across both task shapes (scout reports, ship PRs), handles permission prompts against your configured boundary, and confirms ship PRs and merges them under your merge authority before tearing down worktrees. Also in: per-project delivery modes, the `/bearings` fleet digest, `/afk` + `/ahoy` away-mode digests, and subordinate secondmate sub-fleets. Validated end-to-end: a real Paseo agent cold-started from `CLAUDE.md` correctly delegates a scout and drives the fleet. This is an early open-source snapshot, so expect rough edges — issues/PRs describing what broke (with your `fleet.json` task entry and brief) are the most useful contributions.
 
 ## License
 
