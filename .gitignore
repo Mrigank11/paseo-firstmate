@@ -1,4 +1,6 @@
 # Runtime fleet state — not source
 state/fleet.json
 state/decisions.md
+state/secondmates.md
+state/afk-log.md
 state/tasks/

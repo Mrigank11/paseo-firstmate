@@ -22,6 +22,10 @@ See `CLAUDE.md` for the contract and `docs/STATE.md` for the state format.
 
 ## Status
 
-**Phase 1 (v1):** spawn + supervise, scout/ship shapes, permission auto-handling. Ship tasks produce a PR; you merge.
+All three phases are built.
 
-**Later:** PR/merge authority + delivery gates (phase 2); AFK digests, session digests, nested fleets (phase 3).
+- **Phase 1** — spawn + supervise crew, scout/ship shapes, permission auto-handling. Skills: `dispatch-routing`, `writing-briefs`, `permission-policy`, `stuck-crew-recovery`, `scout-report`.
+- **Phase 2** — PR/merge authority under a two-source rule (captain's word or a standing green-only posture), delivery modes (`direct-PR` / `local-only` / `gated`), worktree teardown. Skill: `ship-delivery`.
+- **Phase 3** — `/bearings` fleet digest, `/afk`+`/ahoy` batched away-mode, and subordinate "secondmate" sub-fleets. Skills: `session-digest`, `afk-mode`, `secondmates`.
+
+Validated end-to-end: a real `claude-sonnet-5` Paseo agent, cold-started from `CLAUDE.md`, correctly delegates a scout to a crew member and drives the fleet through `mcp__paseo__*` — no MCP wiring needed beyond running it as a Paseo agent.
