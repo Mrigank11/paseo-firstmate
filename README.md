@@ -71,4 +71,4 @@ All three phases are built: (1) spawn + supervise crew, scout/ship shapes, permi
 
 ## License
 
-No `LICENSE` file is committed yet — all rights reserved by default until the maintainer picks one.
+MIT — see [LICENSE](LICENSE). Same license as the [firstmate](https://github.com/kunchenguid/firstmate) project that inspired this one.
