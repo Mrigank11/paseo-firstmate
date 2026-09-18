@@ -9,17 +9,25 @@ Resolve the launch configuration in this order, then spawn once and stop — sup
 
 ## 1. Resolution order
 
-Check `state/decisions.md` first for a captain override naming a profile or provider/model; a captain override wins over everything below.
+Resolve every task's launch config in this precedence, stopping at the first that applies:
 
-If no override, call `mcp__paseo__list_profiles` first and read every profile's `notes`; pick the profile whose notes best match the work, or one the captain named in the brief.
+1. **Per-task captain override** — the captain named a lane, provider, or model for *this* task, in the ask or in `state/decisions.md`. Obey it.
+2. **Routing lane** — classify the task's role (section 2), find its lane in the `## Routing` table of `state/decisions.md`, and materialize that lane's spec (section 3).
+3. **Default lane** — if no role mapping matched, use the lane marked default in that table. Nothing is ever left unrouted.
+4. **Fallback (only if `decisions.md` defines no lanes)** — match a Paseo profile via `mcp__paseo__list_profiles` by its `notes`, else pick from `mcp__paseo__list_providers` / `list_models`, and tell the captain you fell back because no lane or profile fit.
 
-Fall back to `mcp__paseo__list_providers` (plus `mcp__paseo__list_models` for one provider) only when no profile fits; when you fall back, tell the captain plainly that no profile fit so they can add or fix one.
+Re-read `decisions.md` every dispatch rather than trusting a remembered copy — the captain edits lanes there at any time.
 
-## 2. Cheap vs judgment split
+## 2. Classifying a task's role
 
-Send cheap agentic work (search, scrape, bulk file reads, repetitive edits, fan-out research) to a cheap high-context contributor model, and keep judgment work (planning, architecture, ambiguous debugging, final review) on a high-reasoning model.
+Lanes are keyed by role; you infer the role (the captain can always override):
 
-The concrete cheap launch is provider `opencode/opencode-go/muse-spark-1.3-contributor` (1M context, ~$0.10/$0.20 per Mtok) with `settings: { modeId: "build", features: { auto_accept: true } }` — OpenCode has no bypassPermissions mode, so `auto_accept: true` is what stops the agent stalling on an approval prompt nobody is watching.
+- **planning / judgment** — you (the first mate) and any secondmate, plus tasks that need real reasoning: architecture, ambiguous debugging, design, final review, or a scout whose value is a judgment call.
+- **contributor / execution** — everything else: most scouts, well-specified ship implementations, fan-out research, scraping, bulk edits. This is the default lane.
+
+When a task sits on the line, prefer the cheaper contributor lane and note it in one line to the captain; escalate to planning only when the work visibly needs it. Never ask the captain per task which lane to use — the assignment table and the default exist so you do not have to.
+
+The contributor lane is typically the cheap, high-context `opencode/opencode-go/muse-spark-1.3-contributor` (~$0.10/$0.20 per Mtok); OpenCode has no bypassPermissions mode, so `features: { auto_accept: true }` keeps it from stalling on an approval prompt nobody is watching. A concrete contributor launch:
 
 ```json
 {
@@ -30,9 +38,9 @@ The concrete cheap launch is provider `opencode/opencode-go/muse-spark-1.3-contr
 }
 ```
 
-## 3. Materializing a profile into create_agent
+## 3. Materializing a lane or profile into create_agent
 
-There is no `profile` param on `mcp__paseo__create_agent` — you materialize the chosen profile field-by-field: profile `provider`/`model` as `provider` (e.g. `claude/opus`), `modeId` → `settings.modeId`, `thinkingOptionId` → `settings.thinkingOptionId`, `featureValues` → `settings.features`.
+A lane's raw spec maps straight onto the call: `provider/model` → `provider` (e.g. `claude-work/claude-opus-4-8[1m]`), its mode → `settings.modeId`, its features → `settings.features`. A Paseo profile — a lane value of `profile:<name>`, or the section-1 fallback — materializes the same way: there is no `profile` param on `mcp__paseo__create_agent`, so map profile `provider`/`model` → `provider`, `modeId` → `settings.modeId`, `thinkingOptionId` → `settings.thinkingOptionId`, `featureValues` → `settings.features`.
 
 Given a profile `{ "provider": "claude/opus", "modeId": "build", "thinkingOptionId": "think-hard", "featureValues": { "auto_accept": true } }`, the call becomes:
 

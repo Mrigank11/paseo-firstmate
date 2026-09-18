@@ -7,7 +7,7 @@ The first mate's memory lives on disk under `state/`, not in the model's context
 ```
 state/
   fleet.json          # registry of every task, active and recently done
-  decisions.md        # captain prefs, routing overrides, permission + merge policy
+  decisions.md        # captain prefs, routing lanes, permission + merge policy
   secondmates.md      # phase 3: roster of subordinate first mates (only if any)
   afk-log.md          # phase 3: running log while the captain is AFK (only if any)
   tasks/
