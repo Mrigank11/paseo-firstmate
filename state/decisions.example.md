@@ -2,9 +2,24 @@
 
 Copy to `decisions.md` (gitignored) and edit. The first mate reads this on every dispatch and permission call.
 
-## Routing overrides
+## Routing
 
-- (e.g. "always use claude/opus for anything touching the sales-infra repo")
+Named lanes map a task's role to an exact launch config. The first mate infers each task's role, looks up its lane here, and materializes it into `create_agent`. A per-task captain override beats a lane; the default lane catches everything else so nothing is unrouted.
+
+**Lanes** — `provider/model · mode · features`:
+
+- `planning`    — `claude-work/claude-opus-4-8[1m]` · `bypassPermissions`
+- `contributor` — `opencode/opencode-go/muse-spark-1.3-contributor` · `build` · `{ auto_accept: true }`
+
+(A lane value may instead be `profile:<name>` to materialize a Paseo profile.)
+
+**Lane assignment** (role → lane):
+
+- first mate itself + secondmates → `planning`
+- judgment work (architecture, ambiguous debugging, design, final review, a scout whose value is a judgment call) → `planning`
+- everything else (most scouts, well-specified ships, fan-out, scraping, bulk edits) → `contributor`  ← **default**
+
+**Per-task overrides** — e.g. "use the planning lane for this scout", or "always use planning for anything touching the sales-infra repo".
 
 ## Permission policy
 
