@@ -1,0 +1,4 @@
+# Runtime fleet state — not source
+state/fleet.json
+state/decisions.md
+state/tasks/
