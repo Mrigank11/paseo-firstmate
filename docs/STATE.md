@@ -49,9 +49,12 @@ Rules:
 1. Read `fleet.json`.
 2. `list_agents` for the current cwd; match by `agentId`.
 3. For each active-in-file task: present → keep; absent → mark `failed`, tell the captain.
+3b. Run the workspace GC sweep (same rule as the heartbeat's): `list_workspaces`, archive each dedicated workspace whose task is terminal and clean, flag the rest.
 4. Re-read any `needs-captain` briefs so you can answer follow-ups.
 5. Emit one supervision summary to the captain and go idle.
 
 ## Heartbeat safety net
 
 Paseo pushes finish/error/permission events, so you do not poll. The one gap it cannot cover is a crew member that goes *silent* — stalled without finishing or erroring. Register a single low-frequency `create_heartbeat` (e.g. every 30 min) that wakes you to scan `fleet.json` for tasks whose `lastEvent` is old while `status` is still `running`, and hand those to `stuck-crew-recovery`. Delete and recreate the heartbeat if its cadence needs to change (Paseo has no heartbeat-update tool).
+
+The same heartbeat also runs a **workspace garbage-collection sweep**: call `mcp__paseo__list_workspaces` and, for each live workspace owned by exactly one `fleet.json` task (a **dedicated** workspace — a shared checkout listed by ≥2 tasks, or the first mate's own checkout, is never a candidate) whose task is **terminal** (`done`/`failed`), archive it with `mcp__paseo__archive_workspace` when it holds no unlanded work (no open PR, no unmerged commits, clean tree); if it does hold unlanded work, flag it to the captain instead of archiving. If the crew agent of an archived workspace is somehow still live, close it too (`mcp__paseo__archive_agent` / `cancel_agent`). Workspaces that map to no task in this fleet (other projects) are out of scope. This reclaims any worktree a per-task teardown (`ship-delivery` §6, `scout-report`) missed.
