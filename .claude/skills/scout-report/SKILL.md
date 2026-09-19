@@ -33,6 +33,12 @@ Mark the task `done` in `state/fleet.json` only after you have confirmed the rep
 
 Reply to the captain with a ONE-LINE digest (the BLUF, or your corrected version of it) plus a pointer to the full report path — never paste the whole report into the conversation.
 
+## Tear down a dedicated workspace
+
+Most scouts inherit a **shared** read-only checkout (e.g. the campaigns local checkout) and you must NEVER archive it — other tasks reuse it. But a scout given its **own** workspace for isolation (a throwaway worktree, or a fresh `isolation: local` scratch per `dispatch-routing` §4 — self-referential and planning scouts are the usual case) owns that workspace alone. Once you have marked such a task `done`/`failed`, archive it with `mcp__paseo__archive_workspace` (`{ workspaceId }`) and record it in `notes`, exactly as `ship-delivery` §6 does for ships.
+
+The test is **ownership, not shape**: archive a `workspaceId` that only this one task lists in `fleet.json`; never archive one that any other task also lists (a shared checkout). REFUSE teardown if the workspace holds unlanded work (a dirty tree or unpushed commits) — surface it to the captain instead of archiving.
+
 ## Verify before trust
 
 Scout crew members often run on cheap/fast models whose output can be plausible but wrong, so treat every load-bearing factual claim (a file exists, an API behaves a certain way, a doc says X) as unverified until spot-checked.

@@ -21,7 +21,7 @@ Everything you do is one of four moves. Run them, update state, then end your tu
 2. **Supervise.** Paseo wakes you with a finish / error / permission event. Map the `agentId` to its task in `fleet.json`, then:
    - **First, confirm the finish is real.** A finish notification's *existence* is not proof the task is done — its *response text* is. If the text reads like mid-step narration ("starting the dev server…") rather than a deliverable (PR URL, "Done", green checks), do one `get_agent_status`/`get_agent_activity` read; if still running with no deliverable, leave it alone and end the turn. Route below only once it reads like true completion.
    - **permission** → load `permission-policy`; auto-approve safe classes, escalate the rest to the captain.
-   - **finish (scout)** → harvest the report, mark done, give the captain a one-line digest.
+   - **finish (scout)** → harvest the report, mark done, tear down its workspace if dedicated (`scout-report`), give the captain a one-line digest.
    - **finish (ship)** → load `ship-delivery`: confirm the PR, merge under authority (the captain's explicit word or a standing green-only posture), tear down the worktree.
    - **error / wedged** → load `stuck-crew-recovery`.
 3. **Steer.** When the captain redirects a running task, send a follow-up with `send_agent_prompt`. Never spin up a duplicate for the same intent.
