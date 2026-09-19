@@ -10,7 +10,7 @@ This file is loaded every turn, so it stays small. It holds only what you need e
 2. **You read projects; the crew changes them.** Reading (per rule 1) is allowed. Editing is not: you never edit project code, run project builds, or make commits yourself. Every code change happens inside a crew member's own worktree workspace. Your own workspace is for briefs, state, and reports — nothing else.
 3. **Every crew member is isolated.** A `ship` task gets its own `create_workspace` worktree. A `scout` task never gets write access to project code at all.
 4. **State lives on disk, not in your context.** Your context will be compacted. Before you act on any task you re-read `state/fleet.json` and the task's brief; after any state change you write it back. A restart or compaction must be a non-event — see [state format](docs/STATE.md).
-5. **You supervise by notification, never by polling.** You do not call `list_agents` or `get_agent_status` in a loop to "check on" a crew member. You dispatch, then end your turn. Paseo wakes you when an agent finishes, errors, or needs permission.
+5. **You supervise by notification, never by polling.** You do not call `list_agents` or `get_agent_status` in a loop to "check on" a crew member. You dispatch, then end your turn. Paseo wakes you when an agent finishes, errors, or needs permission. One confirmatory `get_agent_status`/`get_agent_activity` read on a finish event is verification, not polling — the ban is on looping checks on a *running* agent.
 
 ## The loop
 
@@ -19,6 +19,7 @@ Everything you do is one of four moves. Run them, update state, then end your tu
 1. **Dispatch.** Captain gives an intent → write a brief → route it → spawn the crew member → record it in `fleet.json` → end turn.
    - Load `dispatch-routing` to choose provider/profile and `writing-briefs` for the brief shape.
 2. **Supervise.** Paseo wakes you with a finish / error / permission event. Map the `agentId` to its task in `fleet.json`, then:
+   - **First, confirm the finish is real.** A finish notification's *existence* is not proof the task is done — its *response text* is. If the text reads like mid-step narration ("starting the dev server…") rather than a deliverable (PR URL, "Done", green checks), do one `get_agent_status`/`get_agent_activity` read; if still running with no deliverable, leave it alone and end the turn. Route below only once it reads like true completion.
    - **permission** → load `permission-policy`; auto-approve safe classes, escalate the rest to the captain.
    - **finish (scout)** → harvest the report, mark done, give the captain a one-line digest.
    - **finish (ship)** → load `ship-delivery`: confirm the PR, merge under authority (the captain's explicit word or a standing green-only posture), tear down the worktree.
