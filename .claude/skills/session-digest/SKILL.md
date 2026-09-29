@@ -24,7 +24,7 @@ Keep it to roughly one screen: terse lines, not paragraphs, no transcript, group
 
 ## Flag drift explicitly — this is the point of the digest
 
-Call out both drift classes by `id`: tasks marked `dispatched`/`running` in fleet.json whose `lastEvent` is stale (stuck candidates for the stuck-crew-recovery skill), and tasks present in fleet.json but ABSENT from `list_agents` (dead — should be marked `failed`).
+Call out these drift classes by `id`: tasks marked `dispatched`/`running` in fleet.json whose `lastEvent` is stale (stuck candidates for the stuck-crew-recovery skill); tasks present in fleet.json but ABSENT from `list_agents` (dead — should be marked `failed`); and **landed-but-open** — a non-terminal task whose `pr` is already merged (teardown candidate for `ship-delivery` §6), or a terminal task whose dedicated `kind: worktree` workspace is still live. The digest only reports these; it never archives.
 
 ## Close with one line
 

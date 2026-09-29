@@ -42,7 +42,7 @@ The contributor lane is typically the cheap, high-context `opencode/opencode-go/
 
 ## 3. Materializing a lane or profile into create_agent
 
-A lane's raw spec maps straight onto the call: `provider/model` → `provider` (e.g. `claude-work/claude-opus-4-8[1m]`), its mode → `settings.modeId`, its features → `settings.features`. A Paseo profile — a lane value of `profile:<name>`, or the section-1 fallback — materializes the same way: there is no `profile` param on `mcp__paseo__create_agent`, so map profile `provider`/`model` → `provider`, `modeId` → `settings.modeId`, `thinkingOptionId` → `settings.thinkingOptionId`, `featureValues` → `settings.features`.
+A lane's raw spec maps straight onto the call: `provider/model` → `provider` (e.g. `claude-work/claude-opus-5-5`), its mode → `settings.modeId`, its thinking option → `settings.thinkingOptionId` (e.g. the planning lane sets `"medium"`), its features → `settings.features`. A Paseo profile — a lane value of `profile:<name>`, or the section-1 fallback — materializes the same way: there is no `profile` param on `mcp__paseo__create_agent`, so map profile `provider`/`model` → `provider`, `modeId` → `settings.modeId`, `thinkingOptionId` → `settings.thinkingOptionId`, `featureValues` → `settings.features`.
 
 Given a profile `{ "provider": "claude/opus", "modeId": "build", "thinkingOptionId": "think-hard", "featureValues": { "auto_accept": true } }`, the call becomes:
 

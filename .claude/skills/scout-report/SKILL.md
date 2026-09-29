@@ -37,7 +37,7 @@ Reply to the captain with a ONE-LINE digest (the BLUF, or your corrected version
 
 Most scouts inherit a **shared** read-only checkout (e.g. the campaigns local checkout) and you must NEVER archive it — other tasks reuse it. But a scout given its **own** workspace for isolation (a throwaway worktree, or a fresh `isolation: local` scratch per `dispatch-routing` §4 — self-referential and planning scouts are the usual case) owns that workspace alone. Once you have marked such a task `done`/`failed`, archive it with `mcp__paseo__archive_workspace` (`{ workspaceId }`) and record it in `notes`, exactly as `ship-delivery` §6 does for ships.
 
-The test is **ownership, not shape**: archive a `workspaceId` that only this one task lists in `fleet.json`; never archive one that any other task also lists (a shared checkout). REFUSE teardown if the workspace holds unlanded work (a dirty tree or unpushed commits) — surface it to the captain instead of archiving.
+The test is **ownership, not shape**: archive a `workspaceId` that is `kind: worktree` and that only this one task lists in `fleet.json`; never archive one that any other task also lists (a shared checkout), and never a `local_checkout`. REFUSE teardown if the workspace holds unlanded work (a dirty tree or unpushed commits) — surface it to the captain instead of archiving.
 
 ## Verify before trust
 

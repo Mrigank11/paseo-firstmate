@@ -1,13 +1,13 @@
 ---
 name: ship-delivery
-description: Use when a ship task finishes to confirm its PR, merge it under authority, and tear down the worktree.
+description: Use when a ship task finishes to confirm its PR, merge it under authority, and tear down the worktree — or when the captain says its work already landed.
 ---
 
 # Ship Delivery
 
 This skill handles a ship task's delivery lifecycle after the crew member finishes: confirm the PR, decide whether to merge, merge, tear down.
 
-Trigger: a ship-task finish event for a task tracked in `state/fleet.json` (fields: `id`, `shape`, `agentId`, `workspaceId`, `status`, `branch`, `pr`, `lastEvent`, `notes`). Policy lives in `state/decisions.md`. The first mate never edits project code; running `gh` to inspect or merge a PR is orchestration, not a code edit.
+Trigger: a ship-task finish event for a task tracked in `state/fleet.json` (fields: `id`, `shape`, `agentId`, `workspaceId`, `status`, `branch`, `pr`, `lastEvent`, `notes`) — **or the captain saying a task's work already landed** ("merged", "I merged PR #n"), which enters directly at §6. Policy lives in `state/decisions.md`. The first mate never edits project code; running `gh` to inspect or merge a PR is orchestration, not a code edit.
 
 ## 1. Confirm the branch and PR exist
 
@@ -60,15 +60,20 @@ Read the project mode from `state/decisions.md`; default is `direct-PR`.
 - `local-only` — no PR; crew commits to a branch and the first mate leaves it for the captain. Do not merge or close local-only work unless `decisions.md` explicitly says so.
 - `gated` — a named validation command must pass before merge. Run it, or confirm from agent activity that the crew ran it green, before merging. A failed gate blocks the merge like a red check.
 
-## 6. Teardown
+## 6. Teardown — whenever the work has landed, whoever landed it
 
-After a successful merge, tear down the crew member's worktree workspace:
+Teardown is keyed to the work **landing**, not to *you* merging it. Run this section after your own merge in §4 (including when the captain said "merge"), or when the captain says a task's PR is merged/landed ("merged", "I merged PR #n"). The captain's word is itself the trigger — never just acknowledge it.
+
+1. Verify the landing yourself: `gh pr view <pr> --json state` must return `MERGED` (or, for local-only repos with no PR, the branch is merged into its base), and record it in `notes` (SHA/URL, UTC time, who merged).
+2. If the workspace is dedicated to this task — `kind: worktree` in `list_workspaces` **and** listed by exactly this one task in `fleet.json` — call `mcp__paseo__archive_workspace`:
 
 ```json
 { "workspaceId": "<crew-workspace-id>" }
 ```
 
-Call `mcp__paseo__archive_workspace` with that payload, then set the task `status: done` in `fleet.json` and record the outcome in `notes`.
+   Never archive a `local_checkout` (a repo's standing checkout, even if only one task lists it) or a workspace another task also lists; leave it and note why. If the crew agent is somehow still live, close it too (`mcp__paseo__archive_agent`).
+3. Set the task `status: done` in `fleet.json` and record the teardown in `notes`.
+4. If the landed repo is **paseo-firstmate itself** (the checkout you run from), run `git -C /home/mrigank/projects/llm-exp/paseo-firstmate pull --ff-only` so the merged rules are live in your next turn; if the fast-forward fails, tell the captain.
 
 REFUSE teardown while there is unlanded work: unmerged commits, an open PR, or a dirty worktree. Surface the unlanded state to the captain instead of archiving.
 

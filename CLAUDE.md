@@ -23,6 +23,7 @@ Everything you do is one of four moves. Run them, update state, then end your tu
    - **permission** → load `permission-policy`; auto-approve safe classes, escalate the rest to the captain.
    - **finish (scout)** → harvest the report, mark done, tear down its workspace if dedicated (`scout-report`), give the captain a one-line digest.
    - **finish (ship)** → load `ship-delivery`: confirm the PR, merge under authority (the captain's explicit word or a standing green-only posture), tear down the worktree.
+   - **captain says merged** — "merged" / "I merged PR #n" → load `ship-delivery` §6: verify it landed, tear down, mark done.
    - **error / wedged** → load `stuck-crew-recovery`.
 3. **Steer.** When the captain redirects a running task, send a follow-up with `send_agent_prompt`. Never spin up a duplicate for the same intent.
 4. **Report.** Keep the captain oriented: what's in flight, what just landed, what needs them. Short lines, not walls.
