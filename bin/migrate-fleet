@@ -1,0 +1,220 @@
+#!/usr/bin/env python3
+"""One-off migration: big fleet.json -> live index + per-task logs + archive.
+
+Reads a fleet.json in the OLD format (long free-text notes, free-text
+statuses) and writes the NEW layout into a state dir:
+
+  fleet.json            live tasks only, notes <= 200 chars, asks/preview fields
+  fleet-archive.jsonl   one compact line per finished ask-free task
+  tasks/<id>/log.md     full original notes + status mapping record
+
+Usage:
+  bin/migrate-fleet <old-fleet.json> <state-dir> [--dry-run]
+
+Rules:
+  - Non-enum statuses are mapped (table below); the original is kept in log.md.
+  - Notes over 200 chars are cut at a word boundary; the full text moves to log.md.
+  - Sentences that read like open questions for the captain become
+    asks: [{text (<=200 chars), since (task lastEvent date)}].
+  - done/failed WITH open asks are reopened as needs-captain (an ask must
+    outlive the step that raised it; archive refuses tasks with open asks).
+  - done/failed with no open asks move to fleet-archive.jsonl.
+  - No live previews were found in the migrated data (both recorded pids were
+    already killed); preview defaults to absent. New previews are recorded
+    going forward with `bin/fleet preview`.
+
+Idempotent-ish: refuses to run if <state-dir>/fleet-archive.jsonl exists.
+"""
+import json
+import re
+import sys
+from datetime import datetime, timezone
+
+MAXLEN = 200
+
+# old free-text status -> new enum
+STATUS_MAP = {
+    "dispatched": "dispatched",
+    "running": "running",
+    "needs-captain": "needs-captain",
+    "done": "done",
+    "failed": "failed",
+    "pr-open": "running",
+    "done (draft committed, not merged)": "done",
+    "done (plan approved directionally, nothing built)": "done",
+    "done, merged and pushed": "done",
+    "iterating with captain in lavish (agent-run)": "running",
+}
+
+# A sentence becomes an ask only if it carries an explicit outstanding
+# marker. Bare "decided/decision/go-ahead/approval/blocked on" are excluded:
+# they mostly match historical records (merges, dated CAPTAIN DECISIONs).
+ASK_SIGNALS = re.compile(
+    r"awaiting (captain|you|merge|word|decision|go)"
+    r"|awaits (captain|you)"
+    r"|not yet (decided|said|merged|approved|resolved)"
+    r"|\bunresolved\b|\bundecided\b|todo\(captain\)"
+    r"|captain action|needs captain|needs-captain|needs a captain decision"
+    r"|your call|for you to decide|still open|left open"
+    r"|open qs?\b|open decisions?\b|open points|waiting on (you|captain)"
+    r"|captain decision(?!s)\b",
+    re.IGNORECASE,
+)
+# ...unless it is bookkeeping prose, a resolved record, or enum boilerplate.
+ASK_ANTISIGNALS = re.compile(
+    r"decisions\.md|^done:|recorded atop|will be recorded|shelved"
+    r"|defaults were used|decided it was|explicit go-ahead|squash-merged"
+    r"|merged (as|on) |went ahead|ordered go-ahead|session still open"
+    r"|done/failed/needs-captain|decision \d{4}-\d{2}-\d{2}",
+    re.IGNORECASE,
+)
+
+
+# A later sentence matching one of these retires an earlier ask (terminal tasks
+# only): the awaited event visibly happened after the ask was written.
+RESOLVED_LATER = re.compile(
+    r"cleared without|squash-merged as|was already merged|already merged into"
+    r"|tracked separately as \S+|captain said go ahead"
+    r"|delivered at captain's explicit word|leftovers shipped",
+    re.IGNORECASE,
+)
+
+
+def split_sentences(text):
+    return [s.strip() for s in re.split(r"(?<=[.!?])\s+|\n+", text or "") if s.strip()]
+
+
+def extract_asks(notes, since, terminal):
+    sents = [re.sub(r"\s+", " ", s).strip(" -–—•") for s in split_sentences(notes)]
+    asks = []
+    for i, s in enumerate(sents):
+        if len(s) < 12 or len(s) > 600:
+            continue
+        if not (ASK_SIGNALS.search(s) and not ASK_ANTISIGNALS.search(s)):
+            continue
+        if terminal and any(RESOLVED_LATER.search(later) for later in sents[i + 1:]):
+            continue  # a later sentence shows the awaited event happened
+        asks.append({"text": s[:MAXLEN], "since": since})
+        if len(asks) >= 5:
+            break
+    return asks
+
+
+def short_notes(notes):
+    notes = re.sub(r"\s+", " ", notes or "").strip()
+    if len(notes) <= MAXLEN:
+        return notes
+    suffix = "… (see log.md)"
+    cut = notes[: MAXLEN - len(suffix)].rsplit(" ", 1)[0]
+    return cut + suffix
+
+
+def migrate(src, state_dir, dry_run):
+    old = json.load(open(src))
+    live, archived = [], []
+    logs, remapped = {}, []
+    for t in old.get("tasks", []):
+        tid = t["id"]
+        raw_status = t.get("status", "")
+        new_status = STATUS_MAP.get(raw_status, STATUS_MAP.get((raw_status or "").strip().lower()))
+        if new_status is None:
+            print(f"WARN: unmapped status {raw_status!r} on {tid!r} -> failed", file=sys.stderr)
+            new_status = "failed"
+        notes = t.get("notes") or ""
+        since = (t.get("lastEvent") or "")[:10] or datetime.now(timezone.utc).date().isoformat()
+        asks = extract_asks(notes, since, terminal=new_status in ("done", "failed"))
+        if raw_status != new_status:
+            remapped.append(f"{tid}: {raw_status!r} -> {new_status!r}")
+
+        entry = {
+            "id": tid,
+            "intent": t.get("intent", ""),
+            "shape": t.get("shape", "scout") if t.get("shape") in ("scout", "ship") else "scout",
+            "provider": t.get("provider", ""),
+            "agentId": t.get("agentId", ""),
+            "workspaceId": t.get("workspaceId", ""),
+            "status": new_status,
+            "branch": t.get("branch", ""),
+            "pr": t.get("pr", ""),
+            "lastEvent": t.get("lastEvent", ""),
+            "notes": short_notes(notes),
+            "asks": asks,
+        }
+
+        log = (
+            f"# log for {tid}\n\n"
+            f"Migrated {datetime.now(timezone.utc).date().isoformat()}: "
+            f"status {raw_status!r} -> {new_status!r}."
+        )
+        if new_status in ("done", "failed") and asks:
+            entry["status"] = "needs-captain"
+            log += (
+                f" Reopened as needs-captain: {len(asks)} open ask(s) "
+                f"survived in notes; archive refuses tasks with open asks."
+            )
+            log += f"\n\n## Original notes\n\n{notes}\n"
+            live.append(entry)
+            logs[tid] = log
+        elif new_status in ("done", "failed"):
+            log += " Archived; full notes kept below."
+            log += f"\n\n## Original notes\n\n{notes}\n"
+            archived.append(entry)
+            logs[tid] = log
+        else:
+            if raw_status != new_status:
+                log += f" Status mapped {raw_status!r} -> {new_status!r}."
+            if len(asks) == 0:
+                log += " No open asks found in notes."
+            log += f"\n\n## Original notes\n\n{notes}\n"
+            live.append(entry)
+            logs[tid] = log
+    return live, archived, logs, remapped
+
+
+def main():
+    args = [a for a in sys.argv[1:] if a != "--dry-run"]
+    dry_run = "--dry-run" in sys.argv[1:]
+    if len(args) != 2:
+        sys.exit("usage: bin/migrate-fleet <old-fleet.json> <state-dir> [--dry-run]")
+    src, state_dir = args
+    import os
+
+    if os.path.exists(os.path.join(state_dir, "fleet-archive.jsonl")):
+        sys.exit("refusing: fleet-archive.jsonl already exists (migration runs once)")
+    live, archived, logs, remapped = migrate(src, state_dir, dry_run)
+    reopened = [e for e in live if e["status"] == "needs-captain" and e["asks"]]
+    new_bytes = len(json.dumps({"tasks": live}).encode())
+
+    print(f"tasks: {len(live) + len(archived)} total -> "
+          f"{len(live)} live, {len(archived)} archived")
+    print(f"live fleet.json: ~{new_bytes} bytes "
+          f"(was {os.path.getsize(src)} bytes)")
+    print(f"tasks with migrated asks: {len([e for e in live if e['asks']])} "
+          f"({sum(len(e['asks']) for e in live)} asks)")
+    print(f"reopened done->needs-captain: {[e['id'] for e in reopened]}")
+    print(f"statuses remapped ({len(remapped)}):")
+    for r in remapped:
+        print(f"  {r}")
+    if dry_run:
+        for e in live:
+            if e["asks"]:
+                for a in e["asks"]:
+                    print(f"  ASK {e['id']}: {a['text'][:120]}")
+        return
+
+    os.makedirs(os.path.join(state_dir, "tasks"), exist_ok=True)
+    with open(os.path.join(state_dir, "fleet.json"), "w") as f:
+        json.dump({"tasks": live}, f, indent=2)
+        f.write("\n")
+    with open(os.path.join(state_dir, "fleet-archive.jsonl"), "w") as f:
+        for e in archived:
+            f.write(json.dumps(e) + "\n")
+    for tid, log in logs.items():
+        d = os.path.join(state_dir, "tasks", tid)
+        os.makedirs(d, exist_ok=True)
+        with open(os.path.join(d, "log.md"), "w") as f:
+            f.write(log)
+
+
+if __name__ == "__main__":
+    main()

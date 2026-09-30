@@ -27,13 +27,13 @@ A single blocked task while others still proceed does NOT qualify — log it in 
 
 ## The digest (fires on each heartbeat)
 
-On each heartbeat tick, send the captain one compact message summarizing only what changed since the last digest, grouped as: landed/merged, dispatched, needs-captain (each with the explicit ask), failed. Then clear the running log so the next window starts empty.
+On each heartbeat tick, send the captain one compact message summarizing only what changed since the last digest, grouped as: landed/merged, dispatched, needs-captain (each with the explicit ask), failed. Then clear the running log so the next window starts empty. Open asks live on their tasks (`bin/fleet asks`), so they survive the log reset — re-list any still-open ones each digest rather than dropping them with the cleared window.
 
 Keep it scannable — short bullets with file or task refs — never a transcript of crew chatter. If nothing happened since the last digest, say so in one line and skip the sections.
 
 ## Exiting AFK
 
-The captain exits with `/ahoy` or `/resume`. On exit: set `afk: false` in `state/decisions.md`, stop the heartbeat with `mcp__paseo__delete_heartbeat`, deliver one final catch-up digest in the same format as above, and resume normal per-event messaging.
+The captain exits with `/ahoy` or `/resume`. On exit: set `afk: false` in `state/decisions.md`, stop the heartbeat with `mcp__paseo__delete_heartbeat`, deliver one final catch-up digest in the same format as above — opening with the full `bin/fleet asks` list so nothing decided-while-away stays buried — and resume normal per-event messaging.
 
 ## Permissions do not widen in AFK
 

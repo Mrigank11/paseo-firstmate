@@ -1,0 +1,199 @@
+#!/usr/bin/env bash
+# bin/fleet — the ONLY writer of state/fleet.json.
+#
+# Every fleet write goes through this helper. It validates the status/shape
+# enums and the notes/ask length cap, then writes atomically (temp file +
+# rename) so a crash or truncated edit can never corrupt the file.
+# Reads (get, by-agent, active, asks) are plain jq and never mutate.
+#
+#   bin/fleet get <id>                print one task entry (compact JSON)
+#   bin/fleet by-agent <agentId>      print the entry holding an agentId
+#   bin/fleet active                  live entries: id, status, agentId
+#   bin/fleet asks                    every open ask across live tasks
+#   bin/fleet add <id> k=v ...        create a task (needs intent, shape, status)
+#   bin/fleet set <id> k=v ...        update scalar fields
+#   bin/fleet ask <id> "<text>"       append {text, since} to asks
+#   bin/fleet answer <id> <n>         resolve ask by 1-based index
+#   bin/fleet preview <id> <port> <pid>   record a crew preview server
+#   bin/fleet clear-preview <id>      drop the preview record (after killing it)
+#   bin/fleet log <id> "<text>"       append a timestamped line to tasks/<id>/log.md
+#   bin/fleet archive <id>            move a done/failed ask-free task to the archive
+#
+# FLEET_FILE env overrides the path; default is state/fleet.json at repo root.
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+FLEET="${FLEET_FILE:-$ROOT/state/fleet.json}"
+STATE_DIR="$(dirname "$FLEET")"
+ARCHIVE="$STATE_DIR/fleet-archive.jsonl"
+TASKS="$STATE_DIR/tasks"
+
+STATUSES='["dispatched","running","needs-captain","done","failed"]'
+SHAPES='["scout","ship"]'
+MAXLEN=200
+SETTABLE="intent shape provider agentId workspaceId status branch pr lastEvent notes"
+
+die() { echo "fleet: $*" >&2; exit 1; }
+need_jq() { command -v jq >/dev/null || die "jq is required"; }
+now() { date -u +%Y-%m-%dT%H:%M:%SZ; }
+
+entry_exists() { # id -> 0/1
+  jq -e --arg id "$1" '.tasks | map(select(.id == $id)) | length > 0' "$FLEET" >/dev/null;
+}
+
+atomic_jq() { # jq-args... — run jq filter, validate result, rename over fleet
+  local tmp
+  tmp="$(mktemp "$FLEET.XXXXXX")"
+  if ! jq "$@" "$FLEET" >"$tmp"; then rm -f "$tmp"; die "jq failed, fleet.json untouched"; fi
+  if ! jq -e . "$tmp" >/dev/null; then rm -f "$tmp"; die "result is not valid JSON, fleet.json untouched"; fi
+  mv "$tmp" "$FLEET"
+}
+
+check_entry() { # id — validate enum + length invariants on one entry
+  local id="$1"
+  jq -e --arg id "$1" --argjson st "$STATUSES" --argjson sh "$SHAPES" --argjson max "$MAXLEN" '
+    (.tasks | map(select(.id == $id))[0]) as $t
+    | (((($t.status) as $s | $st | index($s)) != null)
+      and ((($t.shape // "scout") as $h | $sh | index($h)) != null)
+      and ((($t.notes // "") | length) <= $max)
+      and (([$t.asks[]? .text | length] | all(. <= $max))))
+  ' "$FLEET" >/dev/null || die "entry $id violates schema (status/shape enum or 200-char cap)";
+}
+
+# validate a fresh k=v object (from add/set) BEFORE touching the file
+check_obj() { # obj-json
+  jq -e --argjson st "$STATUSES" --argjson sh "$SHAPES" --argjson max "$MAXLEN" -n --argjson o "$1" '
+    (((($o.status // null) as $s | if $s == null then true else ($st | index($s)) != null end))
+      and ((($o.shape // null) as $h | if $h == null then true else ($sh | index($h)) != null end))
+      and ((($o.notes // "") | length) <= $max))
+  ' >/dev/null || die "refused: bad status/shape enum or notes over $MAXLEN chars";
+}
+
+cmd_get() { jq -c --arg id "$1" '.tasks | map(select(.id == $id))[0] // empty' "$FLEET"; }
+cmd_by_agent() { jq -c --arg a "$1" '.tasks | map(select(.agentId == $a))[0] // empty' "$FLEET"; }
+cmd_active() {
+  jq -c '[.tasks[] | select(.status == "dispatched" or .status == "running" or .status == "needs-captain")
+    | {id, status, agentId}]' "$FLEET";
+}
+cmd_asks() {
+  jq -r '.tasks[] | select((.asks // []) | length > 0)
+    | .id as $id | .asks | to_entries[] | "\($id) [\(.key + 1)]: \(.value.text) (since \(.value.since))"' "$FLEET";
+}
+
+# parse k=v pairs into a jq object; refuse unknown keys and overlong notes
+build_obj() { # out: OBJ json with $keys validated; sets global OBJ
+  local allow="$1"; shift
+  local obj="{}"
+  for kv in "$@"; do
+    [[ "$kv" == *=* ]] || die "expected key=value, got '$kv'"
+    local k="${kv%%=*}" v="${kv#*=}"
+    [[ " $allow " == *" $k "* ]] || die "unknown key '$k' (allowed: $allow)"
+    obj="$(jq --arg k "$k" --arg v "$v" '. + {($k): $v}' <<<"$obj")"
+  done
+  printf '%s' "$obj";
+}
+
+cmd_add() {
+  local id="$1"; shift
+  [[ "$id" =~ ^[a-z0-9][a-z0-9-]*$ ]] || die "id must be a kebab slug, got '$id'"
+  entry_exists "$id" && die "task $id already exists"
+  local obj; obj="$(build_obj "$SETTABLE" "$@")"
+  for req in intent shape status; do
+    jq -e --arg k "$req" '.[$k] // empty | length > 0' <<<"$obj" >/dev/null \
+      || die "add needs $req=... (got: $*)";
+  done
+  check_obj "$obj"
+  local ts; ts="$(now)"
+  atomic_jq --arg id "$id" --argjson o "$obj" --arg ts "$ts" \
+    '.tasks += [($o + {id: $id, asks: [], lastEvent: ($o.lastEvent // $ts)})]';
+}
+
+cmd_set() {
+  local id="$1"; shift
+  entry_exists "$id" || die "no task $id";
+  [[ $# -gt 0 ]] || die "set needs at least one key=value"
+  local obj; obj="$(build_obj "$SETTABLE" "$@")"
+  check_obj "$obj"  # validate BEFORE touching the file: a refusal changes nothing
+  # asks/preview change only through ask/answer/preview, never set.
+  local stamp="null"
+  if jq -e 'has("status")' <<<"$obj" >/dev/null && ! jq -e 'has("lastEvent")' <<<"$obj" >/dev/null; then
+    stamp="\"$(now)\"";
+  fi
+  atomic_jq --arg id "$id" --argjson o "$obj" --argjson stamp "$stamp" \
+    '.tasks |= map(if .id == $id then . + $o + (if $stamp == null then {} else {lastEvent: $stamp} end) else . end)';
+  check_entry "$id";
+}
+
+cmd_ask() {
+  local id="$1" text="$2"
+  entry_exists "$id" || die "no task $id"
+  ((${#text} > 0)) || die "ask text is empty"
+  ((${#text} <= MAXLEN)) || die "ask over $MAXLEN chars"
+  atomic_jq --arg id "$id" --arg t "$text" --arg s "$(now)" \
+    '.tasks |= map(if .id == $id then .asks = ((.asks // []) + [{text: $t, since: $s}]) else . end)';
+}
+
+cmd_answer() {
+  local id="$1" n="$2"
+  entry_exists "$id" || die "no task $id"
+  [[ "$n" =~ ^[0-9]+$ ]] && ((n >= 1)) || die "answer needs a 1-based ask index (see 'fleet asks')"
+  local count; count="$(jq --arg id "$id" '.tasks | map(select(.id == $id))[0] | (.asks // []) | length' "$FLEET")"
+  ((n <= count)) || die "task $id has only $count open ask(s)"
+  atomic_jq --arg id "$id" --argjson n "$n" \
+    '.tasks |= map(if .id == $id then .asks = ((.asks // []) | del(.[$n - 1])) else . end)';
+}
+
+cmd_preview() {
+  local id="$1" port="$2" pid="$3"
+  entry_exists "$id" || die "no task $id"
+  [[ "$port" =~ ^[0-9]+$ ]] && [[ "$pid" =~ ^[0-9]+$ ]] || die "preview needs numeric port and pid"
+  atomic_jq --arg id "$id" --argjson port "$port" --argjson pid "$pid" \
+    '.tasks |= map(if .id == $id then .preview = {port: $port, pid: $pid} else . end)';
+}
+
+cmd_clear_preview() {
+  local id="$1"
+  entry_exists "$id" || die "no task $id"
+  atomic_jq --arg id "$id" '.tasks |= map(if .id == $id then del(.preview) else . end)';
+}
+
+cmd_log() {
+  local id="$1" text="$2"
+  [[ "$id" =~ ^[a-z0-9][a-z0-9-]*$ ]] || die "bad id '$id'"
+  mkdir -p "$TASKS/$id"
+  printf '%s %s\n' "$(now)" "$text" >>"$TASKS/$id/log.md";
+}
+
+cmd_archive() {
+  local id="$1"
+  entry_exists "$id" || die "no task $id"
+  local st; st="$(jq -r --arg id "$id" '.tasks | map(select(.id == $id))[0].status' "$FLEET")"
+  [[ "$st" == "done" || "$st" == "failed" ]] \
+    || die "archive refuses $id with status '$st' — only done/failed archive";
+  local open; open="$(jq --arg id "$id" '.tasks | map(select(.id == $id))[0] | (.asks // []) | length' "$FLEET")"
+  ((open == 0)) || die "archive refuses $id with $open open ask(s) — answer them first ('fleet asks', 'fleet answer')";
+  jq -c --arg id "$id" '.tasks | map(select(.id == $id))[0]' "$FLEET" >>"$ARCHIVE";
+  atomic_jq --arg id "$id" '.tasks |= map(select(.id != $id))';
+}
+
+usage() {
+  sed -n '2,/^set -euo/p' "$0" | sed 's/^# \?//';
+}
+
+need_jq
+cmd="${1:-}"; shift || true
+case "$cmd" in
+  get)           [[ $# -eq 1 ]] || die "usage: fleet get <id>"; cmd_get "$1";;
+  by-agent)      [[ $# -eq 1 ]] || die "usage: fleet by-agent <agentId>"; cmd_by_agent "$1";;
+  active)        cmd_active;;
+  asks)          cmd_asks;;
+  add)           [[ $# -ge 1 ]] || die "usage: fleet add <id> k=v ..."; cmd_add "$@";;
+  set)           [[ $# -ge 1 ]] || die "usage: fleet set <id> k=v ..."; cmd_set "$@";;
+  ask)           [[ $# -eq 2 ]] || die "usage: fleet ask <id> \"<text>\""; cmd_ask "$1" "$2";;
+  answer)        [[ $# -eq 2 ]] || die "usage: fleet answer <id> <n>"; cmd_answer "$1" "$2";;
+  preview)       [[ $# -eq 3 ]] || die "usage: fleet preview <id> <port> <pid>"; cmd_preview "$@";;
+  clear-preview) [[ $# -eq 1 ]] || die "usage: fleet clear-preview <id>"; cmd_clear_preview "$1";;
+  log)           [[ $# -eq 2 ]] || die "usage: fleet log <id> \"<text>\""; cmd_log "$1" "$2";;
+  archive)       [[ $# -eq 1 ]] || die "usage: fleet archive <id>"; cmd_archive "$1";;
+  *) usage; exit "${cmd:+1}";;
+esac
