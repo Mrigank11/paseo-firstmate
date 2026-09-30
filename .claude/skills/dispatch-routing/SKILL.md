@@ -60,7 +60,16 @@ Given a profile `{ "provider": "claude/opus", "modeId": "build", "thinkingOption
 
 Required fields on `mcp__paseo__create_agent` are `title`, `provider`, `initialPrompt`; `workspaceId` selects the workspace (below), `notifyOnFinish` stays true unless the captain says otherwise.
 
-## 4. Workspace choice by shape
+## 4. Refresh the base before dispatch
+
+Never branch a ship worktree, or point a scout at a checkout, off a stale base:
+
+1. `git -C <repo> fetch origin <baseBranch>` (usually `main`).
+2. If the local base checkout is clean (`git -C <repo> status --porcelain` empty), fast-forward it (`git -C <repo> merge --ff-only origin/<baseBranch>`).
+3. If it is dirty, do not touch it — note that in the brief instead ("base checkout was dirty, could not fast-forward; you may be behind `origin/<baseBranch>`").
+4. Record the resulting base SHA (`git -C <repo> rev-parse --short HEAD`) in the brief per `writing-briefs` ("You are on `<sha>`…").
+
+## 5. Workspace choice by shape
 
 A `ship` task gets its own worktree: call `mcp__paseo__create_workspace` with required `isolation: "worktree"`, `mode: "branch-off"` plus `branchName`/`baseBranch`, then pass the returned `workspaceId` to `create_agent`.
 
@@ -70,10 +79,10 @@ A `ship` task gets its own worktree: call `mcp__paseo__create_workspace` with re
 
 A `scout` task never touches project code and gets no worktree: omit `workspaceId` so it inherits the first mate's read-only workspace, or create a fresh `isolation: "local"` workspace for scratch output; never give a scout a project write path.
 
-## 5. After spawning
+## 6. After spawning
 
 Record `{ id, agentId, workspaceId, provider, shape, status: "dispatched" }` into `state/fleet.json`, then end the turn — do not follow the agent, poll it, or start reviewing output in this turn.
 
-## 6. Never guess IDs
+## 7. Never guess IDs
 
 Never guess a model or feature ID — set only feature IDs returned by `mcp__paseo__inspect_provider` (required `provider`), and if a value is rejected re-read `mcp__paseo__list_models` / `inspect_provider` and retry with a listed value rather than inventing a close match.

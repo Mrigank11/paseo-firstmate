@@ -21,11 +21,25 @@ State scope and constraints ONLY, never a solution: the first mate says WHAT out
 
 Always name the task shape (`scout` vs `ship`), the target repo and paths to read, the deliverable location, and hard constraints (don't touch X, follow the repo's AGENTS.md/CLAUDE.md conventions, run the repo's own tests).
 
-A `scout` is investigation/research, report-only: it is READ-ONLY on project code, never edits it, and must produce `state/tasks/<id>/report.md`.
+Deliverable paths must be absolute, rooted at the first mate's own checkout — never relative. A relative `state/tasks/<id>/report.md` lands in whatever repo the crew member happens to be standing in. Write the full path (e.g. `/home/mrigank/projects/llm-exp/paseo-firstmate/state/tasks/<id>/report.md`).
+
+A `scout` is investigation/research, report-only: it is READ-ONLY on project code, never edits it, and must produce the absolute-path `report.md` deliverable named above.
 
 A **planning** task is a scout in the `planning` lane: its brief says explicitly *produce a plan/design as the report; do not implement, do not edit code, do not spawn sub-agents.* A contributor `ship` that implements a plan cites the plan's `report.md` path in its brief.
 
 A `ship` is a code change in its own worktree: it opens a branch and PR, then stops — delivery (merge under authority, then teardown) is handled per the `ship-delivery` skill.
+
+## Base SHA
+
+Record the base SHA from the dispatch-time refresh (`dispatch-routing`) in the Firstmate spec: "You are on `<sha>` (`<baseBranch>`, fetched just now, includes …)." If the base checkout was dirty and could not be fast-forwarded, say so here instead. The crew member reports the SHA it actually worked on in its `DONE:` line, so a stale audit is visible from its SHA.
+
+## Final message contract
+
+End every brief with this footer verbatim (fill the brackets):
+
+> Your final message must be ≤ 5 lines and its first line must be `DONE: <absolute deliverable path or PR URL> @ <base SHA you worked on>` or `BLOCKED: <the exact question you need answered>`. Anything else is read as mid-task narration and acted on as nothing.
+
+A Paseo finish event marks the end of a *turn*, not the *task* — crew end turns while waiting on background work. The first line is the only completion signal the first mate checks, so the `DONE:`/`BLOCKED:` prefix is what gets the report harvested or the question escalated.
 
 ## Anti-pattern: over-specifying the solution
 
@@ -44,7 +58,9 @@ Captain asked: "why is checkout latency spiking on weekends?" In scope: checkout
 
 ## Firstmate spec
 
-Shape: scout (READ-ONLY on project code). Read `services/checkout/` and its AGENTS.md. Follow repo conventions for reading only. Deliverable: `state/tasks/T-12/report.md` with findings, evidence, and suggested next steps. Do not open a PR.
+Shape: scout (READ-ONLY on project code). Read `services/checkout/` and its AGENTS.md. Follow repo conventions for reading only. You are on `<sha>` (`main`, fetched just now). Deliverable: `/home/mrigank/projects/llm-exp/paseo-firstmate/state/tasks/T-12/report.md` with findings, evidence, and suggested next steps. Do not open a PR.
+
+Your final message must be ≤ 5 lines and its first line must be `DONE: <absolute deliverable path or PR URL> @ <base SHA you worked on>` or `BLOCKED: <the exact question you need answered>`. Anything else is read as mid-task narration and acted on as nothing.
 ```
 
 Ship brief:
@@ -56,5 +72,7 @@ Captain asked: "add exponential backoff to the checkout retry loop." In scope: r
 
 ## Firstmate spec
 
-Shape: ship in your own worktree. Read `services/checkout/retry.ts` and its AGENTS.md/CLAUDE.md, then implement the outcome above. Constraints: keep the public API stable, add/extend tests, run the repo's own test suite. Deliverable: open a branch and PR, then stop — the captain merges.
+Shape: ship in your own worktree. Read `services/checkout/retry.ts` and its AGENTS.md/CLAUDE.md, then implement the outcome above. You are on `<sha>` (`main`, fetched just now). Constraints: keep the public API stable, add/extend tests, run the repo's own test suite. Deliverable: open a branch and PR, then stop — the captain merges.
+
+Your final message must be ≤ 5 lines and its first line must be `DONE: <absolute deliverable path or PR URL> @ <base SHA you worked on>` or `BLOCKED: <the exact question you need answered>`. Anything else is read as mid-task narration and acted on as nothing.
 ```
