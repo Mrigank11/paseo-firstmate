@@ -195,5 +195,5 @@ case "$cmd" in
   clear-preview) [[ $# -eq 1 ]] || die "usage: fleet clear-preview <id>"; cmd_clear_preview "$1";;
   log)           [[ $# -eq 2 ]] || die "usage: fleet log <id> \"<text>\""; cmd_log "$1" "$2";;
   archive)       [[ $# -eq 1 ]] || die "usage: fleet archive <id>"; cmd_archive "$1";;
-  *) usage; exit "${cmd:+1}";;
+  *) usage; [[ -n "$cmd" ]] && exit 1; exit 0;;
 esac
