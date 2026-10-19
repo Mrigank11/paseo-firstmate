@@ -1,0 +1,364 @@
+#!/usr/bin/env python3
+"""bin/board — render a self-contained HTML fleet board from state/.
+
+Reads the first mate's on-disk state (never writes to it) and produces one
+static HTML file: no network calls, no external assets, safe to open via
+`file://` or through a Lavish session (which hot-reloads the file on change).
+
+Sources (read-only):
+  state/fleet.json            live tasks: in-flight work + open asks
+  state/fleet-archive.jsonl   recently landed/failed tasks
+  state/tasks/<id>/log.md     narrative tail, for extra context per task
+  state/decisions-log.jsonl   decisions recorded via `bin/fleet decide`
+
+Usage:
+  bin/board [--state-dir DIR] [--out FILE] [--max-archive N]
+            [--max-decisions N] [--refresh SECONDS]
+
+Re-running is cheap and idempotent: it only reads state and overwrites the
+one output file. Run it after every `bin/fleet` write so the board reflects
+current state.
+"""
+import argparse
+import html
+import json
+import re
+from datetime import datetime, timezone
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parent.parent
+
+STATUS_LABEL = {
+    "dispatched": "dispatched",
+    "running": "running",
+    "needs-captain": "needs you",
+    "done": "done",
+    "failed": "failed",
+}
+STATUS_CLASS = {
+    "dispatched": "st-dispatched",
+    "running": "st-running",
+    "needs-captain": "st-needs",
+    "done": "st-done",
+    "failed": "st-failed",
+}
+
+TS_RE = re.compile(r"^(\d{4}-\d{2}-\d{2}(?:T\d{2}:\d{2}:\d{2}Z?)?)")
+
+
+def parse_ts(s):
+    """Best-effort ISO-8601 (or date-only) prefix parse. None if absent/unparseable.
+
+    lastEvent/since are sometimes stamped by bin/fleet (strict ISO) and
+    sometimes hand-typed narrative ("2026-09-21 plan page live; ..."), so this
+    only trusts a leading date/timestamp and ignores whatever follows.
+    """
+    if not s:
+        return None
+    m = TS_RE.match(s.strip())
+    if not m:
+        return None
+    raw = m.group(1)
+    try:
+        if "T" in raw:
+            raw = raw[:-1] + "+00:00" if raw.endswith("Z") else raw
+            return datetime.fromisoformat(raw)
+        return datetime.fromisoformat(raw).replace(tzinfo=timezone.utc)
+    except ValueError:
+        return None
+
+
+def human_age(dt, now):
+    if dt is None:
+        return None
+    secs = (now - dt).total_seconds()
+    if secs < 60:
+        return "just now"
+    mins = secs / 60
+    if mins < 60:
+        return f"{int(mins)}m ago"
+    hours = mins / 60
+    if hours < 24:
+        return f"{int(hours)}h ago"
+    days = hours / 24
+    if days < 30:
+        return f"{int(days)}d ago"
+    months = days / 30
+    if months < 12:
+        return f"{int(months)}mo ago"
+    return f"{int(days / 365)}y ago"
+
+
+def load_json(path, default):
+    try:
+        return json.loads(path.read_text())
+    except FileNotFoundError:
+        return default
+
+
+def load_jsonl(path, limit=None):
+    if not path.exists():
+        return []
+    lines = [l for l in path.read_text().splitlines() if l.strip()]
+    if limit:
+        lines = lines[-limit:]
+    out = []
+    for l in lines:
+        try:
+            out.append(json.loads(l))
+        except json.JSONDecodeError:
+            continue
+    return out
+
+
+def log_tail(state_dir, task_id, n=3):
+    log_path = state_dir / "tasks" / task_id / "log.md"
+    if not log_path.exists():
+        return []
+    lines = [l for l in log_path.read_text().splitlines() if l.strip()]
+    return lines[-n:]
+
+
+def esc(v):
+    return html.escape(str(v if v is not None else ""))
+
+
+def short_provider(p):
+    if not p:
+        return ""
+    return p.rsplit("/", 1)[-1]
+
+
+def render_asks(live_tasks, now):
+    rows = []
+    for t in live_tasks:
+        for a in t.get("asks") or []:
+            rows.append((parse_ts(a.get("since")) or now, t, a))
+    rows.sort(key=lambda r: r[0])
+    if not rows:
+        return '<p class="empty">Nothing pending on you.</p>'
+    items = []
+    for since_dt, t, a in rows:
+        age = human_age(since_dt, now) or esc(a.get("since"))
+        items.append(f"""
+        <li class="ask-item">
+          <div class="ask-text">{esc(a.get('text'))}</div>
+          <div class="ask-meta"><span class="task-id">{esc(t.get('id'))}</span> · {esc(age)}</div>
+        </li>""")
+    return f'<ul class="ask-list">{"".join(items)}</ul>'
+
+
+def render_in_flight(live_tasks, state_dir, now):
+    if not live_tasks:
+        return '<p class="empty">No crew in flight.</p>'
+    tasks = sorted(
+        live_tasks,
+        key=lambda t: parse_ts(t.get("lastEvent")) or datetime.min.replace(tzinfo=timezone.utc),
+        reverse=True,
+    )
+    rows = []
+    for t in tasks:
+        status = t.get("status", "")
+        badge_cls = STATUS_CLASS.get(status, "st-dispatched")
+        badge_label = STATUS_LABEL.get(status, status)
+        age_dt = parse_ts(t.get("lastEvent"))
+        age = human_age(age_dt, now)
+        last_event_display = age if age else esc(t.get("lastEvent"))
+        tail = log_tail(state_dir, t.get("id", ""))
+        tail_html = ""
+        if tail:
+            tail_lines = "".join(f"<li>{esc(l)}</li>" for l in tail)
+            tail_html = f'<details class="log-tail"><summary>log</summary><ul>{tail_lines}</ul></details>'
+        rows.append(f"""
+        <li class="task-card">
+          <div class="task-head">
+            <span class="badge {badge_cls}">{esc(badge_label)}</span>
+            <span class="task-id">{esc(t.get('id'))}</span>
+            <span class="task-shape">{esc(t.get('shape'))}</span>
+            <span class="task-provider" title="{esc(t.get('provider'))}">{esc(short_provider(t.get('provider')))}</span>
+            <span class="task-age">{esc(last_event_display)}</span>
+          </div>
+          <div class="task-intent">{esc(t.get('intent'))}</div>
+          <div class="task-notes">{esc(t.get('notes'))}</div>
+          {tail_html}
+        </li>""")
+    return f'<ul class="task-list">{"".join(rows)}</ul>'
+
+
+def render_landed(archive_entries, now):
+    if not archive_entries:
+        return '<p class="empty">Nothing landed yet.</p>'
+    entries = list(reversed(archive_entries))
+    rows = []
+    for t in entries:
+        status = t.get("status", "")
+        badge_cls = STATUS_CLASS.get(status, "st-done")
+        badge_label = STATUS_LABEL.get(status, status)
+        age = human_age(parse_ts(t.get("lastEvent")), now)
+        last_event_display = age if age else esc(t.get("lastEvent"))
+        pr = t.get("pr")
+        pr_html = ""
+        if pr and str(pr).startswith("http"):
+            pr_html = f'<a class="pr-link" href="{esc(pr)}">{esc(pr)}</a>'
+        rows.append(f"""
+        <li class="task-card">
+          <div class="task-head">
+            <span class="badge {badge_cls}">{esc(badge_label)}</span>
+            <span class="task-id">{esc(t.get('id'))}</span>
+            <span class="task-shape">{esc(t.get('shape'))}</span>
+            <span class="task-provider" title="{esc(t.get('provider'))}">{esc(short_provider(t.get('provider')))}</span>
+            <span class="task-age">{esc(last_event_display)}</span>
+          </div>
+          <div class="task-intent">{esc(t.get('intent'))}</div>
+          {f'<div class="task-notes">{esc(t.get("notes"))}</div>' if t.get('notes') else ''}
+          {pr_html}
+        </li>""")
+    return f'<ul class="task-list">{"".join(rows)}</ul>'
+
+
+def render_decisions(decisions, now):
+    if not decisions:
+        return '<p class="empty">No decisions recorded yet — use <code>bin/fleet decide &lt;id&gt; "&lt;text&gt;"</code>.</p>'
+    entries = sorted(decisions, key=lambda d: d.get("ts") or "", reverse=True)
+    rows = []
+    for d in entries:
+        age = human_age(parse_ts(d.get("ts")), now) or esc(d.get("ts"))
+        rows.append(f"""
+        <li class="decision-item">
+          <div class="decision-text">{esc(d.get('text'))}</div>
+          <div class="ask-meta"><span class="task-id">{esc(d.get('id'))}</span> · {esc(age)}</div>
+        </li>""")
+    return f'<ul class="decision-list">{"".join(rows)}</ul>'
+
+
+PAGE_TEMPLATE = """<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Fleet Board</title>
+{refresh_tag}
+<style>
+  :root {{
+    --bg: #0b0e14; --panel: #12161f; --border: #232a38; --text: #e6e9ef;
+    --muted: #8993a4; --accent: #5b9dff;
+  }}
+  * {{ box-sizing: border-box; }}
+  body {{
+    margin: 0; padding: 32px 24px 64px; background: var(--bg); color: var(--text);
+    font: 15px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+  }}
+  .wrap {{ max-width: 980px; margin: 0 auto; }}
+  h1 {{ font-size: 22px; margin: 0 0 4px; letter-spacing: -0.01em; }}
+  .generated {{ color: var(--muted); font-size: 13px; margin-bottom: 28px; }}
+  h2 {{ font-size: 15px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted);
+        margin: 0 0 12px; }}
+  section {{ margin-bottom: 36px; }}
+  .empty {{ color: var(--muted); font-size: 14px; }}
+  ul {{ list-style: none; margin: 0; padding: 0; }}
+  .task-list, .ask-list, .decision-list {{ display: flex; flex-direction: column; gap: 10px; }}
+  .task-card, .ask-item, .decision-item {{
+    background: var(--panel); border: 1px solid var(--border); border-radius: 8px;
+    padding: 12px 14px;
+  }}
+  .ask-item {{ border-left: 3px solid #e0a530; }}
+  .task-head {{ display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; margin-bottom: 6px; }}
+  .badge {{
+    font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.03em;
+    padding: 2px 7px; border-radius: 999px;
+  }}
+  .st-dispatched {{ background: #2a3040; color: #9aa6bf; }}
+  .st-running {{ background: #16304f; color: #7ab4ff; }}
+  .st-needs {{ background: #4a3312; color: #e0a530; }}
+  .st-done {{ background: #163a24; color: #5ed08a; }}
+  .st-failed {{ background: #3f1a1a; color: #ff7a7a; }}
+  .task-id {{ font-weight: 600; font-size: 13px; }}
+  .task-shape, .task-provider {{ color: var(--muted); font-size: 12px; }}
+  .task-age {{ margin-left: auto; color: var(--muted); font-size: 12px; }}
+  .task-intent {{ font-size: 14px; margin-bottom: 4px; }}
+  .task-notes {{ color: var(--muted); font-size: 13px; }}
+  .log-tail {{ margin-top: 6px; font-size: 12px; color: var(--muted); }}
+  .log-tail summary {{ cursor: pointer; }}
+  .log-tail ul {{ margin: 6px 0 0 14px; }}
+  .log-tail li {{ list-style: disc; margin-bottom: 2px; }}
+  .ask-text, .decision-text {{ font-size: 14px; margin-bottom: 4px; }}
+  .ask-meta {{ color: var(--muted); font-size: 12px; }}
+  .pr-link {{ display: inline-block; margin-top: 6px; color: var(--accent); font-size: 13px;
+              text-decoration: none; }}
+  .pr-link:hover {{ text-decoration: underline; }}
+  code {{ background: var(--panel); border-radius: 4px; padding: 1px 5px; }}
+  .counts {{ color: var(--muted); font-size: 13px; margin-bottom: 4px; }}
+</style>
+</head>
+<body>
+  <div class="wrap">
+    <h1>Fleet Board</h1>
+    <div class="generated">Generated {generated_at} &middot; {counts}</div>
+
+    <section>
+      <h2>Pending on you</h2>
+      {asks_html}
+    </section>
+
+    <section>
+      <h2>In flight</h2>
+      {in_flight_html}
+    </section>
+
+    <section>
+      <h2>Recently landed</h2>
+      {landed_html}
+    </section>
+
+    <section>
+      <h2>Decisions</h2>
+      {decisions_html}
+    </section>
+  </div>
+</body>
+</html>
+"""
+
+
+def build(state_dir, max_archive, max_decisions, refresh):
+    now = datetime.now(timezone.utc)
+    fleet = load_json(state_dir / "fleet.json", {"tasks": []})
+    live_tasks = fleet.get("tasks", [])
+    archive_entries = load_jsonl(state_dir / "fleet-archive.jsonl", limit=max_archive)
+    decisions = load_jsonl(state_dir / "decisions-log.jsonl", limit=max_decisions)
+
+    pending_count = sum(len(t.get("asks") or []) for t in live_tasks)
+    counts = (
+        f"{pending_count} pending &middot; {len(live_tasks)} in flight &middot; "
+        f"{len(archive_entries)} recently landed &middot; {len(decisions)} decisions"
+    )
+
+    refresh_tag = f'<meta http-equiv="refresh" content="{int(refresh)}">' if refresh else ""
+
+    return PAGE_TEMPLATE.format(
+        refresh_tag=refresh_tag,
+        generated_at=esc(now.strftime("%Y-%m-%d %H:%M:%S UTC")),
+        counts=counts,
+        asks_html=render_asks(live_tasks, now),
+        in_flight_html=render_in_flight(live_tasks, state_dir, now),
+        landed_html=render_landed(archive_entries, now),
+        decisions_html=render_decisions(decisions, now),
+    )
+
+
+def main():
+    ap = argparse.ArgumentParser(description=__doc__)
+    ap.add_argument("--state-dir", type=Path, default=ROOT / "state")
+    ap.add_argument("--out", type=Path, default=ROOT / ".lavish" / "fleet-board.html")
+    ap.add_argument("--max-archive", type=int, default=20)
+    ap.add_argument("--max-decisions", type=int, default=50)
+    ap.add_argument("--refresh", type=int, default=20, help="meta-refresh seconds, 0 to disable")
+    args = ap.parse_args()
+
+    html_out = build(args.state_dir, args.max_archive, args.max_decisions, args.refresh)
+    args.out.parent.mkdir(parents=True, exist_ok=True)
+    args.out.write_text(html_out)
+    print(f"wrote {args.out}")
+
+
+if __name__ == "__main__":
+    main()

@@ -14,8 +14,9 @@ This file is loaded every turn, so it stays small. It holds only what you need e
 2. **You read projects; the crew changes them.** Reading (per rule 1) is allowed. Editing is not: you never edit project code, run project builds, or make commits yourself. Every code change happens inside a crew member's own worktree workspace. Your own workspace is for briefs, state, and reports — nothing else.
 3. **Every crew member is isolated.** A `ship` task gets its own `create_workspace` worktree. A `scout` task never gets write access to project code at all.
 4. **State lives on disk, not in your context.** Your context will be compacted. Before you act on any task read its entry (`bin/fleet get <id>` or `bin/fleet by-agent <agentId>`) and the task's brief; write every state change only through `bin/fleet` — never hand-edit `fleet.json`. A restart or compaction must be a non-event — see [state format](docs/STATE.md).
-5. **You supervise by notification, never by polling.** You do not call `list_agents` or `get_agent_status` in a loop to "check on" a crew member. You dispatch, then end your turn. Paseo wakes you when an agent finishes, errors, or needs permission. One confirmatory `get_agent_status`/`get_agent_activity` read on a finish event is verification, not polling — the ban is on looping checks on a *running* agent.
-6. **Crew communication and control only go through `mcp__paseo__*` tools.** Never substitute a similarly-named tool (e.g. a harness's own `SendMessage`) when the Paseo tool you need is missing — it addresses a different namespace and can silently target the wrong session. If the Paseo tool is unavailable, stop and tell the captain.
+5. **Record decisions, keep the board current.** Whenever you or the captain make a call with lasting effect (a routing choice, a merge/no-merge, an answer to an ask, a scope change), run `bin/fleet decide <id> "<text>"`. After every `bin/fleet` write, regenerate the board: `bin/board` (writes `.lavish/fleet-board.html`, cheap and idempotent — run it, don't hand-edit the page).
+6. **You supervise by notification, never by polling.** You do not call `list_agents` or `get_agent_status` in a loop to "check on" a crew member. You dispatch, then end your turn. Paseo wakes you when an agent finishes, errors, or needs permission. One confirmatory `get_agent_status`/`get_agent_activity` read on a finish event is verification, not polling — the ban is on looping checks on a *running* agent.
+7. **Crew communication and control only go through `mcp__paseo__*` tools.** Never substitute a similarly-named tool (e.g. a harness's own `SendMessage`) when the Paseo tool you need is missing — it addresses a different namespace and can silently target the wrong session. If the Paseo tool is unavailable, stop and tell the captain.
 
 ## The loop
 
@@ -33,7 +34,7 @@ Everything you do is one of four moves. Run them, update state, then end your tu
 3. **Steer.** When the captain redirects a running task, send a follow-up with `send_agent_prompt`. Never spin up a duplicate for the same intent.
 4. **Report.** Keep the captain oriented: what's in flight, what just landed, what needs them. Short lines, not walls.
 
-After every move: write `fleet.json`, then **stop**. Idle is correct. A low-frequency `create_heartbeat` is your only safety net, for crew that goes silent *without* a finish event — see [state format](docs/STATE.md).
+After every move: write `fleet.json`, run `bin/board`, then **stop**. Idle is correct. A low-frequency `create_heartbeat` is your only safety net, for crew that goes silent *without* a finish event — see [state format](docs/STATE.md).
 
 ## Task shapes
 

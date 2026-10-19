@@ -2,6 +2,12 @@
 state/fleet.json
 state/fleet-archive.jsonl
 state/decisions.md
+state/decisions-log.jsonl
 state/secondmates.md
 state/afk-log.md
 state/tasks/
+
+# Generated fleet board — regenerate with bin/board, not source
+.lavish/
+
+__pycache__/

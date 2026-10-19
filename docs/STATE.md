@@ -11,6 +11,7 @@ state/
   fleet.json            # LIVE tasks only (small index)
   fleet-archive.jsonl   # one compact line per finished, ask-free task
   decisions.md          # captain prefs, routing lanes, permission + merge policy
+  decisions-log.jsonl   # timestamped {id,text,ts} decisions, one per bin/fleet decide call
   secondmates.md        # phase 3: roster of subordinate first mates (only if any)
   afk-log.md            # phase 3: running log while the captain is AFK (only if any)
   tasks/
@@ -53,6 +54,14 @@ Rules:
 - `asks` is the task's open questions for the captain. An ask outlives the step that raised it: closing a task never closes its asks. `bin/fleet archive` REFUSES a task with open asks — answer (`ask`/`answer`) or explicitly drop each one first.
 - `preview` records a crew dev/preview server from its final message (`preview: <port> <pid>`). Teardown kills that pid (after checking it is still the same process) and runs `clear-preview` before archiving.
 - A `done`/`failed` task with no open asks leaves the index: `bin/fleet archive <id>` appends it to `fleet-archive.jsonl` and removes it. Never delete a task any other way.
+
+## `decisions-log.jsonl` — the decisions feed
+
+Append-only, one compact `{"id", "text", "ts"}` object per line, written only by `bin/fleet decide <id> "<text>"` (same 200-char cap as `notes`/`asks`). Record a decision whenever one is made with lasting effect — a routing choice, a merge/no-merge call, an answer to an ask, a scope change — so `bin/board` can surface it on the fleet board in time order. This is additive to a task's `log.md` narrative, not a replacement: `decide` is for the handful of calls worth surfacing on the board, `log` is for everything else.
+
+## `bin/board` — the live fleet board
+
+`bin/board` reads `fleet.json`, `fleet-archive.jsonl`, `decisions-log.jsonl`, and each live task's `log.md` tail, and renders one self-contained HTML page (default `.lavish/fleet-board.html`) with no network calls or external assets. It is read-only and safe to re-run any time — cheap, idempotent, overwrites only that one file. Run it after every `bin/fleet` write (see Hard rules in `CLAUDE.md`) so the page stays current; a Lavish session on that file hot-reloads automatically, and a `<meta refresh>` tag covers a plain browser tab.
 
 ## Reading on a wake (token budget)
 

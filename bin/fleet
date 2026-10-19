@@ -17,6 +17,7 @@
 #   bin/fleet preview <id> <port> <pid>   record a crew preview server
 #   bin/fleet clear-preview <id>      drop the preview record (after killing it)
 #   bin/fleet log <id> "<text>"       append a timestamped line to tasks/<id>/log.md
+#   bin/fleet decide <id> "<text>"    append a {id,text,ts} decision to decisions-log.jsonl
 #   bin/fleet archive <id>            move a done/failed ask-free task to the archive
 #
 # FLEET_FILE env overrides the path; default is state/fleet.json at repo root.
@@ -26,6 +27,7 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 FLEET="${FLEET_FILE:-$ROOT/state/fleet.json}"
 STATE_DIR="$(dirname "$FLEET")"
 ARCHIVE="$STATE_DIR/fleet-archive.jsonl"
+DECISIONS="$STATE_DIR/decisions-log.jsonl"
 TASKS="$STATE_DIR/tasks"
 
 STATUSES='["dispatched","running","needs-captain","done","failed"]'
@@ -164,6 +166,15 @@ cmd_log() {
   printf '%s %s\n' "$(now)" "$text" >>"$TASKS/$id/log.md";
 }
 
+cmd_decide() {
+  local id="$1" text="$2"
+  entry_exists "$id" || die "no task $id"
+  ((${#text} > 0)) || die "decide text is empty"
+  ((${#text} <= MAXLEN)) || die "decide over $MAXLEN chars"
+  jq -nc --arg id "$id" --arg text "$text" --arg ts "$(now)" \
+    '{id: $id, text: $text, ts: $ts}' >>"$DECISIONS";
+}
+
 cmd_archive() {
   local id="$1"
   entry_exists "$id" || die "no task $id"
@@ -194,6 +205,7 @@ case "$cmd" in
   preview)       [[ $# -eq 3 ]] || die "usage: fleet preview <id> <port> <pid>"; cmd_preview "$@";;
   clear-preview) [[ $# -eq 1 ]] || die "usage: fleet clear-preview <id>"; cmd_clear_preview "$1";;
   log)           [[ $# -eq 2 ]] || die "usage: fleet log <id> \"<text>\""; cmd_log "$1" "$2";;
+  decide)        [[ $# -eq 2 ]] || die "usage: fleet decide <id> \"<text>\""; cmd_decide "$1" "$2";;
   archive)       [[ $# -eq 1 ]] || die "usage: fleet archive <id>"; cmd_archive "$1";;
   *) usage; [[ -n "$cmd" ]] && exit 1; exit 0;;
 esac
