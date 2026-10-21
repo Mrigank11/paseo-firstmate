@@ -8,3 +8,4 @@ state/tasks/
 state/projects/
 node_modules/
 plugin/spike/
+state/page.env
