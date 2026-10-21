@@ -1,0 +1,5 @@
+session:
+  file: /tmp/lv/p.html
+  status: ended
+  ended_by: user
+next_step: The user ended this Lavish Editor session. Stop polling /tmp/lv/p.html - do not run `lavish-axi /tmp/lv/p.html` to reopen it. Deliver any remaining updates directly in this conversation instead. Only reopen with `lavish-axi /tmp/lv/p.html --reopen` if the user explicitly asks for further review or something genuinely important needs their visual attention.

@@ -1,0 +1,113 @@
+#!/usr/bin/env bash
+# bin/page — the first mate's handle on a project's Lavish page (the captain <-> first mate channel).
+#
+#   bin/page start <project> [--repo <path>] [--title "<t>"] [--page <abs path>] [--reopen]
+#                                     scaffold (if new), render once, open in Lavish, record the URL;
+#                                     idempotent. Prints {"project","page","url"}. The firstmate-deck plugin
+#                                     sees page.json and starts polling the page for comments.
+#   bin/page reply <project> "<text>"|-   answer the captain's comments on the page (- reads stdin);
+#                                     marks every delivered comment answered
+#   bin/page note <project> <section> "<text>"   append a dated line to sections/<section>.md
+#   bin/page status [<project>]       sessions, URLs, undelivered comments, plugin state
+#   bin/page heal                     reload the firstmate-deck plugin if it has failed
+#   bin/page render <project> [--out <file>]   render the page file once, no Lavish
+#
+# Roots: FIRSTMATE_ROOT (default: this checkout). state/page.env, if present, is sourced first; it carries
+# LAVISH_AXI_PORT / LAVISH_AXI_STATE_DIR so bin/page talks to the same Lavish as the plugin.
+set -euo pipefail
+
+export NODE_NO_WARNINGS=1  # node warns that the plugin package.json has no "type"; harmless
+REPO="$(cd "$(dirname "$0")/.." && pwd)"
+ROOT="${FIRSTMATE_ROOT:-$REPO}"
+if [[ -f "$ROOT/state/page.env" ]]; then set -a; source "$ROOT/state/page.env"; set +a; fi
+ROOT="${FIRSTMATE_ROOT:-$ROOT}"
+TOOL=(node "$REPO/plugin/firstmate-deck/server/page-tool.ts")
+RENDER=(node "$REPO/plugin/firstmate-deck/server/render-cli.ts")
+
+die() { echo "page: $*" >&2; exit 1; }
+
+lavish() { # lavish-axi from PATH if installed, else through npx
+  if command -v lavish-axi >/dev/null 2>&1; then lavish-axi "$@"; else npx -y lavish-axi "$@"; fi
+}
+
+paseo_home_args() { [[ -n "${PASEO_HOME:-}" ]] && printf '%s\n' --home "$PASEO_HOME" || true; }
+
+plugin_status() { # running | failed | ... | missing | unknown
+  command -v paseo >/dev/null 2>&1 || { echo unknown; return; }
+  local home=(); mapfile -t home < <(paseo_home_args)
+  local out; out="$(paseo plugin ls --json "${home[@]}" 2>/dev/null)" || { echo unknown; return; }
+  jq -r '(map(select(.id=="firstmate-deck")) | first // null) | if . == null then "missing" else .status end' <<<"$out" 2>/dev/null || echo unknown
+}
+
+need_project() { [[ -n "${1:-}" ]] || die "missing <project>"; [[ -f "$ROOT/state/projects/$1/project.json" ]] || die "no such project '$1' (bin/page start $1 creates it)"; }
+
+cmd_start() {
+  local project="${1:-}"; shift || true
+  [[ -n "$project" ]] || die "usage: bin/page start <project> [--repo <path>] [--title <t>] [--page <abs path>] [--reopen]"
+  local reopen=() scaf=()
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --repo|--title|--page) [[ $# -ge 2 ]] || die "$1 needs a value"; scaf+=("$1" "$2"); shift 2 ;;
+      --reopen) reopen=(--reopen); shift ;;
+      *) die "unknown option '$1'" ;;
+    esac
+  done
+  "${TOOL[@]}" scaffold "$ROOT" "$project" "${scaf[@]}"
+  local page; page="$("${TOOL[@]}" page-path "$ROOT" "$project")"
+  "${RENDER[@]}" "$ROOT" "$project" --out "$page" >/dev/null
+  local out; out="$(lavish "$page" "${reopen[@]}")" || die "lavish-axi could not open $page"
+  local url; url="$(sed -n 's/^[[:space:]]*url:[[:space:]]*"\{0,1\}\([^"]*\)"\{0,1\}[[:space:]]*$/\1/p' <<<"$out" | head -1)"
+  [[ -n "$url" ]] || die "lavish-axi did not print a session url:"$'\n'"$out"
+  "${TOOL[@]}" session "$ROOT" "$project" "$url"
+  jq -cn --arg project "$project" --arg page "$page" --arg url "$url" '{project:$project,page:$page,url:$url}'
+}
+
+cmd_reply() {
+  local project="${1:-}" text="${2:-}"
+  need_project "$project"
+  [[ -n "$text" ]] || die "usage: bin/page reply <project> \"<text>\"|-"
+  local page; page="$("${TOOL[@]}" page-path "$ROOT" "$project")"
+  if [[ "$text" == "-" ]]; then lavish reply "$page" --agent-reply-file - || die "reply failed"
+  else printf '%s' "$text" | lavish reply "$page" --agent-reply-file - || die "reply failed"; fi
+  local n; n="$("${TOOL[@]}" answered "$ROOT" "$project")"
+  echo "replied; $n comment(s) marked answered"
+}
+
+cmd_note() {
+  local project="${1:-}" section="${2:-}" text="${3:-}"
+  need_project "$project"
+  [[ -n "$section" && -n "$text" ]] || die "usage: bin/page note <project> <section> \"<text>\""
+  "${TOOL[@]}" note "$ROOT" "$project" "$section" "$text"
+}
+
+cmd_status() {
+  PAGE_PLUGIN_STATUS="$(plugin_status)" "${TOOL[@]}" status "$ROOT" "${1:-}"
+}
+
+cmd_heal() {
+  local st; st="$(plugin_status)"
+  case "$st" in
+    failed)
+      local home=(); mapfile -t home < <(paseo_home_args)
+      paseo plugin reload firstmate-deck "${home[@]}" && echo "heal: firstmate-deck was failed; reloaded it" ;;
+    missing) echo "heal: firstmate-deck is not installed on this daemon; nothing to reload" ;;
+    unknown) echo "heal: could not read the plugin status (is the paseo daemon up?)" ;;
+    *) echo "heal: firstmate-deck is $st; nothing to do" ;;
+  esac
+}
+
+cmd_render() {
+  local project="${1:-}"; shift || true
+  need_project "$project"
+  "${RENDER[@]}" "$ROOT" "$project" "$@"
+}
+
+case "${1:-}" in
+  start) shift; cmd_start "$@" ;;
+  reply) shift; cmd_reply "$@" ;;
+  note) shift; cmd_note "$@" ;;
+  status) shift; cmd_status "$@" ;;
+  heal) shift; cmd_heal ;;
+  render) shift; cmd_render "$@" ;;
+  *) sed -n '2,16p' "$0"; exit 1 ;;
+esac
