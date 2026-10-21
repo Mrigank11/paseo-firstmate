@@ -39,6 +39,11 @@ case "$1 $2" in
   "plugin reload") : ;;
   "agent update") : ;;
 esac
+if [[ "$1" == inspect ]]; then
+  case " ${FAKE_UNKNOWN_AGENTS:-} " in *" $2 "*) echo "agent not found: $2" >&2; exit 1 ;; esac
+  case " ${FAKE_ARCHIVED_AGENTS:-} " in *" $2 "*) echo '{"Archived":true,"ArchivedAt":"2026-10-21T00:00:00Z"}'; exit 0 ;; esac
+  echo '{"Archived":false,"ArchivedAt":null}'; exit 0
+fi
 if [[ "$1" == ls ]]; then cat "$FAKE_LS" 2>/dev/null || echo '[]'; fi
 F
 cat >"$T/fakebin/npm" <<'F'
@@ -161,6 +166,12 @@ rm -f "$T/root/state/firstmate.json"
 msg="$(PASEO_AGENT_ID= "$P" claim 2>&1)"; rc=$?
 [[ $rc -ne 0 ]] && grep -q "PASEO_AGENT_ID is empty" <<<"$msg" && ok "claim refuses without PASEO_AGENT_ID, with a clear message" || bad "claim refuses without PASEO_AGENT_ID" "$msg"
 [[ ! -e "$T/root/state/firstmate.json" ]] && ok "...and writes nothing" || bad "refused claim wrote a file"
+: >"$FAKE_LOG"
+msg="$(PASEO_AGENT_ID=agent-elsewhere FAKE_UNKNOWN_AGENTS=agent-elsewhere "$P" claim 2>&1)"; rc=$?
+[[ $rc -ne 0 ]] && grep -q "is not on this Paseo daemon" <<<"$msg" && ok "claim refuses an agent that is not on this daemon" || bad "claim refuses a foreign agent" "$msg"
+[[ ! -e "$T/root/state/firstmate.json" ]] && ! grep -q "agent update" "$FAKE_LOG" && ok "...and neither writes a claim nor touches any label" || bad "foreign claim had side effects"
+msg="$(PASEO_AGENT_ID=agent-old FAKE_ARCHIVED_AGENTS=agent-old "$P" claim 2>&1)"; rc=$?
+[[ $rc -ne 0 ]] && grep -q "is archived" <<<"$msg" && ok "claim refuses an archived agent" || bad "claim refuses an archived agent" "$msg"
 echo '[{"id":"agent-fm-1","status":"idle"},{"id":"old-fm","status":"idle"},{"id":"older-fm","status":"closed"}]' >"$FAKE_LS"
 : >"$FAKE_LOG"
 "$P" claim >/dev/null

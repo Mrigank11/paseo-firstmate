@@ -73,6 +73,16 @@ real() { (cd "$1" 2>/dev/null && pwd -P) || echo "$1"; }
 cmd_claim() {
   local id="${PASEO_AGENT_ID:-}"
   [[ -n "$id" ]] || die "PASEO_AGENT_ID is empty: run bin/page claim from inside the first mate's own Paseo session (a plain shell cannot say which agent it is)"
+  # Only an agent that really lives on THIS daemon may claim: a stale or foreign PASEO_AGENT_ID (an agent on another
+  # Paseo daemon, an archived session) would otherwise point comments at nobody and demote the real first mate.
+  command -v paseo >/dev/null 2>&1 || die "paseo CLI not found: cannot verify that agent $id exists on this daemon"
+  local vhome=() meta
+  mapfile -t vhome < <(paseo_home_args)
+  meta="$(paseo inspect "$id" --json "${vhome[@]}" 2>/dev/null)" && [[ -n "$meta" ]] \
+    || die "agent $id is not on this Paseo daemon (${PASEO_HOME:-~/.paseo}): run bin/page claim from the first mate's own session on the daemon the firstmate-deck plugin runs on"
+  if jq -e '(.Archived // .archived // false) == true or ((.ArchivedAt // .archivedAt // "") != "")' <<<"$meta" >/dev/null 2>&1; then
+    die "agent $id is archived: run bin/page claim from a live first-mate session"
+  fi
   mkdir -p "$ROOT/state"
   "${TOOL[@]}" claim "$ROOT" "$id"
   echo "claimed: agent $id is the first mate of $ROOT_REAL"
