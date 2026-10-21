@@ -139,7 +139,9 @@ export class PagePoller {
         continue;
       }
       if (outcome.kind === "listener-active") {
-        const own = outcome.holder === this.ownerLabel && this.ownRetries < 10;
+        // Our polls carry no --owner (an owned poll makes Lavish show "Working..." permanently), so a holder
+        // right after start is most likely our own previous poll still draining: retry fast for a while.
+        const own = (outcome.holder === this.ownerLabel || !outcome.holder) && this.ownRetries < 10;
         if (own) this.ownRetries++;
         log(`LISTENER_ACTIVE (holder ${outcome.holder ?? "?"}); retry in ${own ? OWN_LISTENER_RETRY_MS : LISTENER_RETRY_MS} ms`);
         h.onListener?.("active-elsewhere", outcome.message ?? "");
@@ -188,8 +190,12 @@ export function killAllPolls(): void {
  * for about a second after printing, and the server has already freed the listener slot by then, so waiting
  * for the exit would add a second to every comment. Error documents have no next_step and resolve on exit.
  */
-export function spawnPoll(bin: string, page: string, env: NodeJS.ProcessEnv, owner: string): SpawnedPoll {
-  const child = spawn(process.execPath, [bin, "poll", page, "--owner", owner], { env, stdio: ["ignore", "pipe", "pipe"] });
+/**
+ * Never pass --owner: Lavish reports an owned poll as an "external listener" and shows a permanent "Working..."
+ * bubble on the page. Unowned, the page shows "Working" only while picked-up comments await `lavish-axi reply`.
+ */
+export function spawnPoll(bin: string, page: string, env: NodeJS.ProcessEnv, owner?: string): SpawnedPoll {
+  const child = spawn(process.execPath, [bin, "poll", page, ...(owner ? ["--owner", owner] : [])], { env, stdio: ["ignore", "pipe", "pipe"] });
   spawned.add(child);
   let out = "";
   let settle: (r: PollRun) => void = () => {};

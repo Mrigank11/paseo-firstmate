@@ -371,7 +371,7 @@ export class Deck {
     const entry: { poller: PagePoller; child: { pid?: number; kill: (s?: NodeJS.Signals) => boolean } | null } = { poller: null as any, child: null };
     entry.poller = new PagePoller({
       run: async () => {
-        const sp = spawnPoll(bin, page, env, "firstmate-deck");
+        const sp = spawnPoll(bin, page, env);
         entry.child = sp.child;
         writePid(pidFile, sp.child.pid);
         const res = await sp.result;
