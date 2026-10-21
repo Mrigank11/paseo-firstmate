@@ -73,7 +73,7 @@ export class Deck {
       send: (_p, msg) => {
         const early = this.early && Date.now() - this.early.at < 10_000 ? this.early.p : undefined;
         this.early = null;
-        return sendToFirstMate(o.exec, this.cfg.firstmateLabel, msg, early);
+        return sendToFirstMate(o.exec, this.cfg.firstmateLabel, msg, early, this.cfg.root);
       },
       markDelivered: (p, ids, at) => this.markDelivered(p, ids, at),
       onQueue: (p, queued, failing) => this.onQueue(p, queued, failing),
@@ -407,7 +407,7 @@ export class Deck {
     appendInbox(file, entries);
     this.log(`${project}: ${entries.length} comment(s) -> inbox`);
     // Look the first mate up now, while the batch window is open, so the send itself is one CLI call.
-    this.early = { at: Date.now(), p: resolveFirstMate(this.o.exec, this.cfg.firstmateLabel) };
+    this.early = { at: Date.now(), p: resolveFirstMate(this.o.exec, this.cfg.firstmateLabel, this.cfg.root) };
     this.early.p.catch(() => {});
     this.relay.enqueue(project, entries);
   }
@@ -462,7 +462,7 @@ export class Deck {
   private async firstMateId(): Promise<string | null> {
     if (this.fmCache && Date.now() - this.fmCache.at < 10_000) return this.fmCache.id;
     let id: string | null = null;
-    try { id = (await resolveFirstMate(this.o.exec, this.cfg.firstmateLabel))?.id ?? null; } catch {}
+    try { id = (await resolveFirstMate(this.o.exec, this.cfg.firstmateLabel, this.cfg.root))?.id ?? null; } catch {}
     this.fmCache = { at: Date.now(), id };
     return id;
   }

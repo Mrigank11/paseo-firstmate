@@ -119,10 +119,29 @@ export class AgentSource {
 
 export type FirstMate = { id: string; status: string };
 
-/** Newest non-archived agent carrying the first-mate label ("key=value"). Re-resolved on every use. */
-export async function resolveFirstMate(exec: Exec, label: string): Promise<FirstMate | null> {
-  const list: any[] = JSON.parse((await exec(["ls", "--label", label, "--json"])) || "[]");
+/**
+ * The first mate: the newest non-archived agent carrying the first-mate label ("key=value"). Without a labelled
+ * agent, fall back to the agent running in the first-mate checkout itself (`root`): crew always work in their own
+ * worktrees, so that is the first mate even when it was started from the Paseo app with no label. The fallback
+ * also labels it (best effort), so later lookups and the app see it. Re-resolved on every use.
+ */
+export async function resolveFirstMate(exec: Exec, label: string, root?: string): Promise<FirstMate | null> {
+  let list: any[] = JSON.parse((await exec(["ls", "--label", label, "--json"])) || "[]");
+  if (!list.length && root) {
+    const want = root.replace(/\/+$/, "");
+    const all: any[] = JSON.parse((await exec(["ls", "--json"])) || "[]");
+    list = all.filter((a) => String(a.cwd ?? "").replace(/^~(?=\/|$)/, homedir()).replace(/\/+$/, "") === want);
+    if (list.length) {
+      const pick = await newest(exec, list);
+      try { await exec(["agent", "update", pick.id, "--label", label]); } catch {}
+      return pick;
+    }
+  }
   if (!list.length) return null;
+  return newest(exec, list);
+}
+
+async function newest(exec: Exec, list: any[]): Promise<FirstMate> {
   const rated = await Promise.all(
     list.map(async (a) => {
       let created = 0;
@@ -156,7 +175,7 @@ async function sendTo(exec: Exec, id: string, message: string): Promise<void> {
  * `early` is a first-mate lookup started a moment ago (while the batch window was open); if sending to it
  * fails, the first mate is resolved afresh and the send retried once.
  */
-export async function sendToFirstMate(exec: Exec, label: string, message: string, early?: Promise<FirstMate | null>): Promise<string> {
+export async function sendToFirstMate(exec: Exec, label: string, message: string, early?: Promise<FirstMate | null>, root?: string): Promise<string> {
   let fm: FirstMate | null = null;
   if (early) { try { fm = await early; } catch {} }
   if (fm) {
@@ -165,8 +184,8 @@ export async function sendToFirstMate(exec: Exec, label: string, message: string
       return fm.id;
     } catch {}
   }
-  fm = await resolveFirstMate(exec, label);
-  if (!fm) throw new Error(`no agent labelled ${label}`);
+  fm = await resolveFirstMate(exec, label, root);
+  if (!fm) throw new Error(`no agent labelled ${label} and none running in ${root ?? "the first-mate checkout"}`);
   await sendTo(exec, fm.id, message);
   return fm.id;
 }
