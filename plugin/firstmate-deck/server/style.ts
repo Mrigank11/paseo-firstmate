@@ -68,6 +68,7 @@ button.opt[aria-pressed=true]{opacity:1;cursor:default;background:var(--you);bor
 .hint{font-size:12px;color:var(--mut)}.pickline{margin-top:6px;font-size:13px;font-weight:600;color:var(--you)}
 .ask.replied.picked{font-style:normal}.tr-stale{font-style:normal;font-size:12px}
 .askbox .trail{margin:6px 0 2px}
+.askbox.answered{opacity:.85}.ask-tag{font-size:11px;text-transform:uppercase;letter-spacing:.04em;color:#8a7a6a;margin-top:6px}
 /* read marks */
 .cnotes{margin:6px 0 2px;font-size:13px}.cnotes>summary{display:inline-block;color:var(--mut);font-size:12.5px}.cnotes>summary::before{width:5px;height:5px}
 .mr,.mra{font:inherit;font-size:12px;font-weight:600;color:var(--mut);background:#fff;border:1px solid var(--line);border-radius:999px;padding:2px 10px;cursor:pointer;margin-left:auto;flex:none}

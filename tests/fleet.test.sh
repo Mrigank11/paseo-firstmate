@@ -63,6 +63,7 @@ refused "ask context + overlong text" $F ask a "$(printf 'x%.0s' $(seq 201))" --
 [[ ! -e "$T/tasks/a/asks/3.md" ]]; check "refused ask leaves no file" $?
 $F answer a 2 >/dev/null
 [[ -f "$T/tasks/a/asks/2.md" ]]; check "answer leaves context file" $?
+eq "$(jq -rs '[.[] | [.id, .text, .context, (.answeredAt | length > 0)]] | tostring' "$T/tasks/a/asks.jsonl")" '[["a2","second","tasks/a/asks/2.md",true]]'; check "answer records the ask in tasks/<id>/asks.jsonl" $?
 $F ask a "again" --context-file "$T/ctx.md" >/dev/null
 eq "$($F get a | jq -r '.asks[-1].context')" "tasks/a/asks/3.md"; check "no clobber of lingering context" $?
 
