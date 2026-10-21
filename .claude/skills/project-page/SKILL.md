@@ -80,3 +80,7 @@ The captain's Lavish panel shows "Working" until your reply, so always reply, ev
 - Hand-edit the page HTML, `inbox.jsonl` or `page.json`.
 - Let a crew member run `bin/page` (it is refused as a first mate anyway), or point an ask at a position instead of its id.
 - Put a cross-project or fleet view on a project page. `/bearings` is the fleet view.
+
+## Pausing a page
+
+- `bin/page stop <project>` pauses a page (no poll, no render); `bin/page start <project>` resumes it. Done tasks with a `card.md` show under "Done, unread"; `bin/fleet card <id> --file <f>` writes a card.

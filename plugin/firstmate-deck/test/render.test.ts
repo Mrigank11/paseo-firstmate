@@ -64,7 +64,7 @@ test("replying changes the signature", () => {
 });
 
 test("failed marker, done collapsed, dependency across the archive", () => {
-  assert.match(r.live, /<article class="task s-done s-failed" id="t-broke-build">/);
+  assert.match(r.live, /<article class="task s-done s-failed" id="t-broke-build"[^>]*>/);
   assert.match(r.live, /<details class="grp" id="g-done">/);
   assert.match(r.live, /after <a href="#t-arch-schema">Draft the schema<\/a>/);
   assert.match(r.live, /then <a href="#t-pick-db">Choose the &lt;b&gt;database&lt;\/b&gt; for the demo<\/a>, <a href="#t-done-live">/);

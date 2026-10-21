@@ -15,7 +15,7 @@ nav{position:sticky;top:0;z-index:5;background:var(--bg);margin:14px -20px 0;pad
 nav a{color:var(--mut);text-decoration:none}nav a:hover{color:var(--fg)}
 h2{font-size:13px;letter-spacing:.06em;text-transform:uppercase;color:var(--mut);margin:36px 0 10px;scroll-margin-top:48px}
 h3{font-size:15px;margin:0;display:inline}
-.nt h3,.nt h4,section[data-section] h3,section[data-section] h4,.actx h3,.actx h4{display:block;margin:12px 0 4px;font-size:14px}
+.nt h3,.nt h4,[data-section] h3,[data-section] h4,.actx h3,.actx h4{display:block;margin:12px 0 4px;font-size:14px}
 .m{color:var(--mut);font-size:13px}.t{font-weight:600}
 code{font:12.5px ui-monospace,monospace;background:var(--soft);padding:1px 4px;border-radius:3px;overflow-wrap:anywhere}
 ul{margin:4px 0;padding-left:20px}li{margin:3px 0}.dec li{margin:6px 0}
@@ -71,6 +71,12 @@ button.opt[aria-pressed=true]{opacity:1;cursor:default;background:var(--you);bor
 .hint{font-size:12px;color:var(--mut)}.pickline{margin-top:6px;font-size:13px;font-weight:600;color:var(--you)}
 .ask.replied.picked{font-style:normal}.tr-stale{font-style:normal;font-size:12px}
 .askbox .trail{margin:6px 0 2px}
+/* read marks */
+.cnotes{margin:6px 0 2px;font-size:13px}.cnotes>summary{display:inline-block;color:var(--mut);font-size:12.5px}.cnotes>summary::before{width:5px;height:5px}
+.mr,.mra{font:inherit;font-size:12px;font-weight:600;color:var(--mut);background:#fff;border:1px solid var(--line);border-radius:999px;padding:2px 10px;cursor:pointer;margin-left:auto;flex:none}
+.mra{margin-left:10px}.mr:hover,.mra:hover{color:var(--fg);border-color:#b8b2a3}
+[hidden]{display:none!important}
+#g-done .mr{display:none}
 /* collapsible hand-written sections */
 details.sec>summary h2{display:inline-block;margin:0}
 details.sec{margin-top:36px;scroll-margin-top:48px}
@@ -82,7 +88,7 @@ details.sec>summary{padding:2px 0}
 .banner[hidden]{display:none}
 .b-bad{background:#fee2e2;color:#991b1b;border:1px solid #fecaca}.b-off{background:var(--soft);color:var(--mut);border:1px solid var(--line)}
 pre{overflow-x:auto;background:#fff;border:1px solid var(--line);border-radius:8px;padding:8px 12px;font:12.5px/1.5 ui-monospace,monospace}pre code{background:none;padding:0;overflow-wrap:normal}
-section[data-section]{scroll-margin-top:48px}
+[data-section]{scroll-margin-top:48px}
 .tt{flex-wrap:wrap}.ttl{min-width:0;overflow-wrap:anywhere}.nt,.ask,.actx,.cur{overflow-wrap:anywhere}
 @media (max-width:560px){.open{margin-left:0}main{padding:18px 14px 60px}nav{margin:12px -14px 0;padding:8px 14px}h1{font-size:20px}.tt{flex-direction:column;gap:4px}.s-you{padding:12px}.tw table{min-width:480px}}
 </style>
@@ -97,9 +103,9 @@ section[data-section]{scroll-margin-top:48px}
 
 <h2 id="tasks">Tasks</h2>
 <div class="m">Each task once: its state, its crew agent live, and what it depends on. Titles and “Open in Paseo” go to the agent in the Paseo web UI.</div>
-<div id="live"><!--LIVE-START--><div class="summary"><a href="#g-you" class="sum c-you">1 needs you</a><a href="#g-fm" class="sum c-fm">1 with the first mate</a><a href="#g-running" class="sum c-running">1 running</a><a href="#g-next" class="sum c-next">1 next up</a><a href="#g-parked" class="sum c-parked">1 parked</a><a href="#g-done" class="sum c-done">3 done</a><a href="#g-done" class="sum c-fail">1 failed</a><span class="sum c-running">1 agent working</span><span class="m">live: the page checks every 20 s; the plugin refreshes it on every change and at least every 20 s (last refresh 10:15:30)</span></div>
+<div id="live"><!--LIVE-START--><div class="summary"><a href="#g-you" class="sum c-you">1 needs you</a><a href="#g-fm" class="sum c-fm">1 with the first mate</a><a href="#g-running" class="sum c-running">1 running</a><a href="#g-next" class="sum c-next">1 next up</a><a href="#g-parked" class="sum c-parked">1 parked</a><a href="#g-doneu" class="sum c-done" data-k="u">1 done, unread</a><a href="#g-done" class="sum c-done" data-k="d">2 done</a><a href="#g-done" class="sum c-fail">1 failed</a><span class="sum c-running">1 agent working</span><span class="m">live: the page checks every 20 s; the plugin refreshes it on every change and at least every 20 s (last refresh 10:15:30)</span></div>
 <section class="grp" id="g-you"><h3>Needs you <span class="n">(1)</span></h3>
-<article class="task s-you" id="t-pick-db"><div class="tt"><span class="ttl"><a href="http://paseo.test/agent/ag-pick">Choose the &lt;b&gt;database&lt;/b&gt; for the demo</a></span></div><div class="askbox" id="a-pick-db-a1"><div class="ask"><b>Your call:</b> Postgres or SQLite for the demo? &lt;b&gt;BLUF: SQLite&lt;/b&gt; unless you need concurrent writers.</div><details class="actx" id="x-pick-db-a1"><summary>Context</summary><div><h4>Why this matters</h4>
+<article class="task s-you" id="t-pick-db"><div class="tt"><span class="ttl"><a href="http://paseo.test/agent/ag-pick">Choose the &lt;b&gt;database&lt;/b&gt; for the demo</a></span></div><div class="askbox" id="a-pick-db-a1"><div class="ask"><b>Your call:</b> Postgres or SQLite for the demo? &lt;b&gt;BLUF: SQLite&lt;/b&gt; unless you need concurrent writers.</div><details class="actx" id="x-pick-db-a1" open><summary>Context</summary><div><h4>Why this matters</h4>
 <p>The demo has <b>one writer</b>. Options:</p>
 <div class="tw"><table><thead><tr><th>Option</th><th>Pros</th><th>Cons</th></tr></thead><tbody><tr><td>SQLite</td><td>zero setup, one file</td><td>single writer</td></tr><tr><td>Postgres</td><td>concurrent writers</td><td>needs a container</td></tr></tbody></table></div>
 <ol><li>Pick SQLite for the demo.</li><li>Revisit if we add a worker.</li></ol></div></details></div><div class="askbox" id="a-pick-db-a2"><div class="ask"><b>Your call:</b> OK to add the &lt;code&gt;DATABASE_URL&lt;/code&gt; flag to the staging env?</div></div><div class="ag"><span class="pill p-you"><span class="dot"></span>waiting on you</span><span class="facts">23 steps · took 21 min · claude-opus-5-5 medium</span><a class="open" href="http://paseo.test/agent/ag-pick">Open in Paseo</a></div><details class="stp" id="s-pick-db"><summary class="cur">DONE: need two answers</summary><ol start="21"><li>Reading schema.sql</li><li>Thinking: Two options, SQLite or Postgres.</li><li>Ran npm run check</li></ol></details><div class="nt">Waiting on two answers.</div><div class="dp">after <a href="#t-arch-schema">Draft the schema</a> · then <a href="#t-ship-api">Ship the demo API</a></div></article></section>
@@ -112,12 +118,13 @@ section[data-section]{scroll-margin-top:48px}
 <article class="task s-next" id="t-write-docs"><div class="tt"><span class="ttl">Write the docs</span></div><div class="trail"><span class="tr-who">💬 You · 09:20</span><span class="tr-txt">“other task”</span><span class="st st-late">sending…</span></div><div class="nt">Starts once the API lands.</div><div class="dp">after <a href="#t-ship-api">Ship the demo API</a>, <a href="#t-done-live">Wire the schema into the API</a></div></article></section>
 <details class="grp" id="g-parked"><summary><h3>Parked <span class="n">(1)</span></h3></summary>
 <article class="task s-parked" id="t-polish-ui"><div class="tt"><span class="ttl">Polish the UI</span></div><div class="nt">Parked on your call.</div></article></details>
-<details class="grp" id="g-done"><summary><h3>Done <span class="n">(4)</span></h3></summary>
-<article class="task s-done" id="t-done-live"><div class="tt"><span class="ttl"><a href="http://paseo.test/agent/ag-done">Wire the schema into the API</a></span></div><div class="ag"><span class="pill p-done"><span class="dot"></span>done</span><a class="open" href="http://paseo.test/agent/ag-done">Open in Paseo</a></div><div class="nt"><p>Schema is wired. Verified with:</p>
-<pre><code>npm run check</code></pre></div><div class="dp">after <a href="#t-arch-schema">Draft the schema</a> · then <a href="#t-write-docs">Write the docs</a></div></article>
-<article class="task s-done s-failed" id="t-broke-build"><div class="tt"><span class="ttl"><a href="http://paseo.test/agent/ag-broke">Fix the build (gave up)</a></span><span class="chip c-fail">failed</span></div><div class="ag"><span class="pill p-error"><span class="dot"></span>failed</span><a class="open" href="http://paseo.test/agent/ag-broke">Open in Paseo</a></div><div class="nt">The toolchain pin is gone upstream.</div></article>
-<article class="task s-done" id="t-arch-schema"><div class="tt"><span class="ttl"><a href="http://paseo.test/agent/ag-schema">Draft the schema</a></span></div><div class="ag"><span class="pill p-done"><span class="dot"></span>done</span><a class="open" href="http://paseo.test/agent/ag-schema">Open in Paseo</a></div><div class="dp">after <a href="#t-arch-recon">Recon the repo</a> · then <a href="#t-pick-db">Choose the &lt;b&gt;database&lt;/b&gt; for the demo</a>, <a href="#t-done-live">Wire the schema into the API</a></div></article>
-<article class="task s-done" id="t-arch-recon"><div class="tt"><span class="ttl"><a href="http://paseo.test/agent/ag-recon">Recon the repo</a></span></div><div class="ag"><span class="pill p-done"><span class="dot"></span>done</span><a class="open" href="http://paseo.test/agent/ag-recon">Open in Paseo</a></div><div class="nt">Report in tasks/arch-recon/report.md.</div><div class="dp">then <a href="#t-arch-schema">Draft the schema</a></div></article></details>
+<section class="grp" id="g-doneu"><h3>Done, unread <span class="n">(<span class="cn">1</span>)</span> <button class="mra" type="button">Mark all read</button></h3>
+<div class="rows"><article class="task s-done" id="t-done-live" data-i="0" data-h="79fa4b3b"><div class="tt"><span class="ttl"><a href="http://paseo.test/agent/ag-done">Wire the schema into the API</a></span><button class="mr" type="button">Mark read</button></div><div class="ag"><span class="pill p-done"><span class="dot"></span>done</span><a class="open" href="http://paseo.test/agent/ag-done">Open in Paseo</a></div><div class="nt"><p>Schema is wired. Verified with:</p>
+<pre><code>npm run check</code></pre></div><div class="dp">after <a href="#t-arch-schema">Draft the schema</a> · then <a href="#t-write-docs">Write the docs</a></div></article></div></section>
+<details class="grp" id="g-done"><summary><h3>Done <span class="n">(<span class="cn">3</span>)</span></h3></summary>
+<div class="rows"><article class="task s-done s-failed" id="t-broke-build" data-i="1"><div class="tt"><span class="ttl"><a href="http://paseo.test/agent/ag-broke">Fix the build (gave up)</a></span><span class="chip c-fail">failed</span></div><div class="ag"><span class="pill p-error"><span class="dot"></span>failed</span><a class="open" href="http://paseo.test/agent/ag-broke">Open in Paseo</a></div><div class="nt">The toolchain pin is gone upstream.</div></article>
+<article class="task s-done" id="t-arch-schema" data-i="2"><div class="tt"><span class="ttl"><a href="http://paseo.test/agent/ag-schema">Draft the schema</a></span></div><div class="ag"><span class="pill p-done"><span class="dot"></span>done</span><a class="open" href="http://paseo.test/agent/ag-schema">Open in Paseo</a></div><div class="dp">after <a href="#t-arch-recon">Recon the repo</a> · then <a href="#t-pick-db">Choose the &lt;b&gt;database&lt;/b&gt; for the demo</a>, <a href="#t-done-live">Wire the schema into the API</a></div></article>
+<article class="task s-done" id="t-arch-recon" data-i="3"><div class="tt"><span class="ttl"><a href="http://paseo.test/agent/ag-recon">Recon the repo</a></span></div><div class="ag"><span class="pill p-done"><span class="dot"></span>done</span><a class="open" href="http://paseo.test/agent/ag-recon">Open in Paseo</a></div><div class="nt">Report in tasks/arch-recon/report.md.</div><div class="dp">then <a href="#t-arch-schema">Draft the schema</a></div></article></div></details>
 <div hidden data-trails></div><!--LIVE-END--></div>
 <section id="endpoints" data-section="endpoints"><h2>Endpoints &amp; creds</h2>
 <div class="trail-slot" data-trail-slot="endpoints"></div>
@@ -142,15 +149,44 @@ section[data-section]{scroll-margin-top:48px}
 </section>
 <script>
 (function(){
-  var K="fd:deck-demo:state",P=K+"|",F="page.live.js",ls=null,S={};
+  var K="fd:deck-demo:state",P=K+"|",F="page.live.js",MU="",ls=null,S={};
   try{localStorage.setItem(K+"t","1");localStorage.removeItem(K+"t");ls=localStorage}catch(e){}
   try{var raw=(ls&&ls.getItem(K))||(window.name.indexOf(P)===0?window.name.slice(P.length):"");if(raw)S=JSON.parse(raw)||{}}catch(e){}
   function save(){var s=JSON.stringify(S);try{if(ls)ls.setItem(K,s)}catch(e){}
     try{if(!window.name||window.name.indexOf(P)===0)window.name=P+s}catch(e){}}
+  var R=(S._r&&typeof S._r==="object")?S._r:{};S._r=R;
   function live(){return document.getElementById("live")}
   function snapshot(){var el=live();if(!el)return;el.querySelectorAll("details[id]").forEach(function(d){S[d.id]=d.open?1:0});save()}
   function restore(root){root.querySelectorAll("details[id]").forEach(function(d){if(d.id in S)d.open=!!S[d.id]})}
   document.addEventListener("toggle",function(e){var d=e.target;if(d&&d.id){S[d.id]=d.open?1:0;save()}},true);
+  // ---- read marks: a done card is read when R["t-<task>"] equals the card's hash (data-h); editing the card makes it unread again
+  function place(box,list){var kids=[].slice.call(box.children),same=kids.length===list.length;
+    for(var i=0;same&&i<list.length;i++)if(kids[i]!==list[i])same=false;
+    if(!same)list.forEach(function(t){box.appendChild(t)})}
+  function arrange(){var u=document.getElementById("g-doneu"),d=document.getElementById("g-done");if(!u||!d)return;
+    // cards the server already placed in Done are read (it applied the stored marks): adopt that, so an unreachable endpoint does not undo it
+    [].slice.call(d.querySelectorAll(".task[data-h]")).forEach(function(t){if(!(t.id in R))R[t.id]=t.getAttribute("data-h")});
+    var all=[].slice.call(u.querySelectorAll(".task")).concat([].slice.call(d.querySelectorAll(".task")));
+    all.sort(function(x,y){return x.getAttribute("data-i")-y.getAttribute("data-i")});
+    var ur=u.querySelector(".rows"),dr=d.querySelector(".rows"),ul=[],dl=[],cu=0,cd=0;
+    all.forEach(function(t){var h=t.getAttribute("data-h"),unread=!!h&&R[t.id]!==h,bad=t.classList.contains("s-failed");
+      (unread?ul:dl).push(t);if(!bad){if(unread)cu++;else cd++}});
+    place(ur,ul);place(dr,dl);
+    u.querySelector(".cn").textContent=ul.length;d.querySelector(".cn").textContent=dl.length;u.hidden=!ul.length;d.hidden=!dl.length;
+    [].slice.call(document.querySelectorAll(".sum[data-k]")).forEach(function(a){var un=a.getAttribute("data-k")==="u",n=un?cu:cd;
+      a.hidden=!n;a.textContent=n+(un?" done, unread":" done")})}
+  var pt=null;
+  function push(){if(!MU)return;clearTimeout(pt);pt=setTimeout(function(){try{var o={};Object.keys(S).forEach(function(k){if(k!=="_r")o[k]=S[k]});
+    fetch(MU,{method:"POST",headers:{"Content-Type":"text/plain"},body:JSON.stringify({o:o,r:R})}).catch(function(){})}catch(e){}},400)}
+  function pull(){if(!MU)return;try{fetch(MU).then(function(r){return r.json()}).then(function(j){var ch=false,rr=(j&&j.r)||{},oo=(j&&j.o)||{};
+    Object.keys(rr).forEach(function(k){if(R[k]!==rr[k]){R[k]=rr[k];ch=true}});
+    Object.keys(oo).forEach(function(k){if(!(k in S)){S[k]=oo[k];ch=true}});
+    if(ch){save();restore(document);arrange()}}).catch(function(){})}catch(e){}}
+  document.addEventListener("click",function(e){var b=e.target.closest&&e.target.closest("button.mr,button.mra");if(!b)return;
+    if(b.classList.contains("mr")){var t=b.closest(".task"),h=t&&t.getAttribute("data-h");if(h)R[t.id]=h}
+    else [].slice.call(document.querySelectorAll("#g-doneu .task")).forEach(function(t){var h=t.getAttribute("data-h");if(h)R[t.id]=h});
+    save();arrange();push()});
+  if(MU)setInterval(pull,30000);
   function reveal(id){var t=id&&document.getElementById(id);for(var p=t&&t.parentElement;p;p=p.parentElement)if(p.tagName==="DETAILS")p.open=true}
   document.addEventListener("click",function(e){var a=e.target.closest&&e.target.closest('a[href^="#"]');if(a)reveal(a.getAttribute("href").slice(1))});
   function fill(){var el=live();if(!el)return;document.querySelectorAll("[data-trail-slot]").forEach(function(s){
@@ -173,7 +209,7 @@ section[data-section]{scroll-margin-top:48px}
       data:{kind:"ask-choice",task:b.getAttribute("data-task"),ask:b.getAttribute("data-ask"),option:opt}});
       if(lv.sendQueuedPrompts)lv.sendQueuedPrompts()}
     catch(err){delete Q[k];box.querySelectorAll("button.opt").forEach(function(x){x.disabled=false;x.classList.remove("on");x.setAttribute("aria-pressed","false")});if(l){l.hidden=false;l.textContent="could not send, comment on the card instead"}}});
-  restore(document);reveal(location.hash.slice(1));fill();
+  restore(document);arrange();pull();reveal(location.hash.slice(1));fill();
   // Keyboard focus survives a live swap: remember the focused element's id (or its <details> id, for a summary) and put focus back.
   function fkey(){var a=document.activeElement,el=live();if(!a||!el||!el.contains||!el.contains(a))return null;
     if(a.id)return a.id;var p=a.parentElement;return a.tagName==="SUMMARY"&&p&&p.id?"sum:"+p.id:null}
@@ -189,7 +225,7 @@ section[data-section]{scroll-margin-top:48px}
   window.__fdLive=function(html,iso,seq){var tk=seq!==undefined&&seq!==null?"s"+seq:(iso?"i"+iso:null);
     if(tk!==null&&tk!==token){token=tk;changedAt=Date.now();stale()}
     var el=live();if(!el||html===last)return;last=html;
-    var fk=fkey();snapshot();var y=window.scrollY,M="<!--LIVE-";el.innerHTML=M+"START-->"+html+M+"END-->";restore(el);reapply(el);fill();refocus(fk);window.scrollTo(0,y)};
+    var fk=fkey();snapshot();var y=window.scrollY,M="<!--LIVE-";el.innerHTML=M+"START-->"+html+M+"END-->";restore(el);arrange();reapply(el);fill();refocus(fk);window.scrollTo(0,y)};
   function tick(){var s=document.createElement("script");s.src=F+"?t="+Date.now();s.onload=s.onerror=function(){s.remove()};document.head.appendChild(s)}
   tick();setInterval(tick,20000);
 })();

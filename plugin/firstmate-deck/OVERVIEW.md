@@ -22,3 +22,8 @@ Run `bin/page install` in the paseo-firstmate checkout: it checks Node 22.18+, `
 - If the plugin process is killed outright, Paseo does not restart it. `bin/page heal` reloads it, and the first mate's heartbeat runs that. Meanwhile the page itself shows "This page stopped updating" once the data it polls has not changed for 60 s. That is measured on the browser's own clock (each render carries a growing sequence number and the plugin re-renders at least every 20 s), so a phone whose clock disagrees with the daemon's neither raises a false alarm nor hides a real stall.
 - Paseo's phone layout cannot open plugin workspace panels. The sidebar row and its screen work on phones.
 - The chat card for page comments appears only after the plugin has seen at least one Paseo event since it started. Comment delivery does not depend on this.
+
+## Read marks, ordering, stop
+
+- The plugin serves a small CORS endpoint (`readMarksPort`, default 4398; `readMarksHost` is the tailnet fallback) for the page's "Done, unread" marks, stored in `state/projects/<p>/ui-state.json`. It never writes `fleet.json`.
+- A task's optional `order` sorts it within its group; `provider` labels it when Paseo has no record of its agent; project.json `collapsedSections`, `sectionSubtitles` and `archiveLimit` shape long hand-written pages. `bin/page stop`/`start` pause and resume one page. See `docs/STATE.md`, "Read marks, ordering and long pages".

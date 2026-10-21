@@ -33,7 +33,8 @@ export function askIdOf(v: unknown): string | null {
 
 export type PageJson = {
   lavishUrl: string | null;
-  session: "open" | "ended" | "unknown";
+  /** "stopped": `bin/page stop` — the plugin neither polls nor re-renders this page until `bin/page start`. */
+  session: "open" | "ended" | "stopped" | "unknown";
   lastRender: string | null;
   lastDelivery: string | null;
   undelivered: number;

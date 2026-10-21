@@ -12,7 +12,7 @@ nav{position:sticky;top:0;z-index:5;background:var(--bg);margin:14px -20px 0;pad
 nav a{color:var(--mut);text-decoration:none}nav a:hover{color:var(--fg)}
 h2{font-size:13px;letter-spacing:.06em;text-transform:uppercase;color:var(--mut);margin:36px 0 10px;scroll-margin-top:48px}
 h3{font-size:15px;margin:0;display:inline}
-.nt h3,.nt h4,section[data-section] h3,section[data-section] h4,.actx h3,.actx h4{display:block;margin:12px 0 4px;font-size:14px}
+.nt h3,.nt h4,[data-section] h3,[data-section] h4,.actx h3,.actx h4{display:block;margin:12px 0 4px;font-size:14px}
 .m{color:var(--mut);font-size:13px}.t{font-weight:600}
 code{font:12.5px ui-monospace,monospace;background:var(--soft);padding:1px 4px;border-radius:3px;overflow-wrap:anywhere}
 ul{margin:4px 0;padding-left:20px}li{margin:3px 0}.dec li{margin:6px 0}
@@ -68,6 +68,12 @@ button.opt[aria-pressed=true]{opacity:1;cursor:default;background:var(--you);bor
 .hint{font-size:12px;color:var(--mut)}.pickline{margin-top:6px;font-size:13px;font-weight:600;color:var(--you)}
 .ask.replied.picked{font-style:normal}.tr-stale{font-style:normal;font-size:12px}
 .askbox .trail{margin:6px 0 2px}
+/* read marks */
+.cnotes{margin:6px 0 2px;font-size:13px}.cnotes>summary{display:inline-block;color:var(--mut);font-size:12.5px}.cnotes>summary::before{width:5px;height:5px}
+.mr,.mra{font:inherit;font-size:12px;font-weight:600;color:var(--mut);background:#fff;border:1px solid var(--line);border-radius:999px;padding:2px 10px;cursor:pointer;margin-left:auto;flex:none}
+.mra{margin-left:10px}.mr:hover,.mra:hover{color:var(--fg);border-color:#b8b2a3}
+[hidden]{display:none!important}
+#g-done .mr{display:none}
 /* collapsible hand-written sections */
 details.sec>summary h2{display:inline-block;margin:0}
 details.sec{margin-top:36px;scroll-margin-top:48px}
@@ -79,6 +85,6 @@ details.sec>summary{padding:2px 0}
 .banner[hidden]{display:none}
 .b-bad{background:#fee2e2;color:#991b1b;border:1px solid #fecaca}.b-off{background:var(--soft);color:var(--mut);border:1px solid var(--line)}
 pre{overflow-x:auto;background:#fff;border:1px solid var(--line);border-radius:8px;padding:8px 12px;font:12.5px/1.5 ui-monospace,monospace}pre code{background:none;padding:0;overflow-wrap:normal}
-section[data-section]{scroll-margin-top:48px}
+[data-section]{scroll-margin-top:48px}
 .tt{flex-wrap:wrap}.ttl{min-width:0;overflow-wrap:anywhere}.nt,.ask,.actx,.cur{overflow-wrap:anywhere}
 @media (max-width:560px){.open{margin-left:0}main{padding:18px 14px 60px}nav{margin:12px -14px 0;padding:8px 14px}h1{font-size:20px}.tt{flex-direction:column;gap:4px}.s-you{padding:12px}.tw table{min-width:480px}}`;

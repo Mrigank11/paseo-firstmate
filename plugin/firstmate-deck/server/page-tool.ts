@@ -10,9 +10,15 @@
 //   page-tool.ts claim <root> <agentId>           (writes state/firstmate.json: THE first mate of this checkout)
 //   page-tool.ts stalled <root> <seconds>        (prints the open projects the plugin has not rendered for that long; not those with a load error)
 //   page-tool.ts load-errors <root>               (prints "<project>: <file>: <why>" for every project whose state files cannot be read)
+//   page-tool.ts stop <root> <project>            (page.json session -> "stopped": the plugin stops polling and rendering that page)
+//   page-tool.ts section-set <root> <project> <name> (--html-file F|--md-file F)   (replace sections/<name>.html or .md; "unchanged" when identical)
+//   page-tool.ts configure <root> <project> <json>   (merge top-level keys into project.json; "unchanged" when nothing differs)
+//   page-tool.ts marks-set <root> <project> <json>   (merge {"o":{..},"r":{..}} into ui-state.json, the read marks the plugin serves)
 //   page-tool.ts lavish-cfg <root> [project]      (prints the plugin's Lavish port/state dir as shell lines, if known)
-import { existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, unlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { updateUi } from "./marks-server.ts";
+import { cleanUi } from "./marks.ts";
 import { askIdOf, inboxPath, pageJsonPath, patchPageJson, projectDir, readInbox, readPageJson, updateInbox, writeAtomic } from "./store.ts";
 
 const SECTIONS: Record<string, string> = {
@@ -141,7 +147,7 @@ function loadErrors(root: string): string[] {
 }
 
 const [cmd, root, ...rest] = process.argv.slice(2);
-if (!cmd || !root) die("usage: page-tool.ts <scaffold|page-path|session|answered|delivered-ids|choices|note|status|claim|stalled|load-errors|lavish-cfg> <root> ...");
+if (!cmd || !root) die("usage: page-tool.ts <scaffold|page-path|session|answered|delivered-ids|choices|note|status|stop|section-set|configure|marks-set|claim|stalled|load-errors|lavish-cfg> <root> ...");
 
 switch (cmd) {
   case "scaffold": {
@@ -198,6 +204,59 @@ switch (cmd) {
   case "status":
     status(root, rest[0]);
     break;
+  case "stop": {
+    const project = slug(rest[0]);
+    if (!existsSync(join(projectDir(root, project), "project.json"))) die(`no such project '${project}'`);
+    const was = readPageJson(pageJsonPath(root, project)).session;
+    patchPageJson(pageJsonPath(root, project), { session: "stopped", listener: "stopped", listenerDetail: null });
+    console.log(was === "stopped" ? `${project} was already stopped` : `stopped ${project} (was ${was})`);
+    break;
+  }
+  case "section-set": {
+    const project = slug(rest.shift());
+    const name = rest.shift();
+    if (!name || !/^[\w-]+$/.test(name)) die(`bad section name '${name ?? ""}'`);
+    const html = takeFlag(rest, "--html-file");
+    const md = takeFlag(rest, "--md-file");
+    if ((html === undefined) === (md === undefined)) die("section-set needs exactly one of --html-file / --md-file");
+    const dir = join(projectDir(root, project), "sections");
+    if (!existsSync(join(projectDir(root, project), "project.json"))) die(`no such project '${project}'`);
+    mkdirSync(dir, { recursive: true });
+    const ext = html !== undefined ? "html" : "md";
+    const body = readFileSync((html ?? md) as string, "utf8");
+    const f = join(dir, `${name}.${ext}`);
+    let changed = false;
+    if (!existsSync(f) || readFileSync(f, "utf8") !== body) { writeAtomic(f, body); changed = true; }
+    // a scaffold placeholder next to a real .html would only confuse (the .html wins, but a reader would not know)
+    const other = join(dir, `${name}.${ext === "html" ? "md" : "html"}`);
+    if (ext === "html" && existsSync(other) && readFileSync(other, "utf8").trim() === (SECTIONS[name] ?? "\0")) { unlinkSync(other); changed = true; }
+    console.log(changed ? "written" : "unchanged");
+    break;
+  }
+  case "configure": {
+    const project = slug(rest[0]);
+    const f = join(projectDir(root, project), "project.json");
+    if (!existsSync(f)) die(`no such project '${project}'`);
+    let patch: any;
+    try { patch = JSON.parse(rest[1] ?? ""); } catch { die("configure needs a JSON object"); }
+    if (!patch || typeof patch !== "object" || Array.isArray(patch)) die("configure needs a JSON object");
+    let cfg: any;
+    try { cfg = JSON.parse(readFileSync(f, "utf8")); } catch { die(`${f}: invalid JSON`); }
+    const next = { ...cfg, ...patch };
+    if (JSON.stringify(next) === JSON.stringify(cfg)) { console.log("unchanged"); break; }
+    writeAtomic(f, JSON.stringify(next, null, 2) + "\n");
+    console.log("written");
+    break;
+  }
+  case "marks-set": {
+    const project = slug(rest[0]);
+    if (!existsSync(join(projectDir(root, project), "project.json"))) die(`no such project '${project}'`);
+    let raw: unknown;
+    try { raw = JSON.parse(rest[1] ?? ""); } catch { die("marks-set needs a JSON object"); }
+    updateUi(root, project, cleanUi(raw));
+    console.log("written");
+    break;
+  }
   case "stalled": {
     const secs = Number(rest[0]);
     const base = join(root, "state", "projects");

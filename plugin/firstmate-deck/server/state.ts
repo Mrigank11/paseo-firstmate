@@ -2,6 +2,7 @@
 // Missing files mean empty values. Malformed JSON throws a clear Error naming the file.
 import { existsSync, readFileSync } from "node:fs";
 import { basename, join, resolve, sep } from "node:path";
+import { cleanUi } from "./marks.ts";
 import { askIdOf } from "./store.ts";
 
 export type Ask = {
@@ -36,6 +37,12 @@ export type Task = {
   title?: string;
   project?: string;
   shape?: string;
+  /** "<provider>/<model>" or a plain model name, as the first mate (or an import) recorded it. The label of last resort when Paseo has no record of the agent. */
+  provider?: string;
+  /** Position within its page group, lowest first (bin/fleet set order=N). Tasks without one keep file order, after the ordered ones. */
+  order?: number;
+  /** The id this task had on a hand-run page it was imported from. */
+  legacyId?: string;
   status: string;
   agentId?: string;
   depends_on: string[];
@@ -69,12 +76,18 @@ export type ProjectModel = {
   /** Absolute path of the page file, if configured. */
   page?: string;
   sectionTitles: Record<string, string>;
+  /** Raw HTML shown after a section's heading (project.json `sectionSubtitles`), e.g. "· 19 commits, local only". */
+  sectionSubtitles: Record<string, string>;
+  /** Sections drawn as a collapsed <details> (project.json `collapsedSections`). */
+  collapsedSections: string[];
   sections: Section[];
   /** Every captain comment in the inbox, oldest first. Not part of the page signature (it changes with delivery state). */
   comments: TrailComment[];
+  /** Read marks ("t-<task>" -> card hash) from state/projects/<p>/ui-state.json; the first paint applies them. */
+  marks?: Record<string, string>;
   /** Live index tasks of this project, in file order. */
   tasks: Task[];
-  /** Last 30 archive lines of this project, oldest first. */
+  /** The project's archived tasks, oldest first: the last 30, or project.json `archiveLimit`. A task archived twice (bin/fleet archive-update) appears once, as its newest line. */
   archive: Task[];
   /** Archive lines skipped because they are not valid JSON (a crash mid-append leaves one). */
   archiveSkipped: number;
@@ -117,6 +130,12 @@ function readInbox(path: string): Comment[] {
     } catch { /* bad line */ }
   }
   return out;
+}
+
+/** `order` is a whole number >= 0 (bin/fleet stores it as a number); a numeric string is accepted too. Anything else means "no order". */
+export function orderOf(v: unknown): number | undefined {
+  const n = typeof v === "string" && /^\d+$/.test(v) ? Number(v) : v;
+  return typeof n === "number" && Number.isInteger(n) && n >= 0 ? n : undefined;
 }
 
 function toTask(raw: any, root: string, label: string, inbox: Comment[] = []): Task {
@@ -166,6 +185,9 @@ function toTask(raw: any, root: string, label: string, inbox: Comment[] = []): T
     title: raw.title || undefined,
     project: raw.project || undefined,
     shape: raw.shape,
+    provider: typeof raw.provider === "string" && raw.provider ? raw.provider : undefined,
+    order: orderOf(raw.order),
+    legacyId: typeof raw.legacyId === "string" && raw.legacyId ? raw.legacyId : undefined,
     status: String(raw.status ?? "queued"),
     agentId: raw.agentId || undefined,
     depends_on: Array.isArray(raw.depends_on) ? raw.depends_on.map(String) : [],
@@ -208,14 +230,19 @@ export function loadProject(root: string, project: string): ProjectModel {
   }
   const tasks = live.filter((t) => t && t.project === project).map((t) => toTask(t, root, fleetPath, inbox));
   const archPath = join(state, "fleet-archive.jsonl");
-  const archive: Task[] = [];
+  const archive = new Map<string, Task>();
   let archiveSkipped = 0;
   for (const line of readText(archPath).split("\n")) {
     if (!line.trim()) continue;
     let raw: any;
     try { raw = JSON.parse(line); } catch { archiveSkipped++; continue; }
-    if (raw && raw.project === project && typeof raw.id === "string") archive.push(toTask(raw, root, archPath));
+    if (raw && typeof raw.id === "string") {
+      // the newest line for an id wins (bin/fleet archive-update appends), whichever project the older line named
+      if (raw.project === project) { archive.delete(raw.id); archive.set(raw.id, toTask(raw, root, archPath)); }
+      else archive.delete(raw.id);
+    }
   }
+  const archiveLimit = Number.isInteger(cfg.archiveLimit) && cfg.archiveLimit > 0 ? cfg.archiveLimit : 30;
 
   const sections: Section[] = [];
   for (const name of Array.isArray(cfg.sections) ? cfg.sections : []) {
@@ -226,15 +253,21 @@ export function loadProject(root: string, project: string): ProjectModel {
     else sections.push({ name, kind: "md", content: readText(join(dir, `${name}.md`)) });
   }
 
+  let marks: Record<string, string> = {};
+  try { marks = cleanUi(JSON.parse(readText(join(pdir, "ui-state.json")) || "{}")).r; } catch { /* a bad file means no marks */ }
+
   return {
     project,
+    marks,
     title: typeof cfg.title === "string" && cfg.title ? cfg.title : project,
     page: typeof cfg.page === "string" && cfg.page ? cfg.page : undefined,
     sectionTitles: cfg.sectionTitles && typeof cfg.sectionTitles === "object" ? cfg.sectionTitles : {},
+    sectionSubtitles: cfg.sectionSubtitles && typeof cfg.sectionSubtitles === "object" ? cfg.sectionSubtitles : {},
+    collapsedSections: Array.isArray(cfg.collapsedSections) ? cfg.collapsedSections.filter((x: unknown): x is string => typeof x === "string") : [],
     sections,
     comments: inbox.map(({ atMs: _a, ...c }) => c),
     tasks,
-    archive: archive.slice(-30),
+    archive: [...archive.values()].slice(-archiveLimit),
     archiveSkipped,
     ...(fleetError ? { fleetError } : {}),
   };

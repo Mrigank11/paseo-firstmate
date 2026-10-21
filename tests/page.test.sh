@@ -422,5 +422,28 @@ grep -q "npm install --no-audit --no-fund (cwd .*plugin/firstmate-deck)" "$FAKE_
 "$P" install --bogus >/dev/null 2>&1 && bad "install refuses unknown options" || ok "install refuses unknown options"
 unset PASEO_HOME
 
+# ---- section, configure, marks, stop ----
+PJD="$T/root/state/projects/demo"
+printf '<p>hand <b>written</b></p>\n' >"$T/sec.html"
+out="$("$P" section demo notes --html-file "$T/sec.html" 2>&1)"; rc=$?
+eq "$rc:$(cat "$PJD/sections/notes.html")" "0:<p>hand <b>written</b></p>" "section writes sections/<name>.html byte for byte"
+grep -q unchanged <<<"$("$P" section demo notes --html-file "$T/sec.html" 2>&1)" && ok "...and says unchanged the second time" || bad "section unchanged"
+"$P" section demo '../x' --html-file "$T/sec.html" >/dev/null 2>&1 && bad "section refuses a bad name" || ok "section refuses a bad name"
+"$P" section nosuch notes --html-file "$T/sec.html" >/dev/null 2>&1 && bad "section refuses an unknown project" || ok "section refuses an unknown project"
+"$P" configure demo --json '{"archiveLimit":5,"collapsedSections":["notes"]}' >/dev/null
+eq "$(jq -c '[.archiveLimit,.collapsedSections,.title]' "$PJD/project.json")" '[5,["notes"],"Demo project"]' "configure merges keys and keeps the rest"
+eq "$("$P" configure demo --json '{"archiveLimit":5}')" unchanged "configure with the same value says unchanged"
+"$P" configure demo --json '[1]' >/dev/null 2>&1 && bad "configure refuses a non-object" || ok "configure refuses a non-object"
+"$P" marks demo --json '{"r":{"t-a":"0123abcd"}}' >/dev/null
+"$P" marks demo --json '{"r":{"t-b":"89abcdef"}}' >/dev/null
+eq "$(jq -c '.r' "$PJD/ui-state.json")" '{"t-a":"0123abcd","t-b":"89abcdef"}' "marks merges read marks into ui-state.json"
+"$P" marks demo --json 'nope' >/dev/null 2>&1 && bad "marks refuses bad JSON" || ok "marks refuses bad JSON"
+"$P" stop demo >/dev/null
+eq "$(jq -r '[.session,.listener]|join(" ")' "$PJD/page.json")" "stopped stopped" "stop marks the page stopped"
+grep -q "already stopped" <<<"$("$P" stop demo 2>&1)" && ok "...and a second stop says so" || bad "second stop"
+"$P" stop nosuch >/dev/null 2>&1 && bad "stop refuses an unknown project" || ok "stop refuses an unknown project"
+go demo >/dev/null; grep -q "was stopped" "$T/go.err" && ok "start resumes a stopped page, saying so" || bad "start after stop" "$(tail -3 "$T/go.err")"
+eq "$(jq -r .session "$PJD/page.json")" open "...and the page is open again"
+
 echo; echo "page.test.sh: $pass passed, $fail failed"
 [[ $fail -eq 0 ]]

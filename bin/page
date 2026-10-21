@@ -22,6 +22,13 @@
 #                                     answered. --followup marks the ask as pending (bin/fleet pending) so it stays under
 #                                     "With the first mate"
 #   bin/page note <project> <section> "<text>"   append a dated line to sections/<section>.md
+#   bin/page stop <project>           stop polling and rendering that page (page.json session -> stopped). The plugin kills the
+#                                     page's Lavish poll and leaves the files as they are; bin/page start <project> resumes
+#   bin/page scaffold <project> [--repo <path>] [--title "<t>"] [--page <abs path>]   create or update project.json and the section stubs
+#   bin/page section <project> <name> (--html-file <f>|--md-file <f>)   replace sections/<name>.html or .md ("unchanged" when identical)
+#   bin/page configure <project> --json '<object>'   merge top-level keys into project.json (title, sections, sectionTitles,
+#                                     sectionSubtitles, collapsedSections, archiveLimit, ...)
+#   bin/page marks <project> --json '{"r":{"t-<task>":"<hash>"}}'   merge read marks into state/projects/<p>/ui-state.json
 #   bin/page status [<project>]       per page: session, listener, banner, last render, the plugin's root,
 #                                     undelivered comments, plugin state, state-file problems; warns (stderr) about live
 #                                     tasks that have no project
@@ -249,6 +256,9 @@ cmd_start() {
       *) die "unknown option '$1'" ;;
     esac
   done
+  if [[ "$(pj_get "$project" .session)" == stopped ]]; then
+    echo "page: $project was stopped (bin/page stop); resuming it" >&2
+  fi
   if [[ ${#reopen[@]} -eq 0 && "$(pj_get "$project" .session)" == ended ]]; then
     echo "page: the captain ended this page's session; pass --reopen only if the captain asked" >&2
     exit 2
@@ -325,6 +335,41 @@ cmd_note() {
   "${TOOL[@]}" note "$ROOT" "$project" "$section" "$text"
 }
 
+cmd_stop() {
+  local project="${1:-}"
+  [[ $# -eq 1 ]] || die "usage: bin/page stop <project>"
+  need_project "$project"
+  "${TOOL[@]}" stop "$ROOT" "$project"
+  echo "the plugin stops polling and rendering $project (its files stay as they are); resume with: bin/page start $project"
+}
+
+cmd_scaffold() {
+  local project="${1:-}"; shift || true
+  [[ -n "$project" ]] || die "usage: bin/page scaffold <project> [--repo <path>] [--title <t>] [--page <abs path>]"
+  "${TOOL[@]}" scaffold "$ROOT" "$project" "$@"
+}
+
+cmd_section() {
+  local project="${1:-}" name="${2:-}"; shift 2 || true
+  [[ -n "$project" && -n "$name" && $# -ge 2 ]] || die "usage: bin/page section <project> <name> (--html-file <f>|--md-file <f>)"
+  need_project "$project"
+  "${TOOL[@]}" section-set "$ROOT" "$project" "$name" "$@"
+}
+
+cmd_configure() {
+  local project="${1:-}"; shift || true
+  [[ $# -eq 2 && "$1" == "--json" ]] || die "usage: bin/page configure <project> --json '<object>'"
+  need_project "$project"
+  "${TOOL[@]}" configure "$ROOT" "$project" "$2"
+}
+
+cmd_marks() {
+  local project="${1:-}"; shift || true
+  [[ $# -eq 2 && "$1" == "--json" ]] || die "usage: bin/page marks <project> --json '<object>'"
+  need_project "$project"
+  "${TOOL[@]}" marks-set "$ROOT" "$project" "$2"
+}
+
 cmd_status() {
   PAGE_PLUGIN_STATUS="$(plugin_status)" "${TOOL[@]}" status "$ROOT" "${1:-}"
 }
@@ -369,6 +414,11 @@ case "${1:-}" in
   start) shift; cmd_start "$@" ;;
   reply) shift; cmd_reply "$@" ;;
   note) shift; cmd_note "$@" ;;
+  stop) shift; cmd_stop "$@" ;;
+  scaffold) shift; cmd_scaffold "$@" ;;
+  section) shift; cmd_section "$@" ;;
+  configure) shift; cmd_configure "$@" ;;
+  marks) shift; cmd_marks "$@" ;;
   status) shift; cmd_status "$@" ;;
   heal) shift; cmd_heal ;;
   render) shift; cmd_render "$@" ;;

@@ -96,8 +96,9 @@ export function markdown(src: string): string {
     const buf: string[] = [];
     while (
       i < lines.length && lines[i].trim() && !/^\s*```/.test(lines[i]) && !/^#{1,6}\s/.test(lines[i]) && !LIST.test(lines[i])
-    ) buf.push(lines[i++].trim());
-    out.push(`<p>${inline(buf.join(" "))}</p>`);
+    ) buf.push(lines[i++]);
+    // a line that ends in two or more spaces is a hard line break (CommonMark); other lines are joined with a space
+    out.push(`<p>${buf.map((l, k) => inline(l.trim()) + (k < buf.length - 1 && / {2,}$/.test(l) ? "<br>" : "")).join(" ")}</p>`);
   }
   return out.join("\n");
 }
