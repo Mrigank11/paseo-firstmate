@@ -35,6 +35,11 @@
 #   bin/fleet clear-preview <id>      drop the preview record (after killing it)
 #   bin/fleet log <id> "<text>"       append a timestamped line to tasks/<id>/log.md
 #   bin/fleet archive <id>            move a done/failed ask-free task to the archive
+#   bin/fleet card <id> (--file <f>|-)  write tasks/<id>/card.md (the Markdown card the page shows) from a file or stdin; works for
+#                                     a live or an archived task; a no-op when the content is already there
+#   bin/fleet archive-update <id> k=v ...   append an updated copy of an ARCHIVED task (same keys as set, plus depends_on=a,b): the
+#                                     archive stays append-only and the newest line for an id wins. For tasks archived before
+#                                     they had a project/title
 #   bin/fleet finish <id> [--failed] [--card -|--card-file <f>] [--branch <b>] [--base main]
 #                                     a crew member is done: status=done (failed with --failed); writes tasks/<id>/card.md from
 #                                     the given card (stdin with -), else from notes + branch/PR when there is no card yet; for
@@ -42,7 +47,9 @@
 #                                     `git log --oneline <base>..<branch>` to projects/<p>/sections/code.md (dated, no duplicates)
 #
 # Statuses: queued, parked, dispatched, running, needs-captain, done, failed.
-# Optional fields (add/set): project (kebab slug, empty = none), title (<=80 chars). add also takes
+# Optional fields (add/set): project (kebab slug, empty = none), title (<=160 chars), order (integer: position on the
+# page within a group, lowest first; tasks without one keep file order), legacyId (kebab slug: the id the task had on a
+# hand-run page it was imported from). add also takes
 # depends_on=a,b; a task added without project= inherits it from the first dependency that has one
 # (so does a later `depend`, when the task still has none).
 #
@@ -60,9 +67,9 @@ TASKS="$STATE_DIR/tasks"
 STATUSES='["queued","parked","dispatched","running","needs-captain","done","failed"]'
 SHAPES='["scout","ship"]'
 MAXLEN=200
-TITLEMAX=80
+TITLEMAX=160
 SLUG_RE='^[a-z0-9][a-z0-9-]*$'
-SETTABLE="intent shape provider agentId workspaceId status branch pr lastEvent notes project title"
+SETTABLE="intent shape provider agentId workspaceId status branch pr lastEvent notes project title order legacyId"
 
 # jq: give every ask of a task a stable id ("a1", "a2", ...) and keep .askSeq (the highest number ever handed out) ahead
 # of all of them, so an id is never reused after its ask is answered. An existing ask without an id (written before ids
@@ -119,8 +126,10 @@ check_obj() { # obj-json
       and ((($o.project // "") | length == 0) or ($o.project | test($re)))
       and ((($o.title // "") | length) <= $tmax)
       and ((($o.shape // null) as $h | if $h == null then true else ($sh | index($h)) != null end))
+      and ((($o.order // 0) | type) == "number" and (($o.order // 0) >= 0) and ((($o.order // 0) | floor) == ($o.order // 0)))
+      and ((($o.legacyId // "") | length == 0) or (($o.legacyId | type) == "string" and ($o.legacyId | test($re))))
       and ((($o.notes // "") | length) <= $max))
-  ' >/dev/null || die "refused: bad status/shape enum, project slug, title over $TITLEMAX chars, or notes over $MAXLEN chars";
+  ' >/dev/null || die "refused: bad status/shape enum, project slug, title over $TITLEMAX chars, notes over $MAXLEN chars, order that is not a whole number, or legacyId that is not a kebab slug";
 }
 
 cmd_get() { jq -c --arg id "$1" '.tasks | map(select(.id == $id))[0] // empty' "$FLEET"; }
@@ -163,7 +172,9 @@ build_obj() { # out: OBJ json with $keys validated; sets global OBJ
     obj="$(jq --arg k "$k" --arg v "$v" '. + {($k): $v}' <<<"$obj")"
   done
   # empty project means "none"
-  jq -c 'if (.project? // null) == "" then .project = null else . end' <<<"$obj";
+  # order is a whole number when it looks like one (a bad value stays a string, which check_obj refuses)
+  jq -c 'if (.project? // null) == "" then .project = null else . end
+    | if ((.order? // null) | type) == "string" and (.order | test("^[0-9]+$")) then .order |= tonumber else . end' <<<"$obj";
 }
 
 # the project of the first of the given task ids that has one, looking in the live tasks and then the archive
@@ -393,6 +404,36 @@ cmd_archive() {
   atomic_jq --arg id "$id" '.tasks |= map(select(.id != $id))';
 }
 
+# card <id> (--file f | -): the task's card.md, atomically; unchanged content is not rewritten
+cmd_card() {
+  local id="${1:-}" src="" content
+  shift || true
+  case "${1:-}" in
+    --file) [[ $# -eq 2 && -f "$2" ]] || die "usage: fleet card <id> (--file <f>|-)"; content="$(cat "$2")";;
+    -) content="$(cat)";;
+    *) die "usage: fleet card <id> (--file <f>|-)";;
+  esac
+  [[ "$id" =~ $SLUG_RE ]] || die "bad id '$id'"
+  if ! entry_exists "$id" && ! { [[ -f "$ARCHIVE" ]] && jq -R -e --arg id "$id" 'fromjson? | select(.id == $id)' "$ARCHIVE" >/dev/null; }; then die "no task $id (live or archived)"; fi
+  local f="$TASKS/$id/card.md" want
+  want="$content"  # $(...) already dropped the trailing newlines
+  if [[ -f "$f" && "$(cat "$f")" == "$want" ]]; then return 0; fi
+  mkdir -p "$TASKS/$id"
+  printf '%s\n' "$want" >"$f.tmp.$$" && mv "$f.tmp.$$" "$f"
+}
+
+cmd_archive_update() {
+  local id="$1"; shift
+  [[ $# -gt 0 ]] || die "archive-update needs at least one key=value"
+  local last=""
+  [[ -f "$ARCHIVE" ]] && last="$(jq -R -c --arg id "$id" 'fromjson? | select(.id == $id)' "$ARCHIVE" | tail -n 1)"
+  [[ -n "$last" ]] || die "no archived task $id"
+  local obj; obj="$(build_obj "$SETTABLE depends_on" "$@")"
+  check_obj "$obj"
+  # depends_on=a,b replaces the dependency list ("" clears it)
+  jq -c --argjson o "$obj" '. + ($o | if has("depends_on") then .depends_on |= (split(",") | map(select(length > 0))) else . end)' <<<"$last" >>"$ARCHIVE"
+}
+
 CODE_PLACEHOLDER="No local code changes recorded yet."
 
 # finish <id> [--failed] [--card -|--card-file f] [--branch b] [--base main]
@@ -517,7 +558,7 @@ lock() {
 need_jq
 cmd="${1:-}"; shift || true
 case "$cmd" in
-  add|set|ask|reask|pending|depend|undepend|answer|preview|clear-preview|archive|finish) lock;; esac
+  add|set|ask|reask|pending|depend|undepend|answer|preview|clear-preview|archive|archive-update|finish) lock;; esac
 case "$cmd" in
   get)           [[ $# -eq 1 ]] || die "usage: fleet get <id>"; cmd_get "$1";;
   by-agent)      [[ $# -eq 1 ]] || die "usage: fleet by-agent <agentId>"; cmd_by_agent "$1";;
@@ -536,6 +577,8 @@ case "$cmd" in
   clear-preview) [[ $# -eq 1 ]] || die "usage: fleet clear-preview <id>"; cmd_clear_preview "$1";;
   log)           [[ $# -eq 2 ]] || die "usage: fleet log <id> \"<text>\""; cmd_log "$1" "$2";;
   archive)       [[ $# -eq 1 ]] || die "usage: fleet archive <id>"; cmd_archive "$1";;
+  card)          [[ $# -ge 2 ]] || die "usage: fleet card <id> (--file <f>|-)"; cmd_card "$@";;
+  archive-update) [[ $# -ge 2 ]] || die "usage: fleet archive-update <id> k=v ..."; cmd_archive_update "$@";;
   finish)        cmd_finish "$@";;
   *) usage; [[ -n "$cmd" ]] && exit 1; exit 0;;
 esac

@@ -43,7 +43,7 @@ One object, `{ "tasks": [...] }`. Each task:
   "agentId": "…",
   "workspaceId": "…",
   "project": "kebab-slug   (optional; groups tasks onto a project page)",
-  "title": "≤80 chars plain text (optional; display name)",
+  "title": "≤160 chars plain text (optional; display name)",
   "depends_on": ["other-task-id"],
   "status": "queued | parked | dispatched | running | needs-captain | done | failed",
   "branch": "feature/x   (ship only, once known)",
@@ -61,7 +61,7 @@ Rules:
 - `id` is a stable kebab slug you assign at dispatch; it names the `tasks/<id>/` dir.
 - `status` is *your* view of truth, updated on every wake. It is not Paseo's status — reconcile them when they disagree, trusting a fresh `get_agent_status` over a stale field.
 - `queued` = planned, not yet dispatched; `parked` = deliberately on hold. Neither counts as active: `bin/fleet active` lists only `dispatched`, `running`, `needs-captain`.
-- `project` is a kebab slug (`^[a-z0-9][a-z0-9-]*$`; empty/null = none) and `title` is plain text up to 80 chars; both are set via `add`/`set` and survive into the archive. `bin/fleet project <p>` prints every live task of a project (any status); `bin/fleet project <p> --archive [N]` prints the last N (default 30) archived lines; `bin/fleet active --project <p>` filters the active list.
+- `project` is a kebab slug (`^[a-z0-9][a-z0-9-]*$`; empty/null = none) and `title` is plain text up to 160 chars; both are set via `add`/`set` and survive into the archive. `bin/fleet project <p>` prints every live task of a project (any status); `bin/fleet project <p> --archive [N]` prints the last N (default 30) archived lines; `bin/fleet active --project <p>` filters the active list.
 - `depends_on` holds task ids, changed only with `bin/fleet depend <id> <dep-id>...` (appends, de-duplicates) and `bin/fleet undepend <id> <dep-id>`. Ids may refer to archived tasks, so they are not checked against the live index.
 - Every ask has a **stable id** (`a1`, `a2`, ...), assigned by `bin/fleet ask` from the task's `askSeq` counter and never reused for that task, even after the ask is answered. `reask`, `pending` and `answer` take that id (`bin/fleet answer <id> a2`); a plain 1-based number still works but means "the ask at that position right now", so use ids whenever more than one ask is open. An ask written before ids existed gets `a<its index>` at the first `bin/fleet` write that touches its task. The project page, its comment targets (`t-<task>#a2`) and option clicks all use the id, so answering one ask never re-targets another.
 - `bin/fleet pending <id> <ask>` sets `pendingSince` on the ask: the first mate's explicit "I am working on a follow-up", which keeps the ask under "With the first mate" on the project page (`bin/page reply ... --followup <id>:<ask>` calls it). `reask` and `answer` clear it. Without the mark, an ask the captain commented on is back in Needs you once the comment is answered.
@@ -93,3 +93,10 @@ Rules:
 ## Heartbeat safety net
 
 Paseo pushes finish/error/permission events, so you do not poll. The one gap it cannot cover is a crew member that goes *silent* — stalled without finishing or erroring. Register a single low-frequency `create_heartbeat` (e.g. every 30 min) that wakes you to scan `bin/fleet active` for tasks whose `lastEvent` is old while `status` is still `running`, and hand those to `stuck-crew-recovery`. The same wake runs `bin/page heal`, which reloads the firstmate-deck plugin when it has failed or has stopped rendering an open project page (it needs no judgment, and it is how a dead page plugin gets noticed at all). Delete and recreate the heartbeat if its cadence needs to change (Paseo has no heartbeat-update tool).
+
+## Read marks, ordering and long pages
+
+- **Optional task fields** (`bin/fleet add`/`set`): `order` (a whole number; sorts the task within its group, tasks without one keep file order), `legacyId` (the id the task had on a hand-run page it came from) and `provider` (labels the task when Paseo has no record of its agent). `bin/fleet card <id> --file <f>` writes `tasks/<id>/card.md` for a live or archived task; `bin/fleet archive-update <id> k=v ...` appends an updated copy of an archived task (the newest line for an id wins).
+- **Sections and layout**: `bin/page scaffold`, `section` (replace `sections/<name>.html` or `.md`) and `configure` (merge keys into `project.json`: `sectionTitles`, `sectionSubtitles`, `collapsedSections`, `archiveLimit`, ...) shape long hand-written pages. A `.html` section is shown as is.
+- **Read marks** ("Done, unread", Mark read / Mark all read) are served by the plugin on `readMarksPort` (default 4398, 127.0.0.1 plus the `tailscale ip -4` address, else setting `readMarksHost`), per project in `state/projects/<p>/ui-state.json`, keyed by `t-<task>` plus the first 8 hex of the sha1 of `card.md`, so a changed card is unread again. `bin/page marks` merges marks in. The page shows everything unread, silently, if the endpoint is unreachable.
+- `bin/page stop <project>` sets `session: stopped`: the plugin kills that page's poll and stops rendering until `bin/page start <project>`.

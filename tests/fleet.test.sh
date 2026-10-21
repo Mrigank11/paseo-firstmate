@@ -36,8 +36,8 @@ done; ok "all enum statuses accepted"
 
 refused "bad project slug" $F set a project=Bad_Slug
 refused "bad project slug on add" $F add c intent=x shape=ship status=queued project=-x
-refused "title over 80" $F set a title="$(printf 'x%.0s' $(seq 81))"
-$F set a title="$(printf 'x%.0s' $(seq 80))" >/dev/null; check "title of 80 ok" $?
+refused "title over 160" $F set a title="$(printf 'x%.0s' $(seq 161))"
+$F set a title="$(printf 'x%.0s' $(seq 160))" >/dev/null; check "title of 160 ok" $?
 $F set a title=Hello >/dev/null
 refused "bad status" $F set a status=bogus
 refused "ask over 200" $F ask a "$(printf 'x%.0s' $(seq 201))"
@@ -301,6 +301,35 @@ if command -v flock >/dev/null; then
   [[ -f "$FLEET_FILE.lock" ]]; check "lock file is separate from fleet.json" $?
 else
   ok "flock not installed: lock tests skipped"
+fi
+
+# ---- order, legacyId, card, archive-update ----
+reset
+$F add o1 intent=x shape=ship status=queued order=3 legacyId=old-one >/dev/null
+eq "$($F get o1 | jq -c '[.order,.legacyId]')" '[3,"old-one"]'; check "order is stored as a number, legacyId as given" $?
+refused "order that is not a whole number" $F set o1 order=1.5
+refused "negative order" $F set o1 order=-1
+refused "legacyId that is not a slug" $F set o1 legacyId=Bad_Id
+printf 'card one\n' >"$T/c1"
+$F card o1 --file "$T/c1" >/dev/null; check "card writes a live task's card" $?
+eq "$(cat "$(dirname "$FLEET_FILE")/tasks/o1/card.md")" "card one"; check "...with the given content" $?
+m1="$(stat -c %Y.%N "$(dirname "$FLEET_FILE")/tasks/o1/card.md" 2>/dev/null || stat -f %m "$(dirname "$FLEET_FILE")/tasks/o1/card.md")"
+sleep 1; $F card o1 --file "$T/c1" >/dev/null
+m2="$(stat -c %Y.%N "$(dirname "$FLEET_FILE")/tasks/o1/card.md" 2>/dev/null || stat -f %m "$(dirname "$FLEET_FILE")/tasks/o1/card.md")"
+eq "$m1" "$m2"; check "the same card again is not rewritten" $?
+echo 'card two' | $F card o1 - >/dev/null
+eq "$(cat "$(dirname "$FLEET_FILE")/tasks/o1/card.md")" "card two"; check "card from stdin" $?
+$F card nope --file "$T/c1" >/dev/null 2>&1; [[ $? -ne 0 ]]; check "card refuses an unknown task" $?
+$F set o1 status=done >/dev/null; $F archive o1 >/dev/null 2>&1
+ARCH="$(dirname "$FLEET_FILE")/fleet-archive.jsonl"
+if [[ -f "$ARCH" ]] && grep -q '"o1"' "$ARCH"; then
+  $F card o1 --file "$T/c1" >/dev/null; check "card works for an archived task" $?
+  $F archive-update o1 project=deck title="Later title" depends_on=a,b >/dev/null; check "archive-update appends" $?
+  eq "$(grep -c '"id":"o1"' "$ARCH")" 2; check "...a second line (append-only)" $?
+  eq "$(tail -n1 "$ARCH" | jq -c '[.project,.title,.depends_on,.order]')" '["deck","Later title",["a","b"],3]'; check "...that keeps the old fields and applies the new" $?
+  refused "archive-update of a task that is not archived" $F archive-update zz title=x
+else
+  bad "archive o1 for the card/archive-update tests" "$(ls "$(dirname "$FLEET_FILE")")"
 fi
 
 echo "---- $pass passed, $fail failed"

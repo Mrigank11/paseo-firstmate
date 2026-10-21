@@ -13,6 +13,11 @@ export const deckSettings = defineSettings({
     firstmateLabel: z.string().default("firstmate=true"),
     lavishPort: z.number().int().default(4387),
     lavishStateDir: z.string().default(""),
+    // Read marks ("Done, unread" cards): the port of the plugin's tiny CORS endpoint, bound to 127.0.0.1 and the tailnet IP.
+    // 4398, so it does not collide with a hand-run page's own 4399 while both run.
+    readMarksPort: z.number().int().default(4398),
+    // The tailnet IP (or host) to bind when `tailscale ip -4` finds none. Empty = loopback only.
+    readMarksHost: z.string().default(""),
   }),
 });
 
@@ -38,7 +43,7 @@ export const projectSummarySchema = z.object({
   title: z.string(),
   repo: z.string().nullable(), // absolute path, used to match a Paseo workspace to its project
   pageUrl: z.string().nullable(), // Lavish session URL, null until the page has been opened
-  session: z.enum(["open", "ended", "unknown"]),
+  session: z.enum(["open", "ended", "stopped", "unknown"]),
   needsYou: z.array(askSchema),
   running: z.array(runningSchema),
   counts: z.object({ needsYou: z.number(), withFirstMate: z.number().optional(), running: z.number(), next: z.number(), parked: z.number(), done: z.number(), failed: z.number().optional() }), // failed tasks are not counted as done

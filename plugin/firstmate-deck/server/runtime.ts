@@ -2,7 +2,7 @@
 // Lavish poll, and relays page comments to the first mate.
 import { existsSync, readdirSync, readFileSync, statSync, watch, type FSWatcher } from "node:fs";
 import { basename, join, relative } from "node:path";
-import type { ChildProcess } from "node:child_process";
+import { execFile, type ChildProcess } from "node:child_process";
 import { normalizeRoot, type DeckConfig } from "./config.ts";
 import { hasLivePoll, killAllPolls, killStalePoll, lavishEnv, PagePoller, removePid, resolveLavishBin, spawnPoll, writePid } from "./lavish.ts";
 import { decodePoll } from "./toon.ts";
@@ -11,11 +11,12 @@ import { CliPort, type Exec } from "./paseo-cli.ts";
 import { NO_CLAIM_MESSAGE, NoFirstMateError, PortSelector, resolveFirstMate, sendToFirstMate, type CommentRowData, type FirstMate } from "./paseo-port.ts";
 import { Relay, newEntries, parseTarget, type AskLookup, type TargetInfo } from "./relay.ts";
 import { groupOf, liveJs, renderProject, type AgentView, type Banner } from "./render.ts";
+import { MarksServer } from "./marks-server.ts";
 import { loadProject, type ProjectModel, type Task } from "./state.ts";
 import { appendInbox, inboxPath, pageJsonPath, patchPageJson, pidPath, projectDir, readInbox, readPageJson, updateInbox, writeAtomic, type InboxEntry, type PageJson } from "./store.ts";
 
 export type Summary = {
-  project: string; title: string; repo: string | null; pageUrl: string | null; session: "open" | "ended" | "unknown";
+  project: string; title: string; repo: string | null; pageUrl: string | null; session: "open" | "ended" | "stopped" | "unknown";
   needsYou: { taskId: string; askId: string | null; taskTitle: string; text: string; since: string }[];
   running: { taskId: string; taskTitle: string; agentId: string | null; agentStatus: string; current: string; startedAt: string | null }[];
   counts: { needsYou: number; withFirstMate: number; running: number; next: number; parked: number; done: number; failed: number };
@@ -34,7 +35,21 @@ export type DeckOpts = {
   batchMs?: number;
   tickMs?: number;
   rescanMs?: number;
+  /** The host's Tailscale IPv4 address ("" when there is none). Defaults to `tailscale ip -4`. */
+  tailnetIp?: () => Promise<string>;
 };
+
+/** `tailscale ip -4`, the way a hand-run page found its tailnet address. "" when tailscale is absent or down. */
+function detectTailnetIp(): Promise<string> {
+  return new Promise((resolve) => {
+    try {
+      execFile("tailscale", ["ip", "-4"], { timeout: 3000 }, (err, out) => {
+        const ip = err ? "" : String(out).split("\n")[0].trim();
+        resolve(/^\d{1,3}(\.\d{1,3}){3}$/.test(ip) ? ip : "");
+      });
+    } catch { resolve(""); }
+  });
+}
 
 const TICK_MS = 20_000;
 const RESCAN_MS = 30_000;
@@ -101,6 +116,11 @@ export class Deck {
   private lavishBin: string | null = null;
   private fmCache: { at: number; id: string | null } | null = null;
   private stopped = false;
+  /** Projects whose page `bin/page stop` has stopped: no poll, no render, until `bin/page start`. */
+  private haltedPages = new Set<string>();
+  private marks: MarksServer;
+  private marksKey = "";
+  private tailnetIp = "";
   private early: { at: number; p: Promise<FirstMate | null> } | null = null;
 
   private o: DeckOpts;
@@ -109,6 +129,7 @@ export class Deck {
     this.o = o;
     this.log = o.log ?? (() => {});
     this.agents = new AgentViews((m) => this.log(m));
+    this.marks = new MarksServer(() => this.cfg.root, (m) => this.log(m));
     this.ports = o.ports ?? new PortSelector(new CliPort(o.exec), (m) => this.log(m));
     // the first handle: everything on the pages was last-known until now, so ask about it all
     this.ports.onFirstHandle = () => this.scheduleAll("handle", 0);
@@ -153,6 +174,7 @@ export class Deck {
     for (const e of this.pollers.values()) killEntry(e);
     this.pollers.clear();
     killAllPolls();
+    void this.marks.close();
   }
 
   /**
@@ -197,7 +219,8 @@ export class Deck {
       this.hydrated.clear();
       this.log(next.root ? `first mate root: ${next.root}` : "no firstmateRoot configured (settings or FIRSTMATE_ROOT); idle");
     }
-    if (!this.cfg.root) return;
+    if (!this.cfg.root) { void this.marks.close(); this.marksKey = ""; return; }
+    await this.startMarks();
     this.attachWatcher(rootChanged);
     const projects = this.projectNames();
     this.hydrateRows(projects);
@@ -214,6 +237,28 @@ export class Deck {
       this.sigs.set(p, "");
       this.scheduleRender(p, 0);
     }
+  }
+
+  /** (Re)start the read-marks endpoint when its port or host changed. Failure to bind is logged, never fatal: the page then keeps its marks in the browser. */
+  private async startMarks(): Promise<void> {
+    const port = this.cfg.readMarksPort ?? 0;
+    if (!port) { if (this.marksKey) { await this.marks.close(); this.marksKey = ""; } return; }
+    this.tailnetIp = await (this.o.tailnetIp ?? detectTailnetIp)().catch(() => "") || this.cfg.readMarksHost || "";
+    const key = `${port}|${this.tailnetIp}`;
+    if (key === this.marksKey && this.marks.bound.length) return;
+    this.marksKey = key;
+    await this.marks.listen(["127.0.0.1", this.tailnetIp], port);
+    for (const p of this.projectNames()) this.sigs.delete(p); // pages carry the endpoint's URL: render them again
+  }
+
+  /** Where the page syncs its read marks: the host the captain reached the page on (the Lavish link), else the tailnet IP. */
+  private marksUrl(project: string, pj: PageJson): string | undefined {
+    const port = this.cfg.readMarksPort ?? 0;
+    if (!port || !this.marks.bound.length) return undefined;
+    let host = "";
+    try { host = new URL(pj.lavishUrl ?? "").hostname; } catch {}
+    if (!host) host = this.tailnetIp || "127.0.0.1";
+    return `http://${host}:${port}/${project}/state`;
   }
 
   private async detectWebBase(): Promise<void> {
@@ -306,6 +351,7 @@ export class Deck {
     m = /^projects\/([^/]+)\/(.*)$/.exec(rel);
     if (!m) return;
     const [, p, rest] = m;
+    if (rest === "ui-state.json") { this.scheduleRender(p, DEBOUNCE_MS, "marks"); return; }
     if (rest === "page.json") { void this.reconcilePollers().catch((e) => this.log(`reconcile failed: ${e}`)); return; }
     if (rest === "project.json" || rest.startsWith("sections/")) {
       if (!this.sigs.has(p)) void this.configure();
@@ -367,6 +413,7 @@ export class Deck {
 
   /** Render now from cached agent views (fast), then refresh the agents and render again if anything moved. */
   async render(project: string): Promise<void> {
+    if (this.pageHalted(project)) return; // bin/page stop: the files stay as they are until bin/page start
     const flight = this.rendering.get(project);
     if (flight) { flight.again = true; return; }
     const state = { again: false };
@@ -387,6 +434,12 @@ export class Deck {
     } finally {
       this.rendering.delete(project);
     }
+  }
+
+  /** Has `bin/page stop` stopped this page? Remembers it, so the resume is noticed. */
+  private pageHalted(project: string): boolean {
+    if (readPageJson(pageJsonPath(this.cfg.root, project)).session === "stopped") { this.haltedPages.add(project); return true; }
+    return false;
   }
 
   private viewsKey(ids: string[]): string {
@@ -457,6 +510,7 @@ export class Deck {
     const banner = this.bannerFor(project, pj.session);
     const r = renderProject(model, views, {
       now, tickSeconds: 1, refreshSeconds: Math.round((this.o.tickMs ?? TICK_MS) / 1000), paseoAgentUrl: this.agentUrl, banner, pageFile: basename(target),
+      marksUrl: this.marksUrl(project, pj),
     });
     const p2 = (n: number) => String(n).padStart(2, "0");
     const ts = `${p2(now.getHours())}:${p2(now.getMinutes())}:${p2(now.getSeconds())}`;
@@ -508,6 +562,8 @@ export class Deck {
     for (const p of projects) {
       const pj = readPageJson(pageJsonPath(this.cfg.root, p));
       const have = this.pollers.get(p);
+      if (pj.session === "stopped") this.haltedPages.add(p);
+      else if (this.haltedPages.delete(p)) this.scheduleRender(p, 0, "resume"); // bin/page start: catch the page up at once
       if (pj.session === "open" && !have) await this.startPoller(p);
       else if (pj.session !== "open" && have) {
         killEntry(have);
