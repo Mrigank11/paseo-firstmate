@@ -45,21 +45,53 @@ export function newEntries(project: string, prompts: Prompt[], known: Known, now
     if (picked) {
       const { choice } = picked;
       const at = askText?.(choice.task, choice.ask);
-      return { ...base, target: `t-${choice.task}`, text: picked.text, choice: at ? { ...choice, askText: at } : choice };
+      return { ...base, target: `t-${choice.task}#a${choice.ask}`, text: picked.text, choice: at ? { ...choice, askText: at } : choice };
     }
     return { ...base, target: extractTarget(p.selector, known), text: p.prompt };
   });
 }
 
 const oneLine = (s: string) => s.replace(/\s+/g, " ").trim();
+const brief = (s: string, n = 100) => { const t = oneLine(s).replace(/"/g, "'"); return t.length > n ? t.slice(0, n - 1) + "…" : t; };
 
-export function formatMessage(project: string, entries: Pick<InboxEntry, "target" | "text" | "choice">[]): string {
+/** What the first mate needs to know about a comment's target without looking anything up. */
+export type TargetInfo = { title: string; asks: string[] };
+export type Describe = (target: string) => TargetInfo | undefined;
+
+/** `t-<task>` or `t-<task>#a<n>` -> the task id and, for an ask target, the 1-based ask index. */
+export function parseTarget(target: string): { task: string; ask?: number } | null {
+  const m = /^t-(.+?)(?:#a(\d+))?$/.exec(target);
+  return m ? { task: m[1], ask: m[2] ? Number(m[2]) : undefined } : null;
+}
+
+/**
+ * One line per comment, self-contained and traceable:
+ *   - [t-pick-db · "Choose the database" · ask 1: "Postgres or SQLite?"] (c-abc123) "<text>"
+ * The bracket names the target, the task title and the open ask text(s); the parenthesis is the inbox comment id.
+ */
+type Line = Pick<InboxEntry, "target" | "text" | "choice"> & { id?: string };
+
+export function formatMessage(project: string, entries: Line[], describe?: Describe): string {
   const choices = entries.filter((e) => e.choice).map((e) => e.choice!);
+  const line = (e: Line) => {
+    const parts = [e.target];
+    const info = describe?.(e.target);
+    if (info) {
+      parts.push(`"${brief(info.title, 80)}"`);
+      const at = parseTarget(e.target);
+      if (!e.choice) {
+        const only = at?.ask;
+        info.asks.forEach((a, i) => { if ((only === undefined || only === i + 1) && a) parts.push(`ask ${i + 1}: "${brief(a)}"`); });
+      }
+    }
+    const id = e.id ? ` (${e.id})` : "";
+    return e.choice
+      ? `- [${parts.join(" · ")}]${id} picked option "${oneLine(e.choice.option)}" for ask ${e.choice.ask}${e.choice.askText ? ` ("${oneLine(e.choice.askText)}")` : ""}`
+      : `- [${parts.join(" · ")}]${id} "${oneLine(e.text)}"`;
+  };
   return [
     `## Page comments · ${project}`,
-    ...entries.map((e) => e.choice
-      ? `- [${e.target}] picked option "${oneLine(e.choice.option)}" for ask ${e.choice.ask}${e.choice.askText ? ` ("${oneLine(e.choice.askText)}")` : ""}`
-      : `- [${e.target}] "${oneLine(e.text)}"`),
+    ...entries.map(line),
     `Reply with: bin/page reply ${project} "<your reply>"`,
     ...choices.map((c) => `Apply with: bin/fleet answer ${c.task} ${c.ask}, then act on it.`),
   ].join("\n");
@@ -74,6 +106,8 @@ export type RelayDeps = {
   onQueue: (project: string, queued: number, failing: boolean) => void;
   /** After a successful send: best-effort timeline row. Errors are swallowed. */
   afterSend?: (project: string, entries: InboxEntry[], agentId: string) => Promise<void> | void;
+  /** Target -> task title and open ask texts, for self-contained comment lines. */
+  describe?: (project: string, target: string) => TargetInfo | undefined;
   now?: () => Date;
   batchMs?: number;
   log?: (msg: string) => void;
@@ -117,7 +151,7 @@ export class Relay {
     const log = this.d.log ?? (() => {});
     let agentId: string;
     try {
-      agentId = await this.d.send(project, formatMessage(project, batch));
+      agentId = await this.d.send(project, formatMessage(project, batch, this.d.describe && ((t) => this.d.describe!(project, t))));
     } catch (e) {
       q.pending.unshift(...batch);
       q.failures++;

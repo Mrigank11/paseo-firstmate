@@ -10,6 +10,7 @@ One file used to do two jobs — lookup index and narrative journal — and grew
 state/
   fleet.json            # LIVE tasks only (small index)
   fleet-archive.jsonl   # one compact line per finished, ask-free task
+  firstmate.json        # {"agentId","claimedAt"}: THE first mate of this checkout, written by bin/page claim
   decisions.md          # captain prefs, routing lanes, permission + merge policy
   secondmates.md        # phase 3: roster of subordinate first mates (only if any)
   afk-log.md            # phase 3: running log while the captain is AFK (only if any)
@@ -49,7 +50,7 @@ One object, `{ "tasks": [...] }`. Each task:
   "pr": "https://…        (ship only, once opened)",
   "lastEvent": "2026-09-18T12:00:00Z finished",
   "notes": "≤200 chars: what the next wake needs to know (overflow → log.md)",
-  "asks": [{"text": "≤200 chars open question", "since": "2026-09-20", "context": "tasks/<id>/asks/1.md (optional)"}],
+  "asks": [{"text": "≤200 chars open question", "since": "2026-09-20", "context": "tasks/<id>/asks/1.md (optional)", "pendingSince": "set by bin/fleet pending (optional)"}],
   "preview": {"port": 4321, "pid": 12345}
 }
 ```
@@ -61,8 +62,10 @@ Rules:
 - `queued` = planned, not yet dispatched; `parked` = deliberately on hold. Neither counts as active: `bin/fleet active` lists only `dispatched`, `running`, `needs-captain`.
 - `project` is a kebab slug (`^[a-z0-9][a-z0-9-]*$`; empty/null = none) and `title` is plain text up to 80 chars; both are set via `add`/`set` and survive into the archive. `bin/fleet project <p>` prints every live task of a project (any status); `bin/fleet project <p> --archive [N]` prints the last N (default 30) archived lines; `bin/fleet active --project <p>` filters the active list.
 - `depends_on` holds task ids, changed only with `bin/fleet depend <id> <dep-id>...` (appends, de-duplicates) and `bin/fleet undepend <id> <dep-id>`. Ids may refer to archived tasks, so they are not checked against the live index.
+- `bin/fleet pending <id> <n>` sets `pendingSince` on ask `n`: the first mate's explicit "I am working on a follow-up", which keeps the ask under "With the first mate" on the project page (`bin/page reply ... --followup <id>:<n>` calls it). `reask` and `answer` clear it. Without the mark, an ask the captain commented on is back in Needs you once the comment is answered.
+- Every `bin/fleet` command that writes holds an `flock` on `fleet.json.lock` for its whole read-modify-write, so parallel calls cannot lose an update.
 - `bin/fleet ask <id> "<text>" --context-file <path>` copies the file to `tasks/<id>/asks/<n>.md` and stores it as the ask's `context`. `answer` removes the ask but leaves the file.
-- **Never hand-edit `fleet.json`.** Every write goes through `bin/fleet` (`add`, `set`, `ask`, `answer`, `preview`, `clear-preview`, `archive`, plus `depend`/`undepend`): it validates the status/shape enums and the 200-char caps, then writes atomically (temp file + rename). A refused write changes nothing. Reads are `get`, `by-agent`, `active`, `asks`, `project`. `bin/fleet` with no args prints usage.
+- **Never hand-edit `fleet.json`.** Every write goes through `bin/fleet` (`add`, `set`, `ask`, `reask`, `pending`, `answer`, `preview`, `clear-preview`, `archive`, plus `depend`/`undepend`): it validates the status/shape enums and the 200-char caps, then writes atomically (temp file + rename). A refused write changes nothing. Reads are `get`, `by-agent`, `active`, `asks`, `project`. `bin/fleet` with no args prints usage.
 - `notes` holds at most 200 chars. Anything longer is narrative — append it with `bin/fleet log <id> "…"` and keep one line in `notes`.
 - `asks` is the task's open questions for the captain. An ask outlives the step that raised it: closing a task never closes its asks. `bin/fleet archive` REFUSES a task with open asks — answer (`ask`/`answer`) or explicitly drop each one first.
 - `preview` records a crew dev/preview server from its final message (`preview: <port> <pid>`). Teardown kills that pid (after checking it is still the same process) and runs `clear-preview` before archiving.
@@ -85,4 +88,4 @@ Rules:
 
 ## Heartbeat safety net
 
-Paseo pushes finish/error/permission events, so you do not poll. The one gap it cannot cover is a crew member that goes *silent* — stalled without finishing or erroring. Register a single low-frequency `create_heartbeat` (e.g. every 30 min) that wakes you to scan `bin/fleet active` for tasks whose `lastEvent` is old while `status` is still `running`, and hand those to `stuck-crew-recovery`. Delete and recreate the heartbeat if its cadence needs to change (Paseo has no heartbeat-update tool).
+Paseo pushes finish/error/permission events, so you do not poll. The one gap it cannot cover is a crew member that goes *silent* — stalled without finishing or erroring. Register a single low-frequency `create_heartbeat` (e.g. every 30 min) that wakes you to scan `bin/fleet active` for tasks whose `lastEvent` is old while `status` is still `running`, and hand those to `stuck-crew-recovery`. The same wake runs `bin/page heal`, which reloads the firstmate-deck plugin when it has failed or has stopped rendering an open project page (it needs no judgment, and it is how a dead page plugin gets noticed at all). Delete and recreate the heartbeat if its cadence needs to change (Paseo has no heartbeat-update tool).

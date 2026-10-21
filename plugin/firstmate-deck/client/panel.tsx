@@ -84,13 +84,14 @@ function ProjectView({ p, props }: { p: ProjectSummary; props: PluginWorkspacePa
 function PanelBody(props: PluginWorkspacePanelProps) {
   const { theme, layout, workspaceId, navigation } = props;
   const paths = useWorkspace(workspaceId, (w) => `${w.projectRootPath}${SEP}${w.directory}`);
-  const { projects, loading, unavailable } = useSummary();
+  const { projects, loading, unavailable, problem } = useSummary();
   const match = paths ? matchProject(projects, paths.split(SEP)) : null;
   const pad = layout.compact ? 16 : 24;
   const withPages = projects.filter((p) => p.pageUrl);
 
   return (
     <ScrollView style={{ flex: 1, backgroundColor: theme.colors.surface0 }} contentContainerStyle={{ padding: pad, gap: 16 }}>
+      {problem ? <Text style={{ color: theme.colors.statusWarning, fontSize: 14 }}>{problem}</Text> : null}
       {unavailable ? (
         <Muted theme={theme} size={14}>Project pages are unavailable right now. Retrying.</Muted>
       ) : loading ? (

@@ -30,11 +30,29 @@ function rig(opts: { failTimes?: number } = {}) {
 const mk = (project: string, ...texts: string[]): InboxEntry[] =>
   newEntries(project, texts.map((t) => ({ prompt: t, selector: "body" })), {});
 
-test("message format is exact", () => {
+test("message format is exact: id, target, task title and open asks on every line", () => {
+  const info: Record<string, { title: string; asks: string[] }> = {
+    "t-pick-db": { title: "Choose the database", asks: ["Postgres or SQLite?", "Add the DATABASE_URL flag?"] },
+  };
+  const describe = (t: string) => info[t.replace(/#a\d+$/, "")];
   assert.equal(
-    formatMessage("deck", [{ target: "t-ab-gap", text: "Is this right?" }, { target: "endpoints", text: "two\nlines" }]),
-    '## Page comments · deck\n- [t-ab-gap] "Is this right?"\n- [endpoints] "two lines"\nReply with: bin/page reply deck "<your reply>"',
+    formatMessage("deck", [
+      { id: "c-abc123", target: "t-pick-db", text: "Is this right?" },
+      { id: "c-def456", target: "t-pick-db#a2", text: "which env?\nstaging?" },
+      { id: "c-ghi789", target: "endpoints", text: "two\nlines" },
+      { id: "c-jkl000", target: "t-gone", text: "no such task" },
+    ], describe),
+    [
+      "## Page comments · deck",
+      '- [t-pick-db · "Choose the database" · ask 1: "Postgres or SQLite?" · ask 2: "Add the DATABASE_URL flag?"] (c-abc123) "Is this right?"',
+      '- [t-pick-db#a2 · "Choose the database" · ask 2: "Add the DATABASE_URL flag?"] (c-def456) "which env? staging?"',
+      '- [endpoints] (c-ghi789) "two lines"',
+      '- [t-gone] (c-jkl000) "no such task"',
+      'Reply with: bin/page reply deck "<your reply>"',
+    ].join("\n"),
   );
+  // without a describer or ids the line degrades to the bare target
+  assert.equal(formatMessage("deck", [{ target: "page", text: "hi" }]), '## Page comments · deck\n- [page] "hi"\nReply with: bin/page reply deck "<your reply>"');
 });
 
 test("newEntries: stable shape, target from the selector", () => {
@@ -55,7 +73,7 @@ test("batches arriving within the batch window become one message", async () => 
   assert.equal(r.sent.length, 0, "window not over yet");
   await r.tick(100);
   assert.equal(r.sent.length, 1);
-  assert.match(r.sent[0].msg, /"one"\n- \[page\] "two"\n- \[page\] "three"/);
+  assert.match(r.sent[0].msg, /\[page\] \(c-[^)]+\) "one"\n- \[page\] \(c-[^)]+\) "two"\n- \[page\] \(c-[^)]+\) "three"/);
   assert.equal(r.delivered.length, 1);
   assert.equal(r.delivered[0].length, 3);
   assert.equal(r.rows.length, 1);
@@ -92,7 +110,7 @@ test("comments arriving during a retry wait ride along with the retry", async ()
   assert.equal(r.sent.length, 0, "no early send while waiting out the retry");
   await r.tick(RETRY_MS[0]);
   assert.equal(r.sent.length, 1);
-  assert.match(r.sent[0].msg, /"first"\n- \[page\] "second"/);
+  assert.match(r.sent[0].msg, /"first"\n- \[page\] \(c-[^)]+\) "second"/);
   mock.timers.reset();
 });
 

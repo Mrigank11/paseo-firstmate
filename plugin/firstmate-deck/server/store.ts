@@ -1,6 +1,7 @@
 // On-disk files the plugin owns per project: inbox.jsonl (comments) and page.json (page/session status).
 // Pure node:fs, sync, shared with bin/page's helper. Writers take a mkdir lock so the plugin's append and
 // `bin/page reply`'s atomic rewrite can never lose each other's lines.
+import { randomBytes } from "node:crypto";
 import { appendFileSync, existsSync, mkdirSync, readFileSync, renameSync, rmdirSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 
@@ -26,8 +27,17 @@ export type PageJson = {
   lastRender: string | null;
   lastDelivery: string | null;
   undelivered: number;
-  /** "ok" | "active-elsewhere" | "error": the state of the plugin's Lavish poll. Informational. */
+  /** "ok" | "active-elsewhere" | "error" | "pending": the state of the plugin's Lavish poll. `bin/page start` sets "pending" and waits for the plugin to say "ok". */
   listener?: string;
+  /** Why the listener is not "ok" (e.g. who holds the Lavish listener). */
+  listenerDetail?: string | null;
+  /** The firstmateRoot the plugin is configured with (realpath'd). `bin/page` compares it with its own checkout. */
+  pluginRoot?: string | null;
+  /** The Lavish port / state dir the plugin's poll uses (null = Lavish's defaults); bin/page uses the same ones. */
+  lavishPort?: string | null;
+  lavishStateDir?: string | null;
+  /** Timeline rows still saying "awaiting reply": row id -> the agent that got them and the inbox ids they carry. */
+  openRows?: Record<string, { agentId: string; ids: string[] }>;
   /** Banner text currently shown on the page, if any. */
   banner?: string | null;
 };
@@ -66,7 +76,8 @@ export function withLock<T>(file: string, fn: () => T): T {
 
 export function writeAtomic(path: string, text: string): void {
   mkdirSync(dirname(path), { recursive: true });
-  const tmp = join(dirname(path), "." + path.slice(path.lastIndexOf("/") + 1) + ".tmp");
+  // a random name per write: two writers (the plugin and a bin/page helper) never share a temp file
+  const tmp = join(dirname(path), "." + path.slice(path.lastIndexOf("/") + 1) + "." + process.pid + "." + randomBytes(4).toString("hex") + ".tmp");
   writeFileSync(tmp, text);
   renameSync(tmp, path);
 }

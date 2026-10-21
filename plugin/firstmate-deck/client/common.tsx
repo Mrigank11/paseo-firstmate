@@ -19,6 +19,8 @@ export type Summary = {
   /** True until the first response, and while the last request failed with nothing cached. */
   loading: boolean;
   unavailable: boolean;
+  /** Why the plugin cannot work (e.g. firstmateRoot is wrong), else null. */
+  problem: string | null;
 };
 
 export function useSummary(): Summary {
@@ -35,6 +37,7 @@ export function useSummary(): Summary {
     projects: q.data?.projects ?? [],
     loading: q.isPending,
     unavailable: q.isError && !q.data,
+    problem: q.data?.problem ?? null,
   };
 }
 
@@ -56,6 +59,7 @@ export function matchProject(projects: readonly ProjectSummary[], paths: readonl
 export function countsLine(p: ProjectSummary): string {
   const parts: string[] = [];
   if (p.counts.needsYou > 0) parts.push(`${p.counts.needsYou} needs you`);
+  if (p.counts.withFirstMate) parts.push(`${p.counts.withFirstMate} with the first mate`);
   parts.push(`${p.counts.running} running`);
   parts.push(`${p.counts.done} done`);
   return parts.join(" · ");

@@ -51,7 +51,7 @@ test("trail renders on the card, and sections/page via slots filled by the scrip
   assert.match(r.live, /<div data-trail-for="page">.*page note/);
   assert.match(r.page, /<section id="endpoints"[^>]*><h2>[^<]*<\/h2>\n<div class="trail-slot" data-trail-slot="endpoints">/);
   assert.match(r.page, /<div class="trail-slot" data-trail-slot="page">/);
-  assert.match(r.live, /checked every second/);
+  assert.match(r.live, /the page checks every second; the plugin refreshes it on every change and at least every 20 s \(last refresh /);
 });
 
 test("comments do not move the page signature (no page reload per comment)", () => {
@@ -143,7 +143,7 @@ test("ask-choice parsed from a realistic poll prompt (lavish folds data into the
   assert.deepEqual(parsed.choice, { task: "pick-db", ask: 1, option: "B live console" });
   assert.equal(parsed.text, "Picked: B live console");
   const [e] = newEntries("deck-demo", o.prompts, { tasks: ["pick-db"] }, new Date("2026-10-21T10:00:00Z"), (t, n) => (t === "pick-db" && n === 1 ? "Postgres or SQLite?" : undefined));
-  assert.equal(e.target, "t-pick-db");
+  assert.equal(e.target, "t-pick-db#a1");
   assert.equal(e.text, "Picked: B live console");
   assert.deepEqual(e.choice, { task: "pick-db", ask: 1, option: "B live console", askText: "Postgres or SQLite?" });
 });
@@ -158,13 +158,13 @@ test("choice parsing rejects malformed data and also reads a separate data field
 
 test("relay message names the choice and how to apply it", () => {
   const msg = formatMessage("deck-demo", [
-    { target: "endpoints", text: "a note", choice: undefined },
-    { target: "t-pick-db", text: "Picked: B", choice: { task: "pick-db", ask: 1, option: "B live console", askText: "Postgres\nor SQLite?" } },
-  ]);
+    { id: "c-1", target: "endpoints", text: "a note", choice: undefined },
+    { id: "c-2", target: "t-pick-db#a1", text: "Picked: B", choice: { task: "pick-db", ask: 1, option: "B live console", askText: "Postgres\nor SQLite?" } },
+  ], (t) => (t.startsWith("t-pick-db") ? { title: "Choose the database", asks: ["Postgres or SQLite?"] } : undefined));
   assert.equal(msg, [
     "## Page comments · deck-demo",
-    '- [endpoints] "a note"',
-    '- [t-pick-db] picked option "B live console" for ask 1 ("Postgres or SQLite?")',
+    '- [endpoints] (c-1) "a note"',
+    '- [t-pick-db#a1 · "Choose the database"] (c-2) picked option "B live console" for ask 1 ("Postgres or SQLite?")',
     'Reply with: bin/page reply deck-demo "<your reply>"',
     "Apply with: bin/fleet answer pick-db 1, then act on it.",
   ].join("\n"));

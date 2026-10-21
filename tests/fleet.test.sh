@@ -153,5 +153,39 @@ $F reask o 1 "new text?" --options "P|Q|R" >/dev/null
 eq "$($F get o | jq -r '.asks[0].text')" "new text?" && eq "$($F get o | jq -c '.asks[0].options')" '["P","Q","R"]'; check "reask text + options" $?
 refused "reask bad options" $F reask o 1 --options "one"
 
+# pending: the first mate's explicit "I'm on it" mark on an ask
+reset
+$F add pd intent=x shape=scout status=needs-captain >/dev/null
+$F ask pd "First?" >/dev/null; $F ask pd "Second?" >/dev/null
+$F pending pd 2 >/dev/null
+eq "$($F get pd | jq -r '.asks[1].pendingSince | test("^[0-9]{4}-[0-9]{2}-[0-9]{2}T")')" true; check "pending sets pendingSince on ask 2" $?
+eq "$($F get pd | jq -c '.asks[0] | has("pendingSince")')" false; check "pending touches only the named ask" $?
+refused "pending unknown task" $F pending nope 1
+refused "pending ask index out of range" $F pending pd 3
+refused "pending bad index" $F pending pd x
+refused "pending needs both arguments" $F pending pd
+$F reask pd 2 >/dev/null
+eq "$($F get pd | jq -c '.asks[1] | has("pendingSince")')" false; check "reask clears pendingSince" $?
+$F pending pd 1 >/dev/null; $F pending pd 2 >/dev/null
+$F answer pd 1 >/dev/null
+eq "$($F get pd | jq -c '[.asks[].text, (.asks[0] | has("pendingSince"))]')" '["Second?",true]'; check "answer removes the ask; the other keeps its mark" $?
+$F reask pd 1 "Second, sharper?" >/dev/null
+eq "$($F get pd | jq -c '.asks[0] | [.text, has("pendingSince")]')" '["Second, sharper?",false]'; check "reask with new text also clears the mark" $?
+
+# lock: parallel writers must not lose updates (read-modify-write under flock)
+if command -v flock >/dev/null; then
+  reset
+  for i in $(seq 1 24); do $F add "par-$i" intent=x shape=scout status=queued >/dev/null 2>&1 & done
+  wait
+  eq "$(jq '.tasks | length' "$FLEET_FILE")" 24; check "24 parallel adds all land (no lost update)" $?
+  for i in $(seq 1 24); do $F set "par-$i" notes="n$i" >/dev/null 2>&1 & done
+  wait
+  eq "$(jq '[.tasks[] | select(.notes != null)] | length' "$FLEET_FILE")" 24; check "24 parallel sets all land" $?
+  jq -e . "$FLEET_FILE" >/dev/null; check "fleet.json is still valid JSON" $?
+  [[ -f "$FLEET_FILE.lock" ]]; check "lock file is separate from fleet.json" $?
+else
+  ok "flock not installed: lock tests skipped"
+fi
+
 echo "---- $pass passed, $fail failed"
 [[ $fail -eq 0 ]]

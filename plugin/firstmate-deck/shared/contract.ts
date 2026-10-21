@@ -40,7 +40,7 @@ export const projectSummarySchema = z.object({
   session: z.enum(["open", "ended", "unknown"]),
   needsYou: z.array(askSchema),
   running: z.array(runningSchema),
-  counts: z.object({ needsYou: z.number(), running: z.number(), next: z.number(), parked: z.number(), done: z.number() }),
+  counts: z.object({ needsYou: z.number(), withFirstMate: z.number().optional(), running: z.number(), next: z.number(), parked: z.number(), done: z.number() }),
   undelivered: z.number(), // comments not yet delivered to the first mate
   banner: z.string().nullable(), // e.g. "first mate unreachable, 2 comments queued"
 });
@@ -50,7 +50,12 @@ export type ProjectSummary = z.infer<typeof projectSummarySchema>;
 export const summaryRpc = defineRpc({
   name: "deck.summary",
   input: z.object({ project: z.string().optional() }),
-  output: z.object({ projects: z.array(projectSummarySchema), firstmateAgentId: z.string().nullable() }),
+  output: z.object({
+    projects: z.array(projectSummarySchema),
+    firstmateAgentId: z.string().nullable(),
+    /** Set when the plugin cannot work at all, e.g. firstmateRoot points nowhere. Absent on older plugin builds. */
+    problem: z.string().nullable().optional(),
+  }),
 });
 
 // Timeline row appended to the first mate's chat when page comments are delivered.

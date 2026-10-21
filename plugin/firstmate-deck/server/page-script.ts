@@ -35,8 +35,13 @@ export function pageScript(project: string, liveFile: string, tickSeconds: numbe
       if(lv.sendQueuedPrompts)lv.sendQueuedPrompts()}
     catch(err){delete Q[k];box.querySelectorAll("button.opt").forEach(function(x){x.disabled=false;x.classList.remove("on")});if(l){l.hidden=false;l.textContent="could not send, comment on the card instead"}}});
   restore(document);reveal(location.hash.slice(1));fill();
-  var last=null;
-  window.__fdLive=function(html){var el=live();if(!el||html===last)return;last=html;
+  var last=null,born=Date.now(),stamp=0,STALE=60000;
+  // The plugin stamps every payload with the time it was produced. If the newest stamp we can see is more than
+  // a minute old by this browser's clock, the plugin is not refreshing the page (dead, stuck or unreachable).
+  function stale(){var b=document.getElementById("fd-stale");if(b)b.hidden=!((Date.now()-(stamp||born))>STALE)}
+  setInterval(stale,5000);
+  window.__fdLive=function(html,iso){var t=iso?Date.parse(iso):NaN;if(t>stamp){stamp=t;stale()}
+    var el=live();if(!el||html===last)return;last=html;
     snapshot();var y=window.scrollY,M="<!--LIVE-";el.innerHTML=M+"START-->"+html+M+"END-->";restore(el);reapply(el);fill();window.scrollTo(0,y)};
   function tick(){var s=document.createElement("script");s.src=F+"?t="+Date.now();s.onload=s.onerror=function(){s.remove()};document.head.appendChild(s)}
   tick();setInterval(tick,${Math.max(1, Math.round(tickSeconds)) * 1000});

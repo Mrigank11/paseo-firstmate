@@ -11,3 +11,5 @@ plugin/spike/
 state/page.env
 # local sandbox/demo tooling, not shipped
 dev/
+state/firstmate.json
+state/fleet.json.lock

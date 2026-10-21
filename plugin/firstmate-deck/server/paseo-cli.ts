@@ -119,24 +119,56 @@ export class AgentSource {
 
 export type FirstMate = { id: string; status: string };
 
+export const NO_CLAIM_MESSAGE = "No first mate claimed this checkout: run bin/page claim in the first mate's session";
+
+/** Thrown when there is nobody to deliver to: no claim and no usable label. The banner says how to fix it. */
+export class NoFirstMateError extends Error {
+  constructor() { super(NO_CLAIM_MESSAGE); this.name = "NoFirstMateError"; }
+}
+
+/** Agent ids that fleet.json or the archive lists as crew: they are never the first mate. */
+export function crewAgentIds(root: string): Set<string> {
+  const ids = new Set<string>();
+  const state = join(root, "state");
+  try {
+    for (const t of JSON.parse(readFileSync(join(state, "fleet.json"), "utf8"))?.tasks ?? []) if (t?.agentId) ids.add(String(t.agentId));
+  } catch {}
+  try {
+    for (const line of readFileSync(join(state, "fleet-archive.jsonl"), "utf8").split("\n")) {
+      if (!line.trim()) continue;
+      try { const t = JSON.parse(line); if (t?.agentId) ids.add(String(t.agentId)); } catch {}
+    }
+  } catch {}
+  return ids;
+}
+
+/** The agent id `bin/page claim` recorded in state/firstmate.json, if any. */
+export function claimedId(root: string): string | null {
+  try {
+    const id = JSON.parse(readFileSync(join(root, "state", "firstmate.json"), "utf8"))?.agentId;
+    return typeof id === "string" && id ? id : null;
+  } catch {
+    return null;
+  }
+}
+
 /**
- * The first mate: the newest non-archived agent carrying the first-mate label ("key=value"). Without a labelled
- * agent, fall back to the agent running in the first-mate checkout itself (`root`): crew always work in their own
- * worktrees, so that is the first mate even when it was started from the Paseo app with no label. The fallback
- * also labels it (best effort), so later lookups and the app see it. Re-resolved on every use.
+ * The first mate, decided by explicit facts only (no guessing from working directories):
+ *   1. the agent `bin/page claim` recorded in state/firstmate.json, if it still exists and is not archived;
+ *   2. else the newest live agent carrying the first-mate label, EXCLUDING every agent id fleet.json or the
+ *      archive lists as crew;
+ *   3. else null.
+ * Never writes a label. Re-resolved on every use.
  */
 export async function resolveFirstMate(exec: Exec, label: string, root?: string): Promise<FirstMate | null> {
-  let list: any[] = JSON.parse((await exec(["ls", "--label", label, "--json"])) || "[]");
-  if (!list.length && root) {
-    const want = root.replace(/\/+$/, "");
-    const all: any[] = JSON.parse((await exec(["ls", "--json"])) || "[]");
-    list = all.filter((a) => String(a.cwd ?? "").replace(/^~(?=\/|$)/, homedir()).replace(/\/+$/, "") === want);
-    if (list.length) {
-      const pick = await newest(exec, list);
-      try { await exec(["agent", "update", pick.id, "--label", label]); } catch {}
-      return pick;
-    }
+  const claim = root ? claimedId(root) : null;
+  if (claim) {
+    const all: any[] = JSON.parse((await exec(["ls", "-g", "--json"])) || "[]"); // archived agents are not listed
+    const hit = all.find((a) => String(a.id) === claim);
+    if (hit) return { id: String(hit.id), status: String(hit.status) };
   }
+  const crew = root ? crewAgentIds(root) : new Set<string>();
+  const list: any[] = (JSON.parse((await exec(["ls", "-g", "--label", label, "--json"])) || "[]") as any[]).filter((a) => !crew.has(String(a.id)));
   if (!list.length) return null;
   return newest(exec, list);
 }
@@ -185,7 +217,7 @@ export async function sendToFirstMate(exec: Exec, label: string, message: string
     } catch {}
   }
   fm = await resolveFirstMate(exec, label, root);
-  if (!fm) throw new Error(`no agent labelled ${label} and none running in ${root ?? "the first-mate checkout"}`);
+  if (!fm) throw new NoFirstMateError();
   await sendTo(exec, fm.id, message);
   return fm.id;
 }

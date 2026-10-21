@@ -1,4 +1,5 @@
 // Deterministic renderer: node render-cli.ts <firstmateRoot> <project> [--out <file>] [--agents <agents.json>]
+import { randomBytes } from "node:crypto";
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
 import { loadProject } from "./state.ts";
@@ -36,12 +37,12 @@ try {
   const ts = `${p2(now.getHours())}:${p2(now.getMinutes())}:${p2(now.getSeconds())}`;
   mkdirSync(dirname(target), { recursive: true });
   const put = (path: string, text: string) => { // atomic: Lavish and the plugin never see a half-written file
-    const tmp = join(dirname(path), "." + basename(path) + ".tmp");
+    const tmp = join(dirname(path), "." + basename(path) + "." + process.pid + "." + randomBytes(4).toString("hex") + ".tmp");
     writeFileSync(tmp, text);
     renameSync(tmp, path);
   };
   put(target, r.page);
-  put(target.replace(/\.[^./]*$/, "") + ".live.js", liveJs(r.live.replace(/\{TS\}/g, ts)));
+  put(target.replace(/\.[^./]*$/, "") + ".live.js", liveJs(r.live.replace(/\{TS\}/g, ts), now.toISOString()));
   console.log(`wrote ${target} (signature ${r.signature.slice(0, 12)})`);
 } catch (e) {
   console.error((e as Error).message);

@@ -61,6 +61,10 @@ Try `/bearings` anytime for a one-screen fleet digest, `/afk` before stepping aw
 | [`docs/STATE.md`](docs/STATE.md) | Fleet state format — `fleet.json`, task dirs, restart reconstruction, heartbeat safety net. |
 | [`state/`](state/) | Disk-backed runtime state (gitignored — not source): `fleet.json`, `decisions.md`, `tasks/<id>/brief.md` + `report.md`. The `.example` files are the templates; your live copies stay local. |
 
+## Project pages
+
+A project can have a live page in Lavish: its tasks, what needs the captain, what is running, and notes, kept current by the `firstmate-deck` Paseo plugin. The captain comments on the page; the plugin relays the comments to the first mate, whose replies come back on the page. Setup is one command, `bin/page install` (Node 22.18+, `jq`, `paseo`; plugins must be enabled in Paseo Settings → Plugins). Then, in the first mate's own session, `bin/page claim` records which agent is the first mate (`bin/page start` does that too) and `bin/page start <project> --repo <path>` opens a page, refusing to report success until the plugin is really polling it. `bin/page status` shows what is wrong when a comment does not arrive. The details are in [`plugin/firstmate-deck/OVERVIEW.md`](plugin/firstmate-deck/OVERVIEW.md) and the [`project-page` skill](.claude/skills/project-page/SKILL.md).
+
 ## Configuration at a glance
 
 Everything the captain can tune lives in `state/decisions.md` (from the example template): routing lanes mapping task roles to exact launch configs, the permission auto-approve/escalate boundary, per-project delivery modes (`direct-PR` / `local-only` / `gated`), the `auto-merge: green-only` posture, AFK cadence, and free-form preferences. The first mate re-reads it on every dispatch and permission wake — edits take effect immediately.

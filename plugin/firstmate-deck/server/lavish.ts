@@ -2,9 +2,11 @@
 // is resolved once and spawned directly with node (about 160 ms per poll versus about 1 s through npx),
 // and the next poll is started before the previous batch is handled.
 import { execFile, spawn, type ChildProcess } from "node:child_process";
-import { existsSync, readdirSync, readFileSync, realpathSync, statSync, unlinkSync, writeFileSync } from "node:fs";
-import { homedir } from "node:os";
-import { join } from "node:path";
+import { existsSync, readdirSync, readFileSync, realpathSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import { homedir, tmpdir } from "node:os";
+import { dirname, join } from "node:path";
+import { createHash } from "node:crypto";
+import { POLL_WRAPPER_SOURCE } from "./poll-wrapper-source.ts";
 import { classifyPoll, decodePoll, type PollOutcome, type Prompt } from "./toon.ts";
 
 // ---------- binary resolution ----------
@@ -83,6 +85,8 @@ export type PollerHooks = {
   /** The session ended (after its final prompts were passed to onBatch). */
   onEnded: (outcome: PollOutcome) => void | Promise<void>;
   onListener?: (state: "ok" | "active-elsewhere" | "error", detail: string) => void;
+  /** True when one of OUR earlier poll processes for this page is still alive (so LISTENER_ACTIVE is just it draining). */
+  ownAlive?: () => boolean;
   log?: (msg: string) => void;
   sleep?: (ms: number, signal: AbortSignal) => Promise<void>;
 };
@@ -139,12 +143,13 @@ export class PagePoller {
         continue;
       }
       if (outcome.kind === "listener-active") {
-        // Our polls carry no --owner (an owned poll makes Lavish show "Working..." permanently), so a holder
-        // right after start is most likely our own previous poll still draining: retry fast for a while.
-        const own = (outcome.holder === this.ownerLabel || !outcome.holder) && this.ownRetries < 10;
+        // Our polls carry no --owner, so Lavish cannot tell who holds the listener. If an earlier poll process of
+        // ours for this page is still alive, it is the holder (a reload or SIGTERM race): retry fast, for a while.
+        // Otherwise someone else (the first mate running `lavish-axi poll` out of habit) holds it: say so.
+        const own = (h.ownAlive?.() ?? false) && this.ownRetries < 10;
         if (own) this.ownRetries++;
-        log(`LISTENER_ACTIVE (holder ${outcome.holder ?? "?"}); retry in ${own ? OWN_LISTENER_RETRY_MS : LISTENER_RETRY_MS} ms`);
-        h.onListener?.("active-elsewhere", outcome.message ?? "");
+        log(`LISTENER_ACTIVE (holder ${outcome.holder ?? "?"}); ${own ? "our own earlier poll is still alive" : "held elsewhere"}; retry in ${own ? OWN_LISTENER_RETRY_MS : LISTENER_RETRY_MS} ms`);
+        if (!own) h.onListener?.("active-elsewhere", `held by ${outcome.holder ?? "another process"}`);
         await sleep(own ? OWN_LISTENER_RETRY_MS : LISTENER_RETRY_MS, this.ac.signal);
         continue;
       }
@@ -177,26 +182,47 @@ export class PagePoller {
 
 export type SpawnedPoll = { child: ChildProcess; result: Promise<PollRun> };
 
-const spawned = new Set<ChildProcess>();
+const spawned = new Map<ChildProcess, string>();
 /** Kill every poll process this module started (plugin cleanup). */
 export function killAllPolls(): void {
-  for (const c of spawned) { try { c.kill("SIGTERM"); } catch {} }
+  for (const c of spawned.keys()) { try { c.kill("SIGTERM"); } catch {} }
   spawned.clear();
 }
 
+/** Is a poll process we started for `page` (other than `except`) still alive? */
+export function hasLivePoll(page: string, except?: ChildProcess | null): boolean {
+  for (const [c, p] of spawned) if (p === page && c !== except && c.exitCode === null && c.signalCode === null) return true;
+  return false;
+}
+
+/** Path of the poll wrapper, written once per content hash into the temp dir (see poll-wrapper-source.ts). */
+export function pollWrapperPath(): string {
+  const hash = createHash("sha256").update(POLL_WRAPPER_SOURCE).digest("hex").slice(0, 12);
+  const path = join(tmpdir(), `firstmate-deck-poll-wrapper-${hash}.mjs`);
+  if (!existsSync(path)) {
+    const tmp = `${path}.${process.pid}.${Math.random().toString(36).slice(2)}`;
+    writeFileSync(tmp, POLL_WRAPPER_SOURCE);
+    renameSync(tmp, path);
+  }
+  return path;
+}
+
 /**
- * Spawn one `lavish-axi poll`. The result resolves as soon as the document is complete, which is when its
- * `next_step:` line appears (the prompts table always precedes it), NOT when the process exits: the CLI lingers
- * for about a second after printing, and the server has already freed the listener slot by then, so waiting
- * for the exit would add a second to every comment. Error documents have no next_step and resolve on exit.
- */
-/**
+ * Spawn one `lavish-axi poll` through poll-wrapper.mjs. The wrapper's stdin stays an open pipe for as long as this
+ * process lives; when this process dies (even with -9) the pipe closes and the wrapper kills the poll, so an
+ * orphaned poll can never keep the Lavish listener and swallow comments. The result resolves as soon as the
+ * document is complete, which is when its `next_step:` line appears (the prompts table always precedes it), NOT
+ * when the process exits: the CLI lingers for about a second after printing, and the server has already freed the
+ * listener slot by then, so waiting for the exit would add a second to every comment. Error documents have no
+ * next_step and resolve on exit.
+ *
  * Never pass --owner: Lavish reports an owned poll as an "external listener" and shows a permanent "Working..."
  * bubble on the page. Unowned, the page shows "Working" only while picked-up comments await `lavish-axi reply`.
  */
-export function spawnPoll(bin: string, page: string, env: NodeJS.ProcessEnv, owner?: string): SpawnedPoll {
-  const child = spawn(process.execPath, [bin, "poll", page, ...(owner ? ["--owner", owner] : [])], { env, stdio: ["ignore", "pipe", "pipe"] });
-  spawned.add(child);
+export function spawnPoll(bin: string, page: string, env: NodeJS.ProcessEnv, owner?: string, wrapper = pollWrapperPath()): SpawnedPoll {
+  const child = spawn(process.execPath, [wrapper, bin, "poll", page, ...(owner ? ["--owner", owner] : [])], { env, stdio: ["pipe", "pipe", "pipe"] });
+  child.stdin!.on("error", () => {}); // the wrapper may already be gone
+  spawned.set(child, page);
   let out = "";
   let settle: (r: PollRun) => void = () => {};
   const result = new Promise<PollRun>((res) => (settle = res));
@@ -218,7 +244,7 @@ export function killStalePoll(pidFile: string, page: string): boolean {
   if (!Number.isInteger(pid) || pid <= 1) return false;
   try {
     const cmd = readFileSync(`/proc/${pid}/cmdline`, "utf8").split("\0").join(" ");
-    if (cmd.includes("lavish-axi") && cmd.includes(" poll ") && cmd.includes(page)) {
+    if ((cmd.includes("lavish-axi") || cmd.includes("poll-wrapper")) && cmd.includes(" poll ") && cmd.includes(page)) {
       process.kill(pid, "SIGTERM");
       try { unlinkSync(pidFile); } catch {}
       return true;

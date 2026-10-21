@@ -26,6 +26,8 @@ export type RenderOpts = {
   paseoAgentUrl: (id: string) => string;
   banner?: Banner;
   tickSeconds: number;
+  /** How often the plugin re-renders even when nothing changed (it says so in the page text). Default 20. */
+  refreshSeconds?: number;
   /** Basename of the page file; its `.live.js` sibling is polled. Defaults to the project's configured page, else "page.html". */
   pageFile?: string;
 };
@@ -54,9 +56,6 @@ const ACTIVE = new Set(["running", "initializing"]);
 
 export const esc = (s: unknown): string =>
   String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#x27;");
-
-const plain = (s: string): string =>
-  s.replace(/<[^>]+>/g, "").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"').replace(/&#0?39;/g, "'").replace(/&amp;/g, "&");
 
 const pad = (n: number) => String(n).padStart(2, "0");
 
@@ -132,7 +131,8 @@ const LATE_MS = 10_000;
 
 /** The captain's comment trail for one target: latest comment, a count, and where it stands (from the inbox flags). */
 export function trailHtml(all: TrailComment[], target: string, now: Date): string {
-  const mine = all.filter((c) => c.target === target && (!c.answered || now.getTime() - Date.parse(c.at) < DAY_MS));
+  // comments on an ask ("t-<task>#a<n>") show in their card's trail too
+  const mine = all.filter((c) => (c.target === target || c.target.startsWith(target + "#")) && (!c.answered || now.getTime() - Date.parse(c.at) < DAY_MS));
   if (!mine.length) return "";
   const last = mine.reduce((a, b) => (Date.parse(b.at) >= Date.parse(a.at) ? b : a));
   const d = new Date(last.at);
@@ -151,7 +151,7 @@ export function trailHtml(all: TrailComment[], target: string, now: Date): strin
 type Ctx = { byId: Map<string, Task>; unblocks: Map<string, string[]>; agents: Record<string, AgentView>; o: RenderOpts; comments: TrailComment[] };
 
 function row(t: Task, group: GroupKey, ctx: Ctx): string {
-  const name = t.title || t.intent || t.id;
+  const name = esc(t.title || t.intent || t.id);
   const title = t.agentId ? `<a href="${esc(ctx.o.paseoAgentUrl(t.agentId))}">${name}</a>` : name;
   const failed = t.status === "failed";
   const chip = failed ? `<span class="chip c-fail">failed</span>` : "";
@@ -161,35 +161,36 @@ function row(t: Task, group: GroupKey, ctx: Ctx): string {
     trailHtml(ctx.comments, `t-${t.id}`, ctx.o.now),
   ];
   t.asks.forEach((a, i) => {
+    const n = i + 1;
+    const box: string[] = [];
+    const asked = `<div class="ask asked">${esc(a.text)}</div>`;
     if (a.repliedAt && a.replyChoice) {
-      out.push(
-        `<div class="ask asked">${a.text}</div>` +
-        `<div class="ask replied picked">You picked <b>${esc(a.replyChoice)}</b> · the first mate is applying it</div>`,
-      );
-    } else if (a.repliedAt) {
+      box.push(asked, `<div class="ask replied picked">You picked <b>${esc(a.replyChoice)}</b> · the first mate is applying it</div>`);
+    } else if (a.repliedAt && a.replyText !== undefined) {
       const d = new Date(a.repliedAt);
       const hm = isNaN(d.getTime()) ? "" : ` ${pad(d.getHours())}:${pad(d.getMinutes())}`;
-      out.push(
-        `<div class="ask asked">${a.text}</div>` +
-        `<div class="ask replied">You replied${hm}: “${esc(cut(a.replyText ?? "", 120))}” · the first mate is on it</div>`,
-      );
+      box.push(asked, `<div class="ask replied">You replied${hm}: “${esc(cut(a.replyText, 120))}” · the first mate is on it</div>`);
+    } else if (a.repliedAt) { // marked pending by the first mate (bin/page reply --followup), no comment to quote
+      box.push(asked, `<div class="ask replied">The first mate is working on a follow-up</div>`);
     } else {
-      out.push(`<div class="ask"><b>Your call:</b> ${a.text}</div>`);
+      box.push(`<div class="ask"><b>Your call:</b> ${esc(a.text)}</div>`);
       if (a.options?.length) {
-        const key = `ask-${t.id}-${i + 1}`;
+        const key = `ask-${t.id}-${n}`;
         const btns = a.options.map((o) =>
-          `<button type="button" class="opt" data-task="${esc(t.id)}" data-ask="${i + 1}" data-opt="${esc(o)}" data-title="${esc(plain(name))}">${esc(o)}</button>`).join("");
-        out.push(`<div class="opts" data-key="${esc(key)}"><div class="opt-row">${btns}<span class="hint">or comment on the card</span></div><div class="pickline" role="status" hidden></div></div>`);
+          `<button type="button" class="opt" data-task="${esc(t.id)}" data-ask="${n}" data-opt="${esc(o)}" data-title="${name}">${esc(o)}</button>`).join("");
+        box.push(`<div class="opts" data-key="${esc(key)}"><div class="opt-row">${btns}<span class="hint">or comment on the card</span></div><div class="pickline" role="status" hidden></div></div>`);
       }
     }
     if (a.contextMd.trim()) {
-      out.push(`<details class="actx" id="a-${esc(t.id)}-${i + 1}"><summary>Context</summary><div>${markdown(a.contextMd)}</div></details>`);
+      box.push(`<details class="actx" id="x-${esc(t.id)}-${n}"><summary>Context</summary><div>${markdown(a.contextMd)}</div></details>`);
     }
+    // One block per ask: a comment anywhere inside it (text, option buttons, context) targets this ask.
+    out.push(`<div class="askbox" id="a-${esc(t.id)}-${n}">${box.join("")}</div>`);
   });
   if (t.agentId) out.push(agentBlock(t, group, ctx.agents[t.agentId], ctx.o));
-  const body = t.card.trim() ? markdown(t.card) : t.notes;
+  const body = t.card.trim() ? markdown(t.card) : esc(t.notes);
   if (body) out.push(`<div class="nt">${body}</div>`);
-  const link = (id: string) => `<a href="#t-${esc(id)}">${esc(plain(ctx.byId.get(id)!.title || ctx.byId.get(id)!.intent || id))}</a>`;
+  const link = (id: string) => `<a href="#t-${esc(id)}">${esc(ctx.byId.get(id)!.title || ctx.byId.get(id)!.intent || id)}</a>`;
   const dep = t.depends_on.filter((d) => ctx.byId.has(d)).map(link);
   const unb = (ctx.unblocks.get(t.id) ?? []).map(link);
   if (dep.length || unb.length) {
@@ -222,7 +223,7 @@ function renderLive(model: ProjectModel, agents: Record<string, AgentView>, o: R
     .map(([k, n]) => `<a href="#g-${k}" class="sum c-${k}">${buckets[k].length} ${k === "you" ? "needs you" : n.toLowerCase()}</a>`)
     .join("");
   if (busy) summary += `<span class="sum c-running">${busy} agent${busy > 1 ? "s" : ""} working</span>`;
-  const parts = [`<div class="summary">${summary}<span class="m">live, checked ${o.tickSeconds === 1 ? "every second" : `every ${o.tickSeconds} s`} (last {TS})</span></div>`];
+  const parts = [`<div class="summary">${summary}<span class="m">live: the page checks ${o.tickSeconds === 1 ? "every second" : `every ${o.tickSeconds} s`}; the plugin refreshes it on every change and at least every ${o.refreshSeconds ?? 20} s (last refresh {TS})</span></div>`];
   for (const [k, n] of GROUPS) {
     const items = buckets[k];
     if (!items.length) continue;
@@ -248,9 +249,12 @@ function renderSection(model: ProjectModel, name: string): string {
   return `<section id="${esc(name)}" data-section="${esc(name)}"><h2>${esc(title)}</h2>\n<div class="trail-slot" data-trail-slot="${esc(name)}"></div>\n${body}\n</section>`;
 }
 
-export function liveJs(liveHtml: string): string {
-  return `window.__fdLive&&window.__fdLive(${JSON.stringify(liveHtml)});\n`;
+/** `iso` is when the plugin produced this payload; the page script compares it with the browser clock to flag a stalled plugin. */
+export function liveJs(liveHtml: string, iso?: string): string {
+  return `window.__fdLive&&window.__fdLive(${JSON.stringify(liveHtml)}${iso ? `,${JSON.stringify(iso)}` : ""});\n`;
 }
+
+export const STALE_TEXT = "This page stopped updating: comments may not reach the first mate. Ask the first mate to run bin/page heal.";
 
 export function renderProject(model: ProjectModel, agents: Record<string, AgentView>, opts: RenderOpts): Rendered {
   const live = renderLive(model, agents, opts);
@@ -281,9 +285,10 @@ ${CSS}
 </style>
 </head><body><main>
 <h1>${esc(model.title)}</h1>
-<div class="sub">Updated by the first mate on every event · last update <b>${esc(stampLong(opts.now))}</b></div>
+<div class="sub">Kept current by the firstmate-deck plugin · last update <b>${esc(stampLong(opts.now))}</b></div>
 <p class="chan"><b>This page is our channel.</b> Comment on any card or block, then Send; the first mate answers here.</p>
 <div class="trail-slot" data-trail-slot="page"></div>
+<div class="banner b-bad" id="fd-stale" role="status" hidden>${esc(STALE_TEXT)}</div>
 ${banner}
 <nav>${nav}</nav>
 

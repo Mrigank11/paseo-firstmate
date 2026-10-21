@@ -24,6 +24,9 @@
 #                                     the captain's follow-up was answered); optionally replace its text
 #                                     (<=200 chars), context file and options, the way ask does
 #                                     (options are kept when --options is absent)
+#   bin/fleet pending <id> <n>        mark ask n as waiting on the first mate's follow-up (sets pendingSince):
+#                                     the page keeps it under "With the first mate" instead of Needs you.
+#                                     reask and answer clear it. `bin/page reply ... --followup <id>:<n>` calls this
 #   bin/fleet depend <id> <dep-id>... append to depends_on (de-duplicated; deps may be archived ids)
 #   bin/fleet undepend <id> <dep-id>  remove one id from depends_on
 #   bin/fleet answer <id> <n>         resolve ask by 1-based index
@@ -36,6 +39,8 @@
 # Optional fields (add/set): project (kebab slug, empty = none), title (<=80 chars).
 #
 # FLEET_FILE env overrides the path; default is state/fleet.json at repo root.
+# Every command that writes fleet.json holds an flock on <fleet>.lock for its whole read-modify-write, so
+# parallel calls (several tool calls at once) cannot lose each other's update.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -228,9 +233,20 @@ cmd_reask() {
     .tasks |= map(if .id == $id then .asks[$n - 1] |= (.since = $s
       | (if $st == 1 then .text = $t else . end)
       | (if $o != null then .options = $o else . end)
-      | (if $c != "" then .context = $c else . end)) else . end)' ); then
+      | (if $c != "" then .context = $c else . end)
+      | del(.pendingSince)) else . end)' ); then
     [[ -z "$rel" ]] || rm -f "$STATE_DIR/$rel"; exit 1
   fi
+}
+
+cmd_pending() {
+  local id="$1" n="$2"
+  entry_exists "$id" || die "no task $id"
+  [[ "$n" =~ ^[0-9]+$ ]] && ((n >= 1)) || die "pending needs a 1-based ask index (see 'fleet asks')"
+  local count; count="$(jq --arg id "$id" '.tasks | map(select(.id == $id))[0] | (.asks // []) | length' "$FLEET")"
+  ((n <= count)) || die "task $id has only $count open ask(s)"
+  atomic_jq --arg id "$id" --argjson n "$n" --arg s "$(now)" \
+    '.tasks |= map(if .id == $id then .asks[$n - 1].pendingSince = $s else . end)'
 }
 
 cmd_depend() {
@@ -326,8 +342,19 @@ parse_reask_args() {
   else cmd_reask "${pos[0]}" "${pos[1]}" 0 "" "$ctx" "$opts"; fi
 }
 
+# Serialize writers: hold an exclusive lock for the whole command (released when the process exits). The lock
+# file is separate from fleet.json, which is replaced by rename. Without flock(1) the commands still work, unlocked.
+lock() {
+  command -v flock >/dev/null || return 0
+  mkdir -p "$STATE_DIR"
+  exec 9>"$FLEET.lock"
+  flock -w 30 9 || die "could not lock $FLEET.lock within 30 s"
+}
+
 need_jq
 cmd="${1:-}"; shift || true
+case "$cmd" in
+  add|set|ask|reask|pending|depend|undepend|answer|preview|clear-preview|archive) lock;; esac
 case "$cmd" in
   get)           [[ $# -eq 1 ]] || die "usage: fleet get <id>"; cmd_get "$1";;
   by-agent)      [[ $# -eq 1 ]] || die "usage: fleet by-agent <agentId>"; cmd_by_agent "$1";;
@@ -338,6 +365,7 @@ case "$cmd" in
   set)           [[ $# -ge 1 ]] || die "usage: fleet set <id> k=v ..."; cmd_set "$@";;
   ask)           parse_ask_args "$@";;
   reask)         parse_reask_args "$@";;
+  pending)       [[ $# -eq 2 ]] || die "usage: fleet pending <id> <n>"; cmd_pending "$1" "$2";;
   depend)        [[ $# -ge 2 ]] || die "usage: fleet depend <id> <dep-id>..."; cmd_depend "$@";;
   undepend)      [[ $# -eq 2 ]] || die "usage: fleet undepend <id> <dep-id>"; cmd_undepend "$@";;
   answer)        [[ $# -eq 2 ]] || die "usage: fleet answer <id> <n>"; cmd_answer "$1" "$2";;

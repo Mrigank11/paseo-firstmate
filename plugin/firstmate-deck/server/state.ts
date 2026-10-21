@@ -10,10 +10,17 @@ export type Ask = {
   contextMd: string;
   /** Fixed answers offered as buttons (2-6 strings), from `bin/fleet ask --options`. */
   options?: string[];
+  /**
+   * Set while the ask is "with the first mate": an unanswered comment or choice on the ask itself, or the first
+   * mate marked a follow-up pending (`bin/fleet pending`, via `bin/page reply --followup`). Cleared otherwise.
+   */
   repliedAt?: string;
+  /** The comment that moved the ask (absent when it is only marked pending). */
   replyText?: string;
-  /** The captain's reply has been answered via `bin/page reply`. */
+  /** That comment has been answered via `bin/page reply`. */
   replyAnswered?: boolean;
+  /** When the first mate marked a follow-up pending (`bin/fleet pending`); cleared by reask and answer. */
+  pendingSince?: string;
   /** The reply was a click on one of the options. */
   replyChoice?: string;
 };
@@ -115,12 +122,26 @@ function toTask(raw: any, root: string, label: string, inbox: Comment[] = []): T
       if (opts.length >= 2) ask.options = opts;
     }
     const since = Date.parse(a?.since ?? "");
-    let best: Comment | undefined;
-    // a choice belongs to the ask it was made on; a plain comment on the card answers every open ask
-    if (!isNaN(since)) for (const c of inbox) if (c.target === `t-${raw.id}` && c.atMs > since && (!c.choice || c.choice.ask === i + 1) && (!best || c.atMs >= best.atMs)) best = c;
-    if (best) {
-      ask.repliedAt = best.at; ask.replyText = best.text; ask.replyAnswered = best.answered;
-      if (best.choice) ask.replyChoice = best.choice.option;
+    if (typeof a?.pendingSince === "string" && a.pendingSince) ask.pendingSince = a.pendingSince;
+    // Only comments on THIS ask (its block, option buttons or context expander: target "t-<task>#a<n>") move it.
+    // Comments on the card's steps or body (target "t-<task>") are shown in the trail and nothing else.
+    let latest: Comment | undefined; // newest comment on this ask since it was raised
+    let open: Comment | undefined; // newest UNANSWERED one: the immediate "with the first mate" reaction
+    if (!isNaN(since)) {
+      for (const c of inbox) {
+        if (c.target !== `t-${raw.id}#a${i + 1}` || c.atMs <= since) continue;
+        if (!latest || c.atMs >= latest.atMs) latest = c;
+        if (!c.answered && (!open || c.atMs >= open.atMs)) open = c;
+      }
+    }
+    // After the reply, the ask stays with the first mate ONLY if the first mate marked it pending; otherwise it
+    // is back in Needs you.
+    const mover = open ?? (ask.pendingSince ? latest : undefined);
+    if (mover) {
+      ask.repliedAt = mover.at; ask.replyText = mover.text; ask.replyAnswered = mover.answered;
+      if (mover.choice) ask.replyChoice = mover.choice.option;
+    } else if (ask.pendingSince) {
+      ask.repliedAt = ask.pendingSince;
     }
     return ask;
   });
@@ -158,17 +179,6 @@ export function loadProject(root: string, project: string): ProjectModel {
   const fleet: any = fleetText.trim() ? parseJson(fleetText, fleetPath) : { tasks: [] };
   const live: any[] = Array.isArray(fleet?.tasks) ? fleet.tasks : [];
   const tasks = live.filter((t) => t && t.project === project).map((t) => toTask(t, root, fleetPath, inbox));
-  // A captain comment newer than the ask is "with the first mate" while it is unanswered, whatever the task
-  // statuses: right after the captain comments, the next move is the first mate's. Once it is answered, the ask
-  // stays with the first mate only while something in the project is dispatched or running; otherwise the
-  // follow-up is over (or never started) and the ask is the captain's again, even if the first mate forgot
-  // `bin/fleet reask`.
-  if (!tasks.some((t) => t.status === "dispatched" || t.status === "running")) {
-    for (const t of tasks) for (const a of t.asks) {
-      if (a.replyAnswered) { delete a.repliedAt; delete a.replyText; delete a.replyChoice; }
-    }
-  }
-
   const archPath = join(state, "fleet-archive.jsonl");
   const archive: Task[] = [];
   readText(archPath).split("\n").forEach((line, n) => {

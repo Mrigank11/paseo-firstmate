@@ -4,7 +4,7 @@ import { Text, View } from "react-native";
 import { Button, DeckProvider, Muted, openPage, sinceText, totalAsks, useSummary } from "./common";
 
 function NeedsYouBody({ theme, layout }: PluginScreenProps) {
-  const { projects, loading, unavailable } = useSummary();
+  const { projects, loading, unavailable, problem } = useSummary();
   const withAsks = projects.filter((p) => p.needsYou.length > 0);
   const total = totalAsks(projects);
   const pad = layout.compact ? 16 : 28;
@@ -18,6 +18,7 @@ function NeedsYouBody({ theme, layout }: PluginScreenProps) {
         <Muted theme={theme}>Open questions the first mate is waiting on, per project page.</Muted>
       </View>
 
+      {problem ? <Text style={{ color: theme.colors.statusWarning, fontSize: 14 }}>{problem}</Text> : null}
       {unavailable ? (
         <Muted theme={theme} size={14}>Unavailable right now. The deck will retry on its own.</Muted>
       ) : loading ? (

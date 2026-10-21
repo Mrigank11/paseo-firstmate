@@ -1,14 +1,26 @@
-// Small dependency-free Markdown -> HTML for the subset the first mate writes. Raw HTML passes through.
+// Small dependency-free Markdown -> HTML for the subset the first mate writes. Everything is escaped first:
+// raw HTML in the source is shown as text, never passed through (the input can be crew output). Only links to
+// http:, https:, mailto:, #fragments and relative paths become anchors.
 
 const escCode = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+const escText = (s: string) => escCode(s).replace(/"/g, "&quot;").replace(/'/g, "&#x27;");
+
+/** href is already HTML-escaped. Allowed: http(s):, mailto:, #fragment, and relative paths (no scheme at all). */
+export function safeHref(href: string): boolean {
+  // eslint-disable-next-line no-control-regex
+  if (/[\u0000-\u001f\u007f]/.test(href)) return false; // browsers strip these inside a scheme ("java\tscript:")
+  if (/^(https?:|mailto:|#)/i.test(href)) return true;
+  return !/^[^/?]*:/.test(href); // a colon before any / or ? means some other scheme
+}
 
 export function inline(src: string): string {
   const codes: string[] = [];
-  let s = src.replace(/`([^`]+)`/g, (_m, c: string) => {
+  let s = src.replace(/\u0000/g, "").replace(/`([^`]+)`/g, (_m, c: string) => {
     codes.push(`<code>${escCode(c)}</code>`);
     return `\u0000${codes.length - 1}\u0000`;
   });
-  s = s.replace(/\[([^\]]+)\]\(([^)\s]+)\)/g, '<a href="$2">$1</a>');
+  s = escText(s);
+  s = s.replace(/\[([^\]]+)\]\(([^)\s]+)\)/g, (_m, text: string, href: string) => (safeHref(href) ? `<a href="${href}">${text}</a>` : text));
   s = s.replace(/\*\*([^*]+)\*\*/g, "<b>$1</b>");
   s = s.replace(/(^|[^*\w])\*([^*\s][^*]*?)\*(?![*\w])/g, "$1<i>$2</i>");
   return s.replace(/\u0000(\d+)\u0000/g, (_m, i: string) => codes[Number(i)]);
@@ -79,12 +91,6 @@ export function markdown(src: string): string {
         i++;
       }
       out.push(renderList(items));
-      continue;
-    }
-    if (/^\s*</.test(line)) { // raw HTML block: pass through until a blank line
-      const buf: string[] = [];
-      while (i < lines.length && lines[i].trim()) buf.push(lines[i++]);
-      out.push(buf.join("\n"));
       continue;
     }
     const buf: string[] = [];

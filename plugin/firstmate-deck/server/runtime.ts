@@ -2,20 +2,21 @@
 // Lavish poll, and relays page comments to the first mate.
 import { existsSync, readdirSync, readFileSync, statSync, watch, type FSWatcher } from "node:fs";
 import { basename, join, relative } from "node:path";
-import type { DeckConfig } from "./config.ts";
-import { killAllPolls, killStalePoll, lavishEnv, PagePoller, removePid, resolveLavishBin, spawnPoll, writePid } from "./lavish.ts";
+import type { ChildProcess } from "node:child_process";
+import { normalizeRoot, type DeckConfig } from "./config.ts";
+import { hasLivePoll, killAllPolls, killStalePoll, lavishEnv, PagePoller, removePid, resolveLavishBin, spawnPoll, writePid } from "./lavish.ts";
 import { decodePoll } from "./toon.ts";
-import { AgentSource, resolveFirstMate, sendToFirstMate, type Exec, type FirstMate } from "./paseo-cli.ts";
-import { Relay, newEntries } from "./relay.ts";
+import { AgentSource, NO_CLAIM_MESSAGE, NoFirstMateError, resolveFirstMate, sendToFirstMate, type Exec, type FirstMate } from "./paseo-cli.ts";
+import { Relay, newEntries, parseTarget, type TargetInfo } from "./relay.ts";
 import { groupOf, liveJs, renderProject, type AgentView, type Banner } from "./render.ts";
 import { loadProject, type ProjectModel, type Task } from "./state.ts";
-import { appendInbox, inboxPath, pageJsonPath, patchPageJson, pidPath, projectDir, readInbox, readPageJson, updateInbox, writeAtomic, type InboxEntry } from "./store.ts";
+import { appendInbox, inboxPath, pageJsonPath, patchPageJson, pidPath, projectDir, readInbox, readPageJson, updateInbox, writeAtomic, type InboxEntry, type PageJson } from "./store.ts";
 
 export type Summary = {
   project: string; title: string; repo: string | null; pageUrl: string | null; session: "open" | "ended" | "unknown";
   needsYou: { taskId: string; taskTitle: string; text: string; since: string }[];
   running: { taskId: string; taskTitle: string; agentId: string | null; agentStatus: string; current: string; startedAt: string | null }[];
-  counts: { needsYou: number; running: number; next: number; parked: number; done: number };
+  counts: { needsYou: number; withFirstMate: number; running: number; next: number; parked: number; done: number };
   undelivered: number;
   banner: string | null;
 };
@@ -35,6 +36,8 @@ export type DeckOpts = {
 const TICK_MS = 20_000;
 const RESCAN_MS = 30_000;
 const DEBOUNCE_MS = 150;
+/** A poll still running after this long has registered as Lavish's listener. */
+const LISTENER_OK_AFTER_MS = 1200;
 /** Comment state changes (new comment, delivered, answered) render almost at once. */
 const INSTANT_MS = 30;
 /** An undelivered comment turns amber on the page after this long. */
@@ -43,6 +46,9 @@ const IGNORED = /(^|\/)(\.[^/]*|[^/]*\.tmp|[^/]*\.lock|page\.html|[^/]*\.live\.j
 
 const plainTitle = (t: Task) => t.title || t.intent || t.id;
 
+type PollerEntry = { poller: PagePoller; child: ChildProcess | null; last: ChildProcess | null };
+const killEntry = (e: PollerEntry) => { e.poller.stop(); try { e.child?.kill("SIGTERM"); } catch {} };
+
 export class Deck {
   private cfg: DeckConfig = { root: "", firstmateLabel: "firstmate=true" };
   private agents: AgentSource;
@@ -50,7 +56,21 @@ export class Deck {
   private log: (m: string) => void;
   private watchers = new Map<string, FSWatcher>();
   /** Timeline rows posted this process lifetime that still say "awaiting reply". */
-  private openRows = new Map<string, { project: string; agentId: string; ids: string[]; data: { project: string; pageUrl: string | null; at: string; comments: { target: string; text: string }[]; replied: boolean } }>();
+  private openRows = new Map<string, { project: string; agentId: string; ids: string[]; data?: { project: string; pageUrl: string | null; at: string; comments: { target: string; text: string }[]; replied: boolean } }>();
+  /** Projects whose openRows were read back from page.json (after a plugin reload). */
+  private hydrated = new Set<string>();
+  /** Single-flight guards: configure() and reconcilePollers() can be triggered from several places at once. */
+  private cfgFlight: Promise<void> | null = null;
+  private cfgAgain = false;
+  private reconFlight: Promise<void> | null = null;
+  private reconAgain = false;
+  private starting = new Set<string>();
+  /** Last state the poll of each project reported, and why (for the banner and page.json). */
+  private listener = new Map<string, { state: string; detail: string }>();
+  /** The last send failed because nobody is claimed/labelled as first mate (banner text differs). */
+  private noClaim = false;
+  private rootProblem: string | null = null;
+  private memo: { project: string; at: number; model: ProjectModel | null } | null = null;
   private watchedDir = "";
   private timers: ReturnType<typeof setInterval>[] = [];
   private debounce = new Map<string, ReturnType<typeof setTimeout>>();
@@ -59,7 +79,7 @@ export class Deck {
   private sigs = new Map<string, string>();
   private usedViews = new Map<string, string>();
   private agentProjects = new Map<string, Set<string>>();
-  private pollers = new Map<string, { poller: PagePoller; child: { pid?: number; kill: (s?: NodeJS.Signals) => boolean } | null }>();
+  private pollers = new Map<string, PollerEntry>();
   private stalePollsChecked = new Set<string>();
   private failing = new Map<string, number>();
   private webBase = "";
@@ -75,11 +95,19 @@ export class Deck {
     this.log = o.log ?? (() => {});
     this.agents = new AgentSource(o.exec);
     this.relay = new Relay({
-      send: (_p, msg) => {
+      send: async (_p, msg) => {
         const early = this.early && Date.now() - this.early.at < 10_000 ? this.early.p : undefined;
         this.early = null;
-        return sendToFirstMate(o.exec, this.cfg.firstmateLabel, msg, early, this.cfg.root);
+        try {
+          const id = await sendToFirstMate(o.exec, this.cfg.firstmateLabel, msg, early, this.cfg.root);
+          this.noClaim = false;
+          return id;
+        } catch (e) {
+          this.noClaim = e instanceof NoFirstMateError;
+          throw e;
+        }
       },
+      describe: (p, target) => this.describeTarget(p, target),
       markDelivered: (p, ids, at) => this.markDelivered(p, ids, at),
       onQueue: (p, queued, failing) => this.onQueue(p, queued, failing),
       afterSend: (p, entries, agentId) => this.afterSend(p, entries, agentId),
@@ -104,40 +132,64 @@ export class Deck {
     this.relay.stop();
     for (const w of this.watchers.values()) w.close();
     this.watchers.clear();
-    for (const { poller, child } of this.pollers.values()) {
-      poller.stop();
-      try { child?.kill("SIGTERM"); } catch {}
-    }
+    for (const e of this.pollers.values()) killEntry(e);
     this.pollers.clear();
     killAllPolls();
   }
 
-  /** (Re)read settings, (re)attach the watcher, discover projects, reconcile pollers. Runs at start and every rescan. */
-  async configure(): Promise<void> {
+  /**
+   * (Re)read settings, (re)attach the watcher, discover projects, reconcile pollers. Runs at start and every rescan.
+   * One run at a time: a call that arrives mid-run (rescan, settings change, new project) makes the running one go
+   * around once more instead of starting a second, overlapping run.
+   */
+  configure(): Promise<void> {
+    if (this.cfgFlight) { this.cfgAgain = true; return this.cfgFlight; }
+    this.cfgFlight = (async () => {
+      try {
+        do {
+          this.cfgAgain = false;
+          await this.configureOnce();
+        } while (this.cfgAgain && !this.stopped);
+      } finally {
+        this.cfgFlight = null;
+      }
+    })();
+    return this.cfgFlight;
+  }
+
+  private async configureOnce(): Promise<void> {
     if (this.stopped) return;
-    const next = await this.o.readConfig();
+    const raw = await this.o.readConfig();
+    const norm = normalizeRoot(raw.root);
+    const next: DeckConfig = { ...raw, root: norm.root, rootProblem: norm.problem };
     const rootChanged = next.root !== this.cfg.root;
     const lavishChanged = next.lavishPort !== this.cfg.lavishPort || next.lavishStateDir !== this.cfg.lavishStateDir;
     if (rootChanged || lavishChanged) {
-      for (const { poller, child } of this.pollers.values()) { poller.stop(); try { child?.kill("SIGTERM"); } catch {} }
+      for (const e of this.pollers.values()) killEntry(e);
       this.pollers.clear();
     }
     this.cfg = next;
+    if ((norm.problem ?? null) !== this.rootProblem) {
+      this.rootProblem = norm.problem ?? null;
+      if (this.rootProblem) this.log(`PROBLEM: ${this.rootProblem}`);
+    }
     if (rootChanged) {
       this.sigs.clear();
       this.stalePollsChecked.clear();
+      this.hydrated.clear();
       this.log(next.root ? `first mate root: ${next.root}` : "no firstmateRoot configured (settings or FIRSTMATE_ROOT); idle");
     }
     if (!this.cfg.root) return;
     this.attachWatcher(rootChanged);
     const projects = this.projectNames();
+    this.hydrateRows(projects);
     // Comments first: resend what an earlier run left undelivered and get the polls going before anything slow.
     for (const p of projects) {
       if (this.sigs.has(p)) continue;
       const pending = readInbox(inboxPath(this.cfg.root, p)).filter((e) => !e.delivered);
       if (pending.length) this.relay.enqueue(p, pending, 500);
     }
-    await this.reconcilePollers(projects);
+    await this.reconcilePollers();
     if (!this.webBase) await this.detectWebBase(); // page links need the daemon's web address
     for (const p of projects) {
       if (this.sigs.has(p)) continue;
@@ -222,6 +274,7 @@ export class Deck {
   private onFsEvent(rel: string | null): void {
     if (this.stopped) return;
     if (rel === null) return this.scheduleAll("fs", DEBOUNCE_MS);
+    if (rel === "firstmate.json") { this.fmCache = null; return; } // bin/page claim: the next send resolves afresh
     if (rel.endsWith("/inbox.jsonl")) {
       // comment state moved (our own append/mark, or `bin/page reply`): show it at once
       const ip = /^projects\/([^/]+)\//.exec(rel);
@@ -235,7 +288,7 @@ export class Deck {
     m = /^projects\/([^/]+)\/(.*)$/.exec(rel);
     if (!m) return;
     const [, p, rest] = m;
-    if (rest === "page.json") { void this.reconcilePollers(this.projectNames()).catch((e) => this.log(`reconcile failed: ${e}`)); return; }
+    if (rest === "page.json") { void this.reconcilePollers().catch((e) => this.log(`reconcile failed: ${e}`)); return; }
     if (rest === "project.json" || rest.startsWith("sections/")) {
       if (!this.sigs.has(p)) void this.configure();
       this.scheduleRender(p, DEBOUNCE_MS);
@@ -274,7 +327,17 @@ export class Deck {
 
   private bannerFor(project: string, session: string): Banner | undefined {
     const n = this.failing.get(project) ?? 0;
-    if (n > 0) return { kind: "unreachable", text: `First mate unreachable, ${n} comment${n === 1 ? "" : "s"} queued` };
+    if (n > 0) {
+      const q = `${n} comment${n === 1 ? "" : "s"} queued`;
+      return { kind: "unreachable", text: this.noClaim ? `${NO_CLAIM_MESSAGE} (${q})` : `First mate unreachable, ${q}` };
+    }
+    const l = this.listener.get(project);
+    if (session !== "ended" && l?.state === "active-elsewhere") {
+      return { kind: "unreachable", text: `Another process holds this page's Lavish listener, so comments may not be picked up (${l.detail || "unknown holder"}).` };
+    }
+    if (session !== "ended" && l?.state === "error") {
+      return { kind: "unreachable", text: `The plugin cannot poll this page for comments right now (${l.detail || "unknown error"}). Retrying.` };
+    }
     if (session === "ended") return { kind: "ended", text: "This page session has ended. Ask the first mate to reopen it." };
     return undefined;
   }
@@ -336,8 +399,9 @@ export class Deck {
     const pj = readPageJson(pageJsonPath(this.cfg.root, project));
     const target = this.pagePath(project);
     const now = new Date();
+    const banner = this.bannerFor(project, pj.session);
     const r = renderProject(model, views, {
-      now, tickSeconds: 1, paseoAgentUrl: this.agentUrl, banner: this.bannerFor(project, pj.session), pageFile: basename(target),
+      now, tickSeconds: 1, refreshSeconds: Math.round((this.o.tickMs ?? TICK_MS) / 1000), paseoAgentUrl: this.agentUrl, banner, pageFile: basename(target),
     });
     const p2 = (n: number) => String(n).padStart(2, "0");
     const ts = `${p2(now.getHours())}:${p2(now.getMinutes())}:${p2(now.getSeconds())}`;
@@ -347,28 +411,71 @@ export class Deck {
       this.sigs.set(project, r.signature);
       rewrote = true;
     }
-    writeAtomic(target.replace(/\.[^./]*$/, "") + ".live.js", liveJs(r.live.replace(/\{TS\}/g, ts)));
-    patchPageJson(pageJsonPath(this.cfg.root, project), { lastRender: now.toISOString() });
+    writeAtomic(target.replace(/\.[^./]*$/, "") + ".live.js", liveJs(r.live.replace(/\{TS\}/g, ts), now.toISOString()));
+    patchPageJson(pageJsonPath(this.cfg.root, project), { lastRender: now.toISOString(), banner: banner?.text ?? null });
     if (rewrote) this.log(`rendered ${project} (${r.signature.slice(0, 8)})`);
   }
 
   // ---------- Lavish polling ----------
 
-  private async reconcilePollers(projects: string[]): Promise<void> {
+  /** Record the plugin's effective configuration where bin/page can read it (and notice a mismatch). */
+  private stamp(project: string): void {
+    const patch: Partial<PageJson> = {
+      pluginRoot: this.cfg.root,
+      lavishPort: this.cfg.lavishPort ?? process.env.LAVISH_AXI_PORT ?? null,
+      lavishStateDir: this.cfg.lavishStateDir ?? process.env.LAVISH_AXI_STATE_DIR ?? null,
+    };
+    // `bin/page start` resets the listener to "pending"; a poll that is already healthy re-asserts what it last said
+    const l = this.listener.get(project);
+    if (l && readPageJson(pageJsonPath(this.cfg.root, project)).listener === "pending") patch.listener = l.state;
+    patchPageJson(pageJsonPath(this.cfg.root, project), patch);
+  }
+
+  /** One at a time; a call that arrives mid-run makes it go around once more. */
+  reconcilePollers(): Promise<void> {
+    if (this.reconFlight) { this.reconAgain = true; return this.reconFlight; }
+    this.reconFlight = (async () => {
+      try {
+        do {
+          this.reconAgain = false;
+          await this.reconcileOnce();
+        } while (this.reconAgain && !this.stopped);
+      } finally {
+        this.reconFlight = null;
+      }
+    })();
+    return this.reconFlight;
+  }
+
+  private async reconcileOnce(): Promise<void> {
+    if (this.stopped || !this.cfg.root) return;
+    const projects = this.projectNames();
     for (const p of projects) {
       const pj = readPageJson(pageJsonPath(this.cfg.root, p));
       const have = this.pollers.get(p);
       if (pj.session === "open" && !have) await this.startPoller(p);
       else if (pj.session !== "open" && have) {
-        have.poller.stop();
-        try { have.child?.kill("SIGTERM"); } catch {}
+        killEntry(have);
         this.pollers.delete(p);
+        this.listener.delete(p);
       }
+      this.stamp(p);
     }
-    for (const p of [...this.pollers.keys()]) if (!projects.includes(p)) { this.pollers.get(p)!.poller.stop(); this.pollers.delete(p); }
+    // a removed project's poll must not keep holding the Lavish listener
+    for (const p of [...this.pollers.keys()]) if (!projects.includes(p)) { killEntry(this.pollers.get(p)!); this.pollers.delete(p); this.listener.delete(p); }
   }
 
   private async startPoller(project: string): Promise<void> {
+    if (this.starting.has(project) || this.pollers.has(project)) return;
+    this.starting.add(project);
+    try {
+      await this.startPollerInner(project);
+    } finally {
+      this.starting.delete(project);
+    }
+  }
+
+  private async startPollerInner(project: string): Promise<void> {
     const root = this.cfg.root;
     const page = this.pagePath(project);
     const pidFile = pidPath(root, project);
@@ -376,16 +483,23 @@ export class Deck {
       this.stalePollsChecked.add(project);
       if (killStalePoll(pidFile, page)) this.log(`killed a stale poll for ${project}`);
     }
-    try { this.lavishBin ??= await resolveLavishBin(); } catch (e) { this.log(`${e}`); patchPageJson(pageJsonPath(root, project), { listener: "error" }); return; }
+    try { this.lavishBin ??= await resolveLavishBin(); } catch (e) { this.log(`${e}`); this.setListener(project, "error", String(e instanceof Error ? e.message : e)); return; }
+    if (this.stopped || this.pollers.has(project)) return;
     const bin = this.lavishBin;
     const env = lavishEnv({ LAVISH_AXI_PORT: this.cfg.lavishPort, LAVISH_AXI_STATE_DIR: this.cfg.lavishStateDir });
-    const entry: { poller: PagePoller; child: { pid?: number; kill: (s?: NodeJS.Signals) => boolean } | null } = { poller: null as any, child: null };
+    const entry: PollerEntry = { poller: null as any, child: null, last: null };
     entry.poller = new PagePoller({
       run: async () => {
         const sp = spawnPoll(bin, page, env);
         entry.child = sp.child;
+        entry.last = sp.child;
         writePid(pidFile, sp.child.pid);
+        // A poll that is still waiting after a moment holds the Lavish listener (an unavailable listener or any
+        // other error answers within ~200 ms), so the listener is fine even if this poll blocks for minutes.
+        const okTimer = setTimeout(() => { if (entry.child === sp.child) this.setListener(project, "ok", ""); }, LISTENER_OK_AFTER_MS);
+        okTimer.unref?.();
         const res = await sp.result;
+        clearTimeout(okTimer);
         removePid(pidFile, sp.child.pid);
         if (entry.child === sp.child) entry.child = null;
         return res;
@@ -393,17 +507,26 @@ export class Deck {
       decode: (out) => decodePoll(out, bin),
       onBatch: (prompts) => this.ingest(project, prompts),
       onEnded: () => {
-        patchPageJson(pageJsonPath(root, project), { session: "ended", listener: "ok" });
+        this.listener.set(project, { state: "ok", detail: "" });
+        patchPageJson(pageJsonPath(root, project), { session: "ended", listener: "ok", listenerDetail: null });
         this.pollers.delete(project);
         this.log(`session for ${project} ended`);
         this.scheduleRender(project, 0);
       },
-      onListener: (state) => { patchPageJson(pageJsonPath(root, project), { listener: state }); },
+      onListener: (state, detail) => this.setListener(project, state, detail),
+      ownAlive: () => hasLivePoll(page, entry.last),
       log: (m) => this.log(`[poll ${project}] ${m}`),
     });
     this.pollers.set(project, entry);
     entry.poller.start();
     this.log(`polling ${page} for ${project}`);
+  }
+
+  private setListener(project: string, state: "ok" | "active-elsewhere" | "error", detail: string): void {
+    const prev = this.listener.get(project);
+    this.listener.set(project, { state, detail });
+    patchPageJson(pageJsonPath(this.cfg.root, project), { listener: state, listenerDetail: state === "ok" ? null : detail || null });
+    if (prev?.state !== state || (state !== "ok" && prev?.detail !== detail)) this.scheduleRender(project, 0, "listener"); // the banner follows
   }
 
   // ---------- comments ----------
@@ -436,7 +559,8 @@ export class Deck {
     const n = this.undelivered(project);
     const was = this.failing.get(project) ?? 0;
     if (failing) this.failing.set(project, n); else this.failing.delete(project);
-    patchPageJson(pageJsonPath(this.cfg.root, project), { undelivered: n, banner: failing ? this.bannerFor(project, "")?.text ?? null : null });
+    const pj = readPageJson(pageJsonPath(this.cfg.root, project));
+    patchPageJson(pageJsonPath(this.cfg.root, project), { undelivered: n, banner: this.bannerFor(project, pj.session)?.text ?? null });
     if (failing || was) this.scheduleRender(project, 0);
   }
 
@@ -448,6 +572,34 @@ export class Deck {
     this.scheduleRender(project, INSTANT_MS, "delivered");
   }
 
+  /** The task title and open ask texts behind a comment target, so the relayed line needs no lookup. */
+  private describeTarget(project: string, target: string): TargetInfo | undefined {
+    const at = parseTarget(target);
+    if (!at) return undefined;
+    if (!this.memo || this.memo.project !== project || Date.now() - this.memo.at > 500) this.memo = { project, at: Date.now(), model: this.load(project) };
+    const m = this.memo.model;
+    const t = m && [...m.tasks, ...m.archive].find((x) => x.id === at.task);
+    return t ? { title: plainTitle(t), asks: t.asks.map((a) => a.text) } : undefined;
+  }
+
+  // ---------- timeline rows that still say "awaiting reply" (kept in page.json so a reload does not forget them) ----------
+
+  private persistRows(project: string): void {
+    const rows: NonNullable<PageJson["openRows"]> = {};
+    for (const [id, r] of this.openRows) if (r.project === project) rows[id] = { agentId: r.agentId, ids: r.ids };
+    patchPageJson(pageJsonPath(this.cfg.root, project), { openRows: rows });
+  }
+
+  private hydrateRows(projects: string[]): void {
+    for (const p of projects) {
+      if (this.hydrated.has(p)) continue;
+      this.hydrated.add(p);
+      for (const [id, r] of Object.entries(readPageJson(pageJsonPath(this.cfg.root, p)).openRows ?? {})) {
+        if (!this.openRows.has(id)) this.openRows.set(id, { project: p, agentId: r.agentId, ids: r.ids });
+      }
+    }
+  }
+
   private async afterSend(project: string, entries: InboxEntry[], agentId: string): Promise<void> {
     if (!this.o.timelineRow) return;
     const pj = readPageJson(pageJsonPath(this.cfg.root, project));
@@ -455,18 +607,29 @@ export class Deck {
     const data = { project, pageUrl: pj.lavishUrl, at: entries[0].at, comments: entries.map((e) => ({ target: e.target, text: e.text })), replied: false };
     await this.o.timelineRow(agentId, rowId, data);
     this.openRows.set(rowId, { project, agentId, ids: entries.map((e) => e.id), data });
+    this.persistRows(project);
   }
 
   /** bin/page reply marks inbox entries answered; flip each fully answered row to replied (same id replaces it). */
   private async markRowsReplied(project: string): Promise<void> {
     if (!this.o.timelineRow) return;
-    const answered = new Set(readInbox(inboxPath(this.cfg.root, project)).filter((e) => e.answered).map((e) => e.id));
-    for (const [rowId, r] of this.openRows) {
+    const inbox = readInbox(inboxPath(this.cfg.root, project));
+    const answered = new Set(inbox.filter((e) => e.answered).map((e) => e.id));
+    let changed = false;
+    for (const [rowId, r] of [...this.openRows]) {
       if (r.project !== project || !r.ids.every((id) => answered.has(id))) continue;
       this.openRows.delete(rowId);
-      try { await this.o.timelineRow(r.agentId, rowId, { ...r.data, replied: true }); }
+      changed = true;
+      let data = r.data;
+      if (!data) { // the row was read back from page.json after a reload: rebuild its content from the inbox
+        const es = r.ids.map((id) => inbox.find((e) => e.id === id)).filter((e): e is InboxEntry => !!e);
+        if (!es.length) continue;
+        data = { project, pageUrl: readPageJson(pageJsonPath(this.cfg.root, project)).lavishUrl, at: es[0].at, comments: es.map((e) => ({ target: e.target, text: e.text })), replied: false };
+      }
+      try { await this.o.timelineRow(r.agentId, rowId, { ...data, replied: true }); }
       catch (e) { this.log(`timeline row ${rowId} replied-update failed: ${e}`); }
     }
+    if (changed) this.persistRows(project);
   }
 
   /** Send a project's queued comments now instead of waiting out the batch window. */
@@ -484,7 +647,7 @@ export class Deck {
     return id;
   }
 
-  async summary(only?: string): Promise<{ projects: Summary[]; firstmateAgentId: string | null }> {
+  async summary(only?: string): Promise<{ projects: Summary[]; firstmateAgentId: string | null; problem: string | null }> {
     const firstmateAgentId = this.cfg.root ? await this.firstMateId() : null;
     const out: Summary[] = [];
     for (const p of this.cfg.root ? this.projectNames() : []) {
@@ -494,7 +657,7 @@ export class Deck {
       let repo: string | null = null;
       try { repo = JSON.parse(readFileSync(join(projectDir(this.cfg.root, p), "project.json"), "utf8")).repo ?? null; } catch {}
       const pj = readPageJson(pageJsonPath(this.cfg.root, p));
-      const counts = { needsYou: 0, running: 0, next: 0, parked: 0, done: model.archive.filter((a) => !model.tasks.some((t) => t.id === a.id)).length };
+      const counts = { needsYou: 0, withFirstMate: 0, running: 0, next: 0, parked: 0, done: model.archive.filter((a) => !model.tasks.some((t) => t.id === a.id)).length };
       const needsYou: Summary["needsYou"] = [];
       const running: Summary["running"] = [];
       for (const t of model.tasks) {
@@ -504,7 +667,7 @@ export class Deck {
           if (t.asks.length) for (const a of t.asks.filter((a) => !a.repliedAt)) needsYou.push({ taskId: t.id, taskTitle: plainTitle(t), text: a.text, since: a.since ?? "" });
           else needsYou.push({ taskId: t.id, taskTitle: plainTitle(t), text: t.notes || "Needs your call", since: "" });
         } else if (g === "fm") {
-          // the captain replied; the next move is the first mate's, so it is not counted as needing the captain
+          counts.withFirstMate++; // the next move is the first mate's, so it does not count as needing the captain
         } else if (g === "running") {
           counts.running++;
           const v = t.agentId ? this.agents.peek(t.agentId) : undefined;
@@ -517,14 +680,14 @@ export class Deck {
         else if (g === "parked") counts.parked++;
         else counts.next++;
       }
-      const n = this.failing.get(p) ?? 0;
+      const banner = this.bannerFor(p, pj.session);
       out.push({
         project: p, title: model.title, repo, pageUrl: pj.lavishUrl, session: pj.session,
         needsYou, running, counts, undelivered: this.undelivered(p),
-        banner: n > 0 ? this.bannerFor(p, pj.session)!.text : null,
+        banner: banner && banner.kind !== "ended" ? banner.text : null,
       });
     }
-    return { projects: out, firstmateAgentId };
+    return { projects: out, firstmateAgentId, problem: this.rootProblem };
   }
 }
 

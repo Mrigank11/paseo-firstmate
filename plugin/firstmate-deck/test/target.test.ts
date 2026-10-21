@@ -15,9 +15,14 @@ test("real Lavish selector captured from headless Chrome (lavish-axi 0.1.90)", (
   assert.equal(extractTarget("article#t-ab-gap > div:nth-of-type(1) > span", known), "t-ab-gap");
 });
 
-test("steps and ask-context blocks belong to their task", () => {
+test("steps belong to the task card; the ask block, its buttons and its context belong to that ask", () => {
   assert.equal(extractTarget("#s-ab-gap > summary", known), "t-ab-gap");
-  assert.equal(extractTarget("#a-ab-gap-2 > div", known), "t-ab-gap");
+  assert.equal(extractTarget("#a-ab-gap-2 > div", known), "t-ab-gap#a2");
+  assert.equal(extractTarget("article#t-ab-gap > div#a-ab-gap-1 > div.opts > div.opt-row > button.opt", known), "t-ab-gap#a1");
+  assert.equal(extractTarget("article#t-ab-gap > div#a-ab-gap-3 > details#x-ab-gap-3 > div", known), "t-ab-gap#a3");
+  assert.equal(extractTarget("#x-ab-gap-2 > summary", known), "t-ab-gap#a2");
+  assert.equal(extractTarget("#a-ab-gap-1", {}), "t-ab-gap#a1");
+  assert.equal(extractTarget("#a-nope-1 > div", known), "page");
 });
 
 test("sections", () => {
