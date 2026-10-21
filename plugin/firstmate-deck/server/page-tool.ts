@@ -121,7 +121,11 @@ switch (cmd) {
     if (!text) die("note needs text");
     const f = join(projectDir(root, project), "sections", `${section}.md`);
     mkdirSync(join(projectDir(root, project), "sections"), { recursive: true });
-    appendFileSync(f, `- ${stamp()} ${text.replace(/\s*\n\s*/g, " ")}\n`);
+    // the first real note replaces the scaffold's placeholder line instead of sitting under it
+    const before = existsSync(f) ? readFileSync(f, "utf8") : "";
+    const kept = before.split("\n").filter((l) => !Object.values(SECTIONS).includes(l.trim())).join("\n").replace(/^\n+/, "");
+    const line = `- ${stamp()} ${text.replace(/\s*\n\s*/g, " ")}\n`;
+    writeAtomic(f, (kept && !kept.endsWith("\n") ? kept + "\n" : kept) + line);
     break;
   }
   case "status":

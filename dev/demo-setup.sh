@@ -58,6 +58,13 @@ export PASEO_HOME=$PASEO_HOME
 ENV
 echo "decisions.md, fleet.json, page.env ready"
 
+step "plugin settings -> this checkout"
+SETTINGS="$H/plugin-settings/firstmate-deck/deck.json"
+mkdir -p "$(dirname "$SETTINGS")"
+jq -n --arg root "$ROOT" --argjson port "$LAVISH_AXI_PORT" --arg sd "$LAVISH_AXI_STATE_DIR" \
+  '{version: 1, values: {firstmateRoot: $root, firstmateLabel: "firstmate=true", lavishPort: $port, lavishStateDir: $sd}}' >"$SETTINGS"
+echo "firstmateRoot=$ROOT"
+
 step "firstmate-deck plugin"
 if paseo plugin ls --home "$H" --json 2>/dev/null | jq -e '.[] | select(.id == "firstmate-deck")' >/dev/null; then
   paseo plugin reload firstmate-deck --home "$H" | tail -1
@@ -74,7 +81,11 @@ echo "plugin: ${st:-missing}"
 if [[ "${1:-}" == "--no-agent" ]]; then exit 0; fi
 
 step "sandbox first mate"
-fm="$(paseo ls --home "$H" --label firstmate=true --json 2>/dev/null | jq -r '.[0].id // empty')"
+# only one labelled first mate may be live, and it must be this checkout's: archive strays (sandbox only)
+for stray in $(paseo ls --home "$H" --label firstmate=true --json 2>/dev/null | jq -r --arg r "$ROOT" '.[] | select((.cwd | sub("^~"; env.HOME)) != $r) | .id'); do
+  paseo archive "$stray" --force --home "$H" >/dev/null && echo "archived stray first mate $stray"
+done
+fm="$(paseo ls --home "$H" --label firstmate=true --json 2>/dev/null | jq -r --arg r "$ROOT" '[.[] | select((.cwd | sub("^~"; env.HOME)) == $r)][0].id // empty')"
 if [[ -z "$fm" ]]; then
   fm="$(paseo run --home "$H" --no-wait --json --cwd "$ROOT" --title "first mate (sandbox)" \
         --label firstmate=true --provider "$FM_MODEL" --thinking medium --mode bypassPermissions \
