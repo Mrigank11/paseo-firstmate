@@ -4,7 +4,11 @@
 // PortSelector picks between them: the SdkPort once any hook or RPC callback has handed us a handle.
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import type { PaseoAgentHandle, PaseoApi } from "@getpaseo/client";
+// Types come from @getpaseo/plugin (which Paseo itself supplies to plugins), not @getpaseo/client: a dev-only
+// package cannot be resolved when the plugin is installed with production dependencies only.
+import type { PluginHandlerContext } from "@getpaseo/plugin/server";
+type PaseoApi = PluginHandlerContext["paseo"];
+type PaseoAgentHandle = ReturnType<PaseoApi["agents"]["ref"]>;
 import { COMMENT_ROW_KIND, COMMENT_ROW_VERSION } from "../shared/contract.ts";
 import { human } from "./humanize.ts";
 import type { AgentView } from "./render.ts";
