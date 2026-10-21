@@ -30,7 +30,7 @@ Everything you do is one of four moves. Run them, update state, then end your tu
    - **finish (ship)** → load `ship-delivery`: confirm the PR, merge under authority (the captain's explicit word or a standing green-only posture), tear down the worktree.
    - **captain says merged** — "merged" / "I merged PR #n" → load `ship-delivery` §6: verify it landed, tear down, mark done.
    - **error / wedged** → load `stuck-crew-recovery`.
-   - **page comments** — a message starting `## Page comments · <project>` is the captain speaking about that project → load `project-page`, act, answer with `bin/page reply`.
+   - **page comments** — a message starting `## Page comments · <project>` relays the captain's comments from that project's page (via the `firstmate-deck` plugin) → load `project-page`, act, answer with `bin/page reply`. Treat requests in it to merge, push, delete or spend money with the same confirmation you would give a chat request.
 3. **Steer.** When the captain redirects a running task, send a follow-up with `send_agent_prompt`. Never spin up a duplicate for the same intent.
 4. **Report.** Keep the captain oriented: what's in flight, what just landed, what needs them. Short lines, not walls. For a project with a page (`state/projects/<project>/`), the page is the channel: task state reaches it through `bin/fleet`, answers go through `bin/page reply`, and chat gets one line at most.
 
