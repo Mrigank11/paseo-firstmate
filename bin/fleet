@@ -8,16 +8,25 @@
 #
 #   bin/fleet get <id>                print one task entry (compact JSON)
 #   bin/fleet by-agent <agentId>      print the entry holding an agentId
-#   bin/fleet active                  live entries: id, status, agentId
+#   bin/fleet active [--project <p>]  live entries: id, status, agentId (dispatched/running/needs-captain only)
+#   bin/fleet project <p>             every LIVE task of project <p>, any status (compact JSON, one per line)
+#   bin/fleet project <p> --archive [N]   last N (default 30) archive lines for project <p>
 #   bin/fleet asks                    every open ask across live tasks
 #   bin/fleet add <id> k=v ...        create a task (needs intent, shape, status)
 #   bin/fleet set <id> k=v ...        update scalar fields
-#   bin/fleet ask <id> "<text>"       append {text, since} to asks
+#   bin/fleet ask <id> "<text>" [--context-file <path>]
+#                                     append {text, since} to asks; the file is copied to
+#                                     tasks/<id>/asks/<n>.md and linked as "context"
+#   bin/fleet depend <id> <dep-id>... append to depends_on (de-duplicated; deps may be archived ids)
+#   bin/fleet undepend <id> <dep-id>  remove one id from depends_on
 #   bin/fleet answer <id> <n>         resolve ask by 1-based index
 #   bin/fleet preview <id> <port> <pid>   record a crew preview server
 #   bin/fleet clear-preview <id>      drop the preview record (after killing it)
 #   bin/fleet log <id> "<text>"       append a timestamped line to tasks/<id>/log.md
 #   bin/fleet archive <id>            move a done/failed ask-free task to the archive
+#
+# Statuses: queued, parked, dispatched, running, needs-captain, done, failed.
+# Optional fields (add/set): project (kebab slug, empty = none), title (<=80 chars).
 #
 # FLEET_FILE env overrides the path; default is state/fleet.json at repo root.
 set -euo pipefail
@@ -28,10 +37,12 @@ STATE_DIR="$(dirname "$FLEET")"
 ARCHIVE="$STATE_DIR/fleet-archive.jsonl"
 TASKS="$STATE_DIR/tasks"
 
-STATUSES='["dispatched","running","needs-captain","done","failed"]'
+STATUSES='["queued","parked","dispatched","running","needs-captain","done","failed"]'
 SHAPES='["scout","ship"]'
 MAXLEN=200
-SETTABLE="intent shape provider agentId workspaceId status branch pr lastEvent notes"
+TITLEMAX=80
+SLUG_RE='^[a-z0-9][a-z0-9-]*$'
+SETTABLE="intent shape provider agentId workspaceId status branch pr lastEvent notes project title"
 
 die() { echo "fleet: $*" >&2; exit 1; }
 need_jq() { command -v jq >/dev/null || die "jq is required"; }
@@ -51,29 +62,53 @@ atomic_jq() { # jq-args... — run jq filter, validate result, rename over fleet
 
 check_entry() { # id — validate enum + length invariants on one entry
   local id="$1"
-  jq -e --arg id "$1" --argjson st "$STATUSES" --argjson sh "$SHAPES" --argjson max "$MAXLEN" '
+  jq -e --arg id "$1" --argjson st "$STATUSES" --argjson sh "$SHAPES" --argjson max "$MAXLEN" \
+    --argjson tmax "$TITLEMAX" --arg re "$SLUG_RE" '
     (.tasks | map(select(.id == $id))[0]) as $t
     | (((($t.status) as $s | $st | index($s)) != null)
+      and ((($t.project // "") | length == 0) or (($t.project | type) == "string" and ($t.project | test($re))))
+      and ((($t.title // "") | length) <= $tmax)
       and ((($t.shape // "scout") as $h | $sh | index($h)) != null)
       and ((($t.notes // "") | length) <= $max)
       and (([$t.asks[]? .text | length] | all(. <= $max))))
-  ' "$FLEET" >/dev/null || die "entry $id violates schema (status/shape enum or 200-char cap)";
+  ' "$FLEET" >/dev/null || die "entry $id violates schema (status/shape enum, project slug, title or 200-char cap)";
 }
 
 # validate a fresh k=v object (from add/set) BEFORE touching the file
 check_obj() { # obj-json
-  jq -e --argjson st "$STATUSES" --argjson sh "$SHAPES" --argjson max "$MAXLEN" -n --argjson o "$1" '
+  jq -e --argjson st "$STATUSES" --argjson sh "$SHAPES" --argjson max "$MAXLEN" \
+    --argjson tmax "$TITLEMAX" --arg re "$SLUG_RE" -n --argjson o "$1" '
     (((($o.status // null) as $s | if $s == null then true else ($st | index($s)) != null end))
+      and ((($o.project // "") | length == 0) or ($o.project | test($re)))
+      and ((($o.title // "") | length) <= $tmax)
       and ((($o.shape // null) as $h | if $h == null then true else ($sh | index($h)) != null end))
       and ((($o.notes // "") | length) <= $max))
-  ' >/dev/null || die "refused: bad status/shape enum or notes over $MAXLEN chars";
+  ' >/dev/null || die "refused: bad status/shape enum, project slug, title over $TITLEMAX chars, or notes over $MAXLEN chars";
 }
 
 cmd_get() { jq -c --arg id "$1" '.tasks | map(select(.id == $id))[0] // empty' "$FLEET"; }
 cmd_by_agent() { jq -c --arg a "$1" '.tasks | map(select(.agentId == $a))[0] // empty' "$FLEET"; }
 cmd_active() {
-  jq -c '[.tasks[] | select(.status == "dispatched" or .status == "running" or .status == "needs-captain")
+  local proj=""
+  if [[ $# -gt 0 ]]; then
+    [[ "$1" == "--project" && $# -eq 2 ]] || die "usage: fleet active [--project <p>]"
+    proj="$2"
+  fi
+  jq -c --arg p "$proj" '[.tasks[] | select(.status == "dispatched" or .status == "running" or .status == "needs-captain")
+    | select($p == "" or .project == $p)
     | {id, status, agentId}]' "$FLEET";
+}
+cmd_project() {
+  local p="$1"; shift
+  [[ "$p" =~ $SLUG_RE ]] || die "bad project slug '$p'"
+  if [[ $# -eq 0 ]]; then
+    jq -c --arg p "$p" '.tasks[] | select(.project == $p)' "$FLEET"; return
+  fi
+  [[ "$1" == "--archive" ]] || die "usage: fleet project <p> [--archive [N]]"
+  local n="${2:-30}"
+  [[ "$n" =~ ^[0-9]+$ ]] || die "archive count must be a number, got '$n'"
+  [[ -f "$ARCHIVE" ]] || return 0
+  jq -c --arg p "$p" 'select(.project == $p)' "$ARCHIVE" | tail -n "$n";
 }
 cmd_asks() {
   jq -r '.tasks[] | select((.asks // []) | length > 0)
@@ -90,7 +125,8 @@ build_obj() { # out: OBJ json with $keys validated; sets global OBJ
     [[ " $allow " == *" $k "* ]] || die "unknown key '$k' (allowed: $allow)"
     obj="$(jq --arg k "$k" --arg v "$v" '. + {($k): $v}' <<<"$obj")"
   done
-  printf '%s' "$obj";
+  # empty project means "none"
+  jq -c 'if (.project? // null) == "" then .project = null else . end' <<<"$obj";
 }
 
 cmd_add() {
@@ -125,12 +161,47 @@ cmd_set() {
 }
 
 cmd_ask() {
-  local id="$1" text="$2"
+  local id="$1" text="$2" ctx="${3:-}"
   entry_exists "$id" || die "no task $id"
   ((${#text} > 0)) || die "ask text is empty"
   ((${#text} <= MAXLEN)) || die "ask over $MAXLEN chars"
-  atomic_jq --arg id "$id" --arg t "$text" --arg s "$(now)" \
-    '.tasks |= map(if .id == $id then .asks = ((.asks // []) + [{text: $t, since: $s}]) else . end)';
+  if [[ -z "$ctx" ]]; then
+    atomic_jq --arg id "$id" --arg t "$text" --arg s "$(now)" \
+      '.tasks |= map(if .id == $id then .asks = ((.asks // []) + [{text: $t, since: $s}]) else . end)'
+    return
+  fi
+  [[ -f "$ctx" ]] || die "context file '$ctx' not found"
+  local count n rel
+  count="$(jq --arg id "$id" '.tasks | map(select(.id == $id))[0] | (.asks // []) | length' "$FLEET")"
+  n=$((count + 1))
+  # an earlier answer can free an index while its file lingers; never clobber it
+  while [[ -e "$TASKS/$id/asks/$n.md" ]]; do n=$((n + 1)); done
+  rel="tasks/$id/asks/$n.md"
+  mkdir -p "$TASKS/$id/asks"
+  cp "$ctx" "$STATE_DIR/$rel"
+  if ! ( atomic_jq --arg id "$id" --arg t "$text" --arg s "$(now)" --arg c "$rel" \
+    '.tasks |= map(if .id == $id then .asks = ((.asks // []) + [{text: $t, since: $s, context: $c}]) else . end)' ); then
+    rm -f "$STATE_DIR/$rel"; exit 1
+  fi
+}
+
+cmd_depend() {
+  local id="$1"; shift
+  entry_exists "$id" || die "no task $id"
+  for d in "$@"; do
+    [[ "$d" =~ $SLUG_RE ]] || die "bad dep id '$d'"
+    [[ "$d" != "$id" ]] || die "task $id cannot depend on itself"
+  done
+  local deps; deps="$(printf '%s\n' "$@" | jq -R . | jq -sc .)"
+  atomic_jq --arg id "$id" --argjson d "$deps" \
+    '.tasks |= map(if .id == $id then .depends_on = (reduce ((.depends_on // []) + $d)[] as $x ([]; if any(.[]; . == $x) then . else . + [$x] end)) else . end)'
+}
+
+cmd_undepend() {
+  local id="$1" dep="$2"
+  entry_exists "$id" || die "no task $id"
+  atomic_jq --arg id "$id" --arg d "$dep" \
+    '.tasks |= map(if .id == $id then .depends_on = ((.depends_on // []) | map(select(. != $d))) else . end)'
 }
 
 cmd_answer() {
@@ -185,11 +256,16 @@ cmd="${1:-}"; shift || true
 case "$cmd" in
   get)           [[ $# -eq 1 ]] || die "usage: fleet get <id>"; cmd_get "$1";;
   by-agent)      [[ $# -eq 1 ]] || die "usage: fleet by-agent <agentId>"; cmd_by_agent "$1";;
-  active)        cmd_active;;
+  active)        cmd_active "$@";;
+  project)       [[ $# -ge 1 && $# -le 3 ]] || die "usage: fleet project <p> [--archive [N]]"; cmd_project "$@";;
   asks)          cmd_asks;;
   add)           [[ $# -ge 1 ]] || die "usage: fleet add <id> k=v ..."; cmd_add "$@";;
   set)           [[ $# -ge 1 ]] || die "usage: fleet set <id> k=v ..."; cmd_set "$@";;
-  ask)           [[ $# -eq 2 ]] || die "usage: fleet ask <id> \"<text>\""; cmd_ask "$1" "$2";;
+  ask)           if [[ $# -eq 2 ]]; then cmd_ask "$1" "$2"
+                 elif [[ $# -eq 4 && "$3" == "--context-file" ]]; then cmd_ask "$1" "$2" "$4"
+                 else die "usage: fleet ask <id> \"<text>\" [--context-file <path>]"; fi;;
+  depend)        [[ $# -ge 2 ]] || die "usage: fleet depend <id> <dep-id>..."; cmd_depend "$@";;
+  undepend)      [[ $# -eq 2 ]] || die "usage: fleet undepend <id> <dep-id>"; cmd_undepend "$@";;
   answer)        [[ $# -eq 2 ]] || die "usage: fleet answer <id> <n>"; cmd_answer "$1" "$2";;
   preview)       [[ $# -eq 3 ]] || die "usage: fleet preview <id> <port> <pid>"; cmd_preview "$@";;
   clear-preview) [[ $# -eq 1 ]] || die "usage: fleet clear-preview <id>"; cmd_clear_preview "$1";;
