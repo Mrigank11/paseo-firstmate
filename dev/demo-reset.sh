@@ -14,7 +14,8 @@ P=deck-demo
 for id in $(paseo ls --home "$H" --json 2>/dev/null | jq -r '.[].id'); do
   paseo archive "$id" --force --home "$H" >/dev/null && echo "archived agent $id"
 done
-for ws in $(paseo workspace ls --home "$H" --json 2>/dev/null | jq -r '.[] | select((.directory // .cwd // "") | test("deck-demo")) | (.workspaceId // .id)'); do
+# every sandbox workspace except this checkout's own (crew worktrees, test leftovers)
+for ws in $(paseo workspace ls --home "$H" --json 2>/dev/null | jq -r --arg r "$ROOT" '.[] | select(((.cwd // "") | sub("^~"; env.HOME)) != $r) | .workspaceId'); do
   paseo workspace archive "$ws" --home "$H" >/dev/null && echo "archived workspace $ws"
 done
 

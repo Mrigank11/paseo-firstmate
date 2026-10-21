@@ -313,6 +313,8 @@ export class Deck {
   }
 
   private writePage(project: string, model: ProjectModel): void {
+    // a project exists only while its project.json does; never resurrect a deleted project's dir
+    if (!existsSync(join(projectDir(this.cfg.root, project), "project.json"))) return;
     const ids = this.trackedAgents(project, model);
     const views: Record<string, AgentView> = {};
     for (const id of ids) {

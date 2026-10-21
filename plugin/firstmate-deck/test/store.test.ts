@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { existsSync, mkdtempSync, readFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { appendInbox, patchPageJson, readInbox, readPageJson, updateInbox, type InboxEntry } from "../server/store.ts";
@@ -34,6 +34,9 @@ test("page.json patches merge and keep unknown keys", () => {
   const dir = mkdtempSync(join(tmpdir(), "deck-store-"));
   const f = join(dir, "page.json");
   assert.equal(readPageJson(f).session, "unknown");
+  patchPageJson(f, { session: "open" });
+  assert.equal(existsSync(f), false, "no project.json: a deleted project's page.json is never recreated");
+  writeFileSync(join(dir, "project.json"), "{}");
   patchPageJson(f, { lavishUrl: "http://x/s/1", session: "open" });
   patchPageJson(f, { undelivered: 2, lastDelivery: "t" });
   const pj = readPageJson(f);

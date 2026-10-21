@@ -110,6 +110,7 @@ export function readPageJson(path: string): PageJson {
 export function patchPageJson(path: string, patch: Partial<PageJson>): PageJson {
   return withLock(path, () => {
     const cur = readPageJson(path);
+    if (!existsSync(join(dirname(path), "project.json"))) return cur; // project deleted: don't recreate its dir
     const next = { ...cur, ...patch };
     if (JSON.stringify(next) !== JSON.stringify(cur) || !existsSync(path)) writeAtomic(path, JSON.stringify(next, null, 2) + "\n");
     return next;
