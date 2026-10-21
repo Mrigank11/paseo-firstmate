@@ -45,6 +45,8 @@ export class Deck {
   private relay: Relay;
   private log: (m: string) => void;
   private watchers = new Map<string, FSWatcher>();
+  /** Timeline rows posted this process lifetime that still say "awaiting reply". */
+  private openRows = new Map<string, { project: string; agentId: string; ids: string[]; data: { project: string; pageUrl: string | null; at: string; comments: { target: string; text: string }[]; replied: boolean } }>();
   private watchedDir = "";
   private timers: ReturnType<typeof setInterval>[] = [];
   private debounce = new Map<string, ReturnType<typeof setTimeout>>();
@@ -214,6 +216,7 @@ export class Deck {
   private onFsEvent(rel: string | null): void {
     if (this.stopped) return;
     if (rel === null) return this.scheduleAll("fs", DEBOUNCE_MS);
+    if (rel.endsWith("/inbox.jsonl")) { const ip = /^projects\/([^/]+)\//.exec(rel); if (ip) void this.markRowsReplied(ip[1]); return; }
     if (IGNORED.test(rel) && !rel.endsWith("/page.json")) return;
     if (rel === "fleet.json" || rel === "fleet-archive.jsonl") return this.scheduleAll("fleet", DEBOUNCE_MS);
     let m = /^tasks\/[^/]+\/(card\.md|asks\/.*)$/.exec(rel);
@@ -429,9 +432,22 @@ export class Deck {
   private async afterSend(project: string, entries: InboxEntry[], agentId: string): Promise<void> {
     if (!this.o.timelineRow) return;
     const pj = readPageJson(pageJsonPath(this.cfg.root, project));
-    await this.o.timelineRow(agentId, `pc-${entries[0].id}`, {
-      project, pageUrl: pj.lavishUrl, at: entries[0].at, comments: entries.map((e) => ({ target: e.target, text: e.text })), replied: false,
-    });
+    const rowId = `pc-${entries[0].id}`;
+    const data = { project, pageUrl: pj.lavishUrl, at: entries[0].at, comments: entries.map((e) => ({ target: e.target, text: e.text })), replied: false };
+    await this.o.timelineRow(agentId, rowId, data);
+    this.openRows.set(rowId, { project, agentId, ids: entries.map((e) => e.id), data });
+  }
+
+  /** bin/page reply marks inbox entries answered; flip each fully answered row to replied (same id replaces it). */
+  private async markRowsReplied(project: string): Promise<void> {
+    if (!this.o.timelineRow) return;
+    const answered = new Set(readInbox(inboxPath(this.cfg.root, project)).filter((e) => e.answered).map((e) => e.id));
+    for (const [rowId, r] of this.openRows) {
+      if (r.project !== project || !r.ids.every((id) => answered.has(id))) continue;
+      this.openRows.delete(rowId);
+      try { await this.o.timelineRow(r.agentId, rowId, { ...r.data, replied: true }); }
+      catch (e) { this.log(`timeline row ${rowId} replied-update failed: ${e}`); }
+    }
   }
 
   /** Send a project's queued comments now instead of waiting out the batch window. */
