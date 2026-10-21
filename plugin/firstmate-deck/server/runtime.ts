@@ -35,6 +35,10 @@ export type DeckOpts = {
 const TICK_MS = 20_000;
 const RESCAN_MS = 30_000;
 const DEBOUNCE_MS = 150;
+/** Comment state changes (new comment, delivered, answered) render almost at once. */
+const INSTANT_MS = 30;
+/** An undelivered comment turns amber on the page after this long. */
+const LATE_MS = 10_500;
 const IGNORED = /(^|\/)(\.[^/]*|[^/]*\.tmp|[^/]*\.lock|page\.html|[^/]*\.live\.js|inbox\.jsonl)$/;
 
 const plainTitle = (t: Task) => t.title || t.intent || t.id;
@@ -50,6 +54,7 @@ export class Deck {
   private watchedDir = "";
   private timers: ReturnType<typeof setInterval>[] = [];
   private debounce = new Map<string, ReturnType<typeof setTimeout>>();
+  private late = new Set<ReturnType<typeof setTimeout>>();
   private rendering = new Map<string, { again: boolean }>();
   private sigs = new Map<string, string>();
   private usedViews = new Map<string, string>();
@@ -95,6 +100,7 @@ export class Deck {
     this.stopped = true;
     for (const t of this.timers) clearInterval(t);
     for (const t of this.debounce.values()) clearTimeout(t);
+    for (const t of this.late) clearTimeout(t);
     this.relay.stop();
     for (const w of this.watchers.values()) w.close();
     this.watchers.clear();
@@ -216,7 +222,12 @@ export class Deck {
   private onFsEvent(rel: string | null): void {
     if (this.stopped) return;
     if (rel === null) return this.scheduleAll("fs", DEBOUNCE_MS);
-    if (rel.endsWith("/inbox.jsonl")) { const ip = /^projects\/([^/]+)\//.exec(rel); if (ip) void this.markRowsReplied(ip[1]); return; }
+    if (rel.endsWith("/inbox.jsonl")) {
+      // comment state moved (our own append/mark, or `bin/page reply`): show it at once
+      const ip = /^projects\/([^/]+)\//.exec(rel);
+      if (ip) { this.scheduleRender(ip[1], INSTANT_MS, "inbox"); void this.markRowsReplied(ip[1]); }
+      return;
+    }
     if (IGNORED.test(rel) && !rel.endsWith("/page.json")) return;
     if (rel === "fleet.json" || rel === "fleet-archive.jsonl") return this.scheduleAll("fleet", DEBOUNCE_MS);
     let m = /^tasks\/[^/]+\/(card\.md|asks\/.*)$/.exec(rel);
@@ -326,7 +337,7 @@ export class Deck {
     const target = this.pagePath(project);
     const now = new Date();
     const r = renderProject(model, views, {
-      now, tickSeconds: 5, paseoAgentUrl: this.agentUrl, banner: this.bannerFor(project, pj.session), pageFile: basename(target),
+      now, tickSeconds: 1, paseoAgentUrl: this.agentUrl, banner: this.bannerFor(project, pj.session), pageFile: basename(target),
     });
     const p2 = (n: number) => String(n).padStart(2, "0");
     const ts = `${p2(now.getHours())}:${p2(now.getMinutes())}:${p2(now.getSeconds())}`;
@@ -401,11 +412,16 @@ export class Deck {
     let known = { tasks: [] as string[], sections: [] as string[] };
     const model = this.load(project);
     if (model) known = { tasks: [...model.tasks, ...model.archive].map((t) => t.id), sections: model.sections.map((s) => s.name) };
-    const entries = newEntries(project, prompts as any, known);
+    const askText = (task: string, n: number) => model?.tasks.find((t) => t.id === task)?.asks[n - 1]?.text;
+    const entries = newEntries(project, prompts as any, known, new Date(), askText);
     // Inbox first: if anything below fails, the comments are on disk and get retried at the next start.
     const file = inboxPath(this.cfg.root, project);
     appendInbox(file, entries);
     this.log(`${project}: ${entries.length} comment(s) -> inbox`);
+    this.scheduleRender(project, INSTANT_MS, "comment");
+    const late = setTimeout(() => { this.late.delete(late); this.scheduleRender(project, 0, "late"); }, LATE_MS);
+    late.unref?.();
+    this.late.add(late);
     // Look the first mate up now, while the batch window is open, so the send itself is one CLI call.
     this.early = { at: Date.now(), p: resolveFirstMate(this.o.exec, this.cfg.firstmateLabel, this.cfg.root) };
     this.early.p.catch(() => {});
@@ -429,6 +445,7 @@ export class Deck {
     updateInbox(inboxPath(this.cfg.root, project), (e) => { if (set.has(e.id)) e.delivered = true; });
     patchPageJson(pageJsonPath(this.cfg.root, project), { lastDelivery: at, undelivered: this.undelivered(project) });
     this.log(`${project}: delivered ${ids.length} comment(s)`);
+    this.scheduleRender(project, INSTANT_MS, "delivered");
   }
 
   private async afterSend(project: string, entries: InboxEntry[], agentId: string): Promise<void> {

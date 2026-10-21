@@ -1,7 +1,7 @@
 // Delivery of page comments to the first mate. Entries are already in inbox.jsonl when they reach the relay.
 // Batches arriving within BATCH_MS (300 ms: Lavish already hands over one Send as one poll result) become one message; a failed send retries at 2 s, 10 s, 30 s, then every 60 s.
 import { randomBytes } from "node:crypto";
-import type { InboxEntry } from "./store.ts";
+import type { Choice, InboxEntry } from "./store.ts";
 import type { Prompt } from "./toon.ts";
 import { extractTarget, type Known } from "./target.ts";
 
@@ -9,26 +9,59 @@ export const BATCH_MS = 300;
 export const RETRY_MS = [2000, 10_000, 30_000];
 export const RETRY_EVERY_MS = 60_000;
 
-export function newEntries(project: string, prompts: Prompt[], known: Known, now = new Date()): InboxEntry[] {
-  return prompts.map((p) => ({
-    id: `c-${now.getTime().toString(36)}-${randomBytes(3).toString("hex")}`,
-    at: now.toISOString(),
-    project,
-    target: extractTarget(p.selector, known),
-    text: p.prompt,
-    prompt: p,
-    delivered: false,
-    answered: false,
-  }));
+const CONTEXT_MARK = "\n\nContext data:\n";
+
+/**
+ * An ask-choice click, if the prompt is one. lavish-axi folds `queuePrompt(..., {data})` into the prompt text as
+ * "<text>\n\nContext data:\n<pretty JSON>", so the data is read from there (or from a `data` field, if a future
+ * Lavish passes it separately). Returns the choice and the prompt text without the data suffix.
+ */
+export function parseChoice(p: Prompt): { choice: Choice; text: string } | null {
+  let data: any = (p as any).data;
+  let text = p.prompt;
+  const at = text.indexOf(CONTEXT_MARK);
+  if (at >= 0) {
+    if (data === undefined) { try { data = JSON.parse(text.slice(at + CONTEXT_MARK.length)); } catch {} }
+    text = text.slice(0, at);
+  }
+  if (!data || typeof data !== "object" || data.kind !== "ask-choice") return null;
+  const { task, ask, option } = data;
+  if (typeof task !== "string" || !/^[a-z0-9][a-z0-9-]*$/.test(task)) return null;
+  if (!Number.isInteger(ask) || ask < 1 || typeof option !== "string" || !option.trim()) return null;
+  return { choice: { task, ask, option }, text };
+}
+
+export function newEntries(project: string, prompts: Prompt[], known: Known, now = new Date(), askText?: (task: string, ask: number) => string | undefined): InboxEntry[] {
+  return prompts.map((p) => {
+    const picked = parseChoice(p);
+    const base = {
+      id: `c-${now.getTime().toString(36)}-${randomBytes(3).toString("hex")}`,
+      at: now.toISOString(),
+      project,
+      prompt: p,
+      delivered: false,
+      answered: false,
+    };
+    if (picked) {
+      const { choice } = picked;
+      const at = askText?.(choice.task, choice.ask);
+      return { ...base, target: `t-${choice.task}`, text: picked.text, choice: at ? { ...choice, askText: at } : choice };
+    }
+    return { ...base, target: extractTarget(p.selector, known), text: p.prompt };
+  });
 }
 
 const oneLine = (s: string) => s.replace(/\s+/g, " ").trim();
 
-export function formatMessage(project: string, entries: Pick<InboxEntry, "target" | "text">[]): string {
+export function formatMessage(project: string, entries: Pick<InboxEntry, "target" | "text" | "choice">[]): string {
+  const choices = entries.filter((e) => e.choice).map((e) => e.choice!);
   return [
     `## Page comments · ${project}`,
-    ...entries.map((e) => `- [${e.target}] "${oneLine(e.text)}"`),
+    ...entries.map((e) => e.choice
+      ? `- [${e.target}] picked option "${oneLine(e.choice.option)}" for ask ${e.choice.ask}${e.choice.askText ? ` ("${oneLine(e.choice.askText)}")` : ""}`
+      : `- [${e.target}] "${oneLine(e.text)}"`),
     `Reply with: bin/page reply ${project} "<your reply>"`,
+    ...choices.map((c) => `Apply with: bin/fleet answer ${c.task} ${c.ask}, then act on it.`),
   ].join("\n");
 }
 

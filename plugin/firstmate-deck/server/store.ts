@@ -13,7 +13,12 @@ export type InboxEntry = {
   prompt: unknown;
   delivered: boolean;
   answered: boolean;
+  /** Set when the comment is a click on an ask's option button. */
+  choice?: Choice;
 };
+
+/** A click on an ask option: which task and ask (1-based), which option, and the ask text for the message. */
+export type Choice = { task: string; ask: number; option: string; askText?: string };
 
 export type PageJson = {
   lavishUrl: string | null;

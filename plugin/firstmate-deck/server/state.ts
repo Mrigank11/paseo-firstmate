@@ -3,7 +3,20 @@
 import { readFileSync } from "node:fs";
 import { join, resolve, sep } from "node:path";
 
-export type Ask = { text: string; since?: string; context?: string; contextMd: string; repliedAt?: string; replyText?: string };
+export type Ask = {
+  text: string;
+  since?: string;
+  context?: string;
+  contextMd: string;
+  /** Fixed answers offered as buttons (2-6 strings), from `bin/fleet ask --options`. */
+  options?: string[];
+  repliedAt?: string;
+  replyText?: string;
+  /** The captain's reply has been answered via `bin/page reply`. */
+  replyAnswered?: boolean;
+  /** The reply was a click on one of the options. */
+  replyChoice?: string;
+};
 
 export type Task = {
   id: string;
@@ -25,6 +38,17 @@ export type Task = {
 
 export type Section = { name: string; kind: "md" | "html"; content: string };
 
+/** One captain comment from inbox.jsonl, as the page trail shows it. */
+export type TrailComment = {
+  id: string;
+  at: string;
+  target: string;
+  text: string;
+  delivered: boolean;
+  answered: boolean;
+  choice?: { ask: number; option: string };
+};
+
 export type ProjectModel = {
   project: string;
   title: string;
@@ -32,6 +56,8 @@ export type ProjectModel = {
   page?: string;
   sectionTitles: Record<string, string>;
   sections: Section[];
+  /** Every captain comment in the inbox, oldest first. Not part of the page signature (it changes with delivery state). */
+  comments: TrailComment[];
   /** Live index tasks of this project, in file order. */
   tasks: Task[];
   /** Last 30 archive lines of this project, oldest first. */
@@ -54,7 +80,7 @@ function parseJson(text: string, label: string): unknown {
   }
 }
 
-type Comment = { target: string; at: number; atIso: string; text: string };
+type Comment = TrailComment & { atMs: number };
 
 /** Captain comments from inbox.jsonl. Read-only; a missing file or bad lines are skipped. */
 function readInbox(path: string): Comment[] {
@@ -63,8 +89,12 @@ function readInbox(path: string): Comment[] {
     if (!line.trim()) continue;
     try {
       const c = JSON.parse(line);
-      const at = Date.parse(c?.at);
-      if (c && typeof c.target === "string" && typeof c.text === "string" && !isNaN(at)) out.push({ target: c.target, at, atIso: c.at, text: c.text });
+      const atMs = Date.parse(c?.at);
+      if (c && typeof c.target === "string" && typeof c.text === "string" && !isNaN(atMs)) {
+        const ch = c.choice;
+        const choice = ch && typeof ch.option === "string" && Number.isInteger(ch.ask) ? { ask: ch.ask as number, option: ch.option } : undefined;
+        out.push({ id: String(c.id ?? ""), at: c.at, atMs, target: c.target, text: c.text, delivered: c.delivered === true, answered: c.answered === true, ...(choice ? { choice } : {}) });
+      }
     } catch { /* bad line */ }
   }
   return out;
@@ -72,7 +102,7 @@ function readInbox(path: string): Comment[] {
 
 function toTask(raw: any, root: string, label: string, inbox: Comment[] = []): Task {
   if (!raw || typeof raw !== "object" || typeof raw.id !== "string") throw new Error(`${label}: task without a string id`);
-  const asks: Ask[] = (Array.isArray(raw.asks) ? raw.asks : []).map((a: any) => {
+  const asks: Ask[] = (Array.isArray(raw.asks) ? raw.asks : []).map((a: any, i: number) => {
     const stateDir = resolve(root, "state");
     let contextMd = "";
     if (a && typeof a.context === "string" && a.context) {
@@ -80,10 +110,18 @@ function toTask(raw: any, root: string, label: string, inbox: Comment[] = []): T
       if (p.startsWith(stateDir + sep)) contextMd = readText(p);
     }
     const ask: Ask = { text: String(a?.text ?? ""), since: a?.since, context: a?.context, contextMd };
+    if (Array.isArray(a?.options)) {
+      const opts = a.options.filter((o: unknown) => typeof o === "string" && o.length > 0).slice(0, 6) as string[];
+      if (opts.length >= 2) ask.options = opts;
+    }
     const since = Date.parse(a?.since ?? "");
     let best: Comment | undefined;
-    if (!isNaN(since)) for (const c of inbox) if (c.target === `t-${raw.id}` && c.at > since && (!best || c.at >= best.at)) best = c;
-    if (best) { ask.repliedAt = best.atIso; ask.replyText = best.text; }
+    // a choice belongs to the ask it was made on; a plain comment on the card answers every open ask
+    if (!isNaN(since)) for (const c of inbox) if (c.target === `t-${raw.id}` && c.atMs > since && (!c.choice || c.choice.ask === i + 1) && (!best || c.atMs >= best.atMs)) best = c;
+    if (best) {
+      ask.repliedAt = best.at; ask.replyText = best.text; ask.replyAnswered = best.answered;
+      if (best.choice) ask.replyChoice = best.choice.option;
+    }
     return ask;
   });
   return {
@@ -120,11 +158,15 @@ export function loadProject(root: string, project: string): ProjectModel {
   const fleet: any = fleetText.trim() ? parseJson(fleetText, fleetPath) : { tasks: [] };
   const live: any[] = Array.isArray(fleet?.tasks) ? fleet.tasks : [];
   const tasks = live.filter((t) => t && t.project === project).map((t) => toTask(t, root, fleetPath, inbox));
-  // A replied ask is "with the first mate" only while something in the project is in progress. Once no task is
-  // dispatched or running, the follow-up is over (or never started), so the ask is the captain's again, even
-  // if the first mate forgot `bin/fleet reask`.
+  // A captain comment newer than the ask is "with the first mate" while it is unanswered, whatever the task
+  // statuses: right after the captain comments, the next move is the first mate's. Once it is answered, the ask
+  // stays with the first mate only while something in the project is dispatched or running; otherwise the
+  // follow-up is over (or never started) and the ask is the captain's again, even if the first mate forgot
+  // `bin/fleet reask`.
   if (!tasks.some((t) => t.status === "dispatched" || t.status === "running")) {
-    for (const t of tasks) for (const a of t.asks) { delete a.repliedAt; delete a.replyText; }
+    for (const t of tasks) for (const a of t.asks) {
+      if (a.replyAnswered) { delete a.repliedAt; delete a.replyText; delete a.replyChoice; }
+    }
   }
 
   const archPath = join(state, "fleet-archive.jsonl");
@@ -150,6 +192,7 @@ export function loadProject(root: string, project: string): ProjectModel {
     page: typeof cfg.page === "string" && cfg.page ? cfg.page : undefined,
     sectionTitles: cfg.sectionTitles && typeof cfg.sectionTitles === "object" ? cfg.sectionTitles : {},
     sections,
+    comments: inbox.map(({ atMs: _a, ...c }) => c),
     tasks,
     archive: archive.slice(-30),
   };

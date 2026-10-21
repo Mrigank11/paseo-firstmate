@@ -130,5 +130,28 @@ refused "reask text over 200" $F reask q 1 "$(printf 'x%.0s' $(seq 201))"
 refused "reask empty text" $F reask q 1 ""
 refused "reask missing context file" $F reask q 1 "t" --context-file "$T/nope.md"
 
+# options
+reset
+$F add o intent=x shape=scout status=needs-captain >/dev/null
+printf "ctx\n" >"$T/ctx.md"
+$F ask o "Which design?" --options "A index card|B live console|C status board" >/dev/null
+eq "$($F get o | jq -c '.asks[0].options')" '["A index card","B live console","C status board"]'; check "ask --options stored" $?
+$F ask o "With ctx?" --context-file "$T/ctx.md" --options "yes|no" >/dev/null
+eq "$($F get o | jq -c '.asks[1].options')" '["yes","no"]' && [[ -n "$($F get o | jq -r '.asks[1].context')" ]]; check "ask --options + --context-file" $?
+$F ask o "plain?" >/dev/null
+eq "$($F get o | jq -c '.asks[2] | has("options")')" false; check "ask without options has no options key" $?
+refused "options: only one" $F ask o "q?" --options "solo"
+refused "options: seven" $F ask o "q?" --options "a|b|c|d|e|f|g"
+refused "options: over 60 chars" $F ask o "q?" --options "ok|$(printf 'x%.0s' $(seq 61))"
+refused "options: empty choice" $F ask o "q?" --options "a||b"
+refused "options: missing value" $F ask o "q?" --options
+$F reask o 1 >/dev/null
+eq "$($F get o | jq -c '.asks[0].options | length')" 3; check "reask keeps options" $?
+$F reask o 1 --options "X|Y" >/dev/null
+eq "$($F get o | jq -c '.asks[0].options')" '["X","Y"]'; check "reask replaces options" $?
+$F reask o 1 "new text?" --options "P|Q|R" >/dev/null
+eq "$($F get o | jq -r '.asks[0].text')" "new text?" && eq "$($F get o | jq -c '.asks[0].options')" '["P","Q","R"]'; check "reask text + options" $?
+refused "reask bad options" $F reask o 1 --options "one"
+
 echo "---- $pass passed, $fail failed"
 [[ $fail -eq 0 ]]

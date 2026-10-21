@@ -14,13 +14,16 @@
 #   bin/fleet asks                    every open ask across live tasks
 #   bin/fleet add <id> k=v ...        create a task (needs intent, shape, status)
 #   bin/fleet set <id> k=v ...        update scalar fields
-#   bin/fleet ask <id> "<text>" [--context-file <path>]
+#   bin/fleet ask <id> "<text>" [--context-file <path>] [--options "A|B|C"]
 #                                     append {text, since} to asks; the file is copied to
-#                                     tasks/<id>/asks/<n>.md and linked as "context"
-#   bin/fleet reask <id> <n> ["<new text>"] [--context-file <path>]
+#                                     tasks/<id>/asks/<n>.md and linked as "context". --options
+#                                     (2-6 choices, each <=60 chars, "|" separated) stores
+#                                     options:[..]; the page shows them as buttons
+#   bin/fleet reask <id> <n> ["<new text>"] [--context-file <path>] [--options "A|B|C"]
 #                                     reset ask n's "since" to now (back to Needs you on the page after
 #                                     the captain's follow-up was answered); optionally replace its text
-#                                     (<=200 chars) and context file, the way ask does
+#                                     (<=200 chars), context file and options, the way ask does
+#                                     (options are kept when --options is absent)
 #   bin/fleet depend <id> <dep-id>... append to depends_on (de-duplicated; deps may be archived ids)
 #   bin/fleet undepend <id> <dep-id>  remove one id from depends_on
 #   bin/fleet answer <id> <n>         resolve ask by 1-based index
@@ -164,14 +167,25 @@ cmd_set() {
   check_entry "$id";
 }
 
+# options "A|B|C" -> JSON array on stdout; refuses <2 or >6 options, empty or >60-char ones
+parse_options() {
+  local raw="$1" arr
+  arr="$(jq -Rc 'split("|") | map(gsub("^\\s+|\\s+$"; ""))' <<<"$raw")"
+  jq -e 'length >= 2 and length <= 6 and all(.[]; length > 0 and length <= 60)' <<<"$arr" >/dev/null \
+    || die "--options needs 2-6 non-empty choices of at most 60 chars each, separated by |"
+  printf '%s' "$arr"
+}
+
 cmd_ask() {
-  local id="$1" text="$2" ctx="${3:-}"
+  local id="$1" text="$2" ctx="${3:-}" optraw="${4:-}"
   entry_exists "$id" || die "no task $id"
   ((${#text} > 0)) || die "ask text is empty"
   ((${#text} <= MAXLEN)) || die "ask over $MAXLEN chars"
+  local opts="null"
+  [[ -z "$optraw" ]] || opts="$(parse_options "$optraw")"
   if [[ -z "$ctx" ]]; then
-    atomic_jq --arg id "$id" --arg t "$text" --arg s "$(now)" \
-      '.tasks |= map(if .id == $id then .asks = ((.asks // []) + [{text: $t, since: $s}]) else . end)'
+    atomic_jq --arg id "$id" --arg t "$text" --arg s "$(now)" --argjson o "$opts" \
+      '.tasks |= map(if .id == $id then .asks = ((.asks // []) + [{text: $t, since: $s} + (if $o == null then {} else {options: $o} end)]) else . end)'
     return
   fi
   [[ -f "$ctx" ]] || die "context file '$ctx' not found"
@@ -183,14 +197,16 @@ cmd_ask() {
   rel="tasks/$id/asks/$n.md"
   mkdir -p "$TASKS/$id/asks"
   cp "$ctx" "$STATE_DIR/$rel"
-  if ! ( atomic_jq --arg id "$id" --arg t "$text" --arg s "$(now)" --arg c "$rel" \
-    '.tasks |= map(if .id == $id then .asks = ((.asks // []) + [{text: $t, since: $s, context: $c}]) else . end)' ); then
+  if ! ( atomic_jq --arg id "$id" --arg t "$text" --arg s "$(now)" --arg c "$rel" --argjson o "$opts" \
+    '.tasks |= map(if .id == $id then .asks = ((.asks // []) + [{text: $t, since: $s, context: $c} + (if $o == null then {} else {options: $o} end)]) else . end)' ); then
     rm -f "$STATE_DIR/$rel"; exit 1
   fi
 }
 
 cmd_reask() {
-  local id="$1" n="$2" settext="$3" text="$4" ctx="$5"
+  local id="$1" n="$2" settext="$3" text="$4" ctx="$5" optraw="${6:-}"
+  local opts="null"
+  [[ -z "$optraw" ]] || opts="$(parse_options "$optraw")"
   entry_exists "$id" || die "no task $id"
   [[ "$n" =~ ^[0-9]+$ ]] && ((n >= 1)) || die "reask needs a 1-based ask index (see 'fleet asks')"
   local count; count="$(jq --arg id "$id" '.tasks | map(select(.id == $id))[0] | (.asks // []) | length' "$FLEET")"
@@ -208,9 +224,10 @@ cmd_reask() {
     mkdir -p "$TASKS/$id/asks"
     cp "$ctx" "$STATE_DIR/$rel"
   fi
-  if ! ( atomic_jq --arg id "$id" --argjson n "$n" --argjson st "$settext" --arg t "$text" --arg c "$rel" --arg s "$(now)" '
+  if ! ( atomic_jq --arg id "$id" --argjson n "$n" --argjson st "$settext" --arg t "$text" --arg c "$rel" --arg s "$(now)" --argjson o "$opts" '
     .tasks |= map(if .id == $id then .asks[$n - 1] |= (.since = $s
       | (if $st == 1 then .text = $t else . end)
+      | (if $o != null then .options = $o else . end)
       | (if $c != "" then .context = $c else . end)) else . end)' ); then
     [[ -z "$rel" ]] || rm -f "$STATE_DIR/$rel"; exit 1
   fi
@@ -282,6 +299,33 @@ usage() {
   sed -n '2,/^set -euo/p' "$0" | sed 's/^# \?//';
 }
 
+# ask/reask argument parsing: positionals plus --context-file / --options in any order
+parse_ask_args() {
+  local pos=() ctx="" opts=""
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --context-file) [[ $# -ge 2 ]] || die "--context-file needs a path"; ctx="$2"; shift 2;;
+      --options) [[ $# -ge 2 ]] || die "--options needs a value"; opts="$2"; shift 2;;
+      *) pos+=("$1"); shift;;
+    esac
+  done
+  [[ ${#pos[@]} -eq 2 ]] || die "usage: fleet ask <id> \"<text>\" [--context-file <path>] [--options \"A|B|C\"]"
+  cmd_ask "${pos[0]}" "${pos[1]}" "$ctx" "$opts"
+}
+parse_reask_args() {
+  local pos=() ctx="" opts=""
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --context-file) [[ $# -ge 2 ]] || die "--context-file needs a path"; ctx="$2"; shift 2;;
+      --options) [[ $# -ge 2 ]] || die "--options needs a value"; opts="$2"; shift 2;;
+      *) pos+=("$1"); shift;;
+    esac
+  done
+  [[ ${#pos[@]} -eq 2 || ${#pos[@]} -eq 3 ]] || die "usage: fleet reask <id> <n> [\"<new text>\"] [--context-file <path>] [--options \"A|B|C\"]"
+  if [[ ${#pos[@]} -eq 3 ]]; then cmd_reask "${pos[0]}" "${pos[1]}" 1 "${pos[2]}" "$ctx" "$opts"
+  else cmd_reask "${pos[0]}" "${pos[1]}" 0 "" "$ctx" "$opts"; fi
+}
+
 need_jq
 cmd="${1:-}"; shift || true
 case "$cmd" in
@@ -292,14 +336,8 @@ case "$cmd" in
   asks)          cmd_asks;;
   add)           [[ $# -ge 1 ]] || die "usage: fleet add <id> k=v ..."; cmd_add "$@";;
   set)           [[ $# -ge 1 ]] || die "usage: fleet set <id> k=v ..."; cmd_set "$@";;
-  ask)           if [[ $# -eq 2 ]]; then cmd_ask "$1" "$2"
-                 elif [[ $# -eq 4 && "$3" == "--context-file" ]]; then cmd_ask "$1" "$2" "$4"
-                 else die "usage: fleet ask <id> \"<text>\" [--context-file <path>]"; fi;;
-  reask)         if [[ $# -eq 2 ]]; then cmd_reask "$1" "$2" 0 "" ""
-                 elif [[ $# -eq 3 && "$3" != "--context-file" ]]; then cmd_reask "$1" "$2" 1 "$3" ""
-                 elif [[ $# -eq 4 && "$3" == "--context-file" ]]; then cmd_reask "$1" "$2" 0 "" "$4"
-                 elif [[ $# -eq 5 && "$4" == "--context-file" ]]; then cmd_reask "$1" "$2" 1 "$3" "$5"
-                 else die "usage: fleet reask <id> <n> [\"<new text>\"] [--context-file <path>]"; fi;;
+  ask)           parse_ask_args "$@";;
+  reask)         parse_reask_args "$@";;
   depend)        [[ $# -ge 2 ]] || die "usage: fleet depend <id> <dep-id>..."; cmd_depend "$@";;
   undepend)      [[ $# -eq 2 ]] || die "usage: fleet undepend <id> <dep-id>"; cmd_undepend "$@";;
   answer)        [[ $# -eq 2 ]] || die "usage: fleet answer <id> <n>"; cmd_answer "$1" "$2";;

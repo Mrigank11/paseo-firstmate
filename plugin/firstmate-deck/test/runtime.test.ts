@@ -171,3 +171,57 @@ test("summary follows the contract shape", async () => {
   assert.equal(p.pageUrl, null);
   r.deck.stop();
 });
+
+/** The live block html out of page.live.js (a JSON string literal inside a function call). */
+const liveHtml = (f: string): string => {
+  const m = /__fdLive\((".*")\);\n$/s.exec(readFileSync(f, "utf8"));
+  return m ? JSON.parse(m[1]) : "";
+};
+
+test("a polled comment renders on the page at once, then 'first mate has it' once delivered", async () => {
+  const r = rig(FLEET);
+  await r.deck.configure();
+  await r.deck.render("demo");
+  r.deck.ingest("demo", [{ prompt: "please look at this", selector: "#t-t1" }]);
+  const t0 = Date.now();
+  await until(() => /please look at this/.test(liveHtml(r.live)), 1000);
+  assert.ok(Date.now() - t0 < 500, `took ${Date.now() - t0} ms`);
+  await until(() => /first mate has it/.test(liveHtml(r.live)), 1500);
+  assert.equal(r.world.sent.length, 1);
+  r.deck.stop();
+});
+
+test("bin/page reply (inbox.jsonl rewritten from outside) re-renders with 'answered'", async () => {
+  const r = rig(FLEET);
+  await r.deck.configure();
+  await r.deck.render("demo");
+  r.deck.ingest("demo", [{ prompt: "ping", selector: "#t-t1" }]);
+  await until(() => /first mate has it/.test(liveHtml(r.live)), 1500);
+  const f = join(r.pdir, "inbox.jsonl");
+  const rows = readFileSync(f, "utf8").trim().split("\n").map((l) => ({ ...JSON.parse(l), answered: true }));
+  writeFileSync(join(r.pdir, ".inbox.jsonl.tmp"), rows.map((x) => JSON.stringify(x) + "\n").join(""));
+  renameSync(join(r.pdir, ".inbox.jsonl.tmp"), f);
+  const t0 = Date.now();
+  await until(() => /class="st st-answered">answered/.test(liveHtml(r.live)), 1000);
+  assert.ok(Date.now() - t0 < 500, `took ${Date.now() - t0} ms`);
+  r.deck.stop();
+});
+
+test("an ask-choice prompt is stored with its choice and shows 'You picked' immediately; the message carries it", async () => {
+  const r = rig({ tasks: [{ id: "t1", intent: "x", title: "Pick one", status: "needs-captain", project: "demo", asks: [{ text: "Which design?", since: "2026-10-21T09:00:00Z", options: ["A card", "B console"] }] }] });
+  await r.deck.configure();
+  await r.deck.render("demo");
+  assert.match(liveHtml(r.live), /class="opt"/);
+  const data = JSON.stringify({ kind: "ask-choice", task: "t1", ask: 1, option: "B console" }, null, 2);
+  r.deck.ingest("demo", [{ prompt: `Picked: B console\n\nContext data:\n${data}`, selector: "article#t-t1" }]);
+  await until(() => /You picked <b>B console<\/b> · the first mate is applying it/.test(liveHtml(r.live)), 1000);
+  const [e] = readInbox(join(r.pdir, "inbox.jsonl"));
+  assert.equal(e.target, "t-t1");
+  assert.deepEqual(e.choice, { task: "t1", ask: 1, option: "B console", askText: "Which design?" });
+  await until(() => r.world.sent.length === 1, 1500);
+  assert.match(r.world.sent[0], /- \[t-t1\] picked option "B console" for ask 1 \("Which design\?"\)/);
+  assert.match(r.world.sent[0], /Apply with: bin\/fleet answer t1 1, then act on it\.$/);
+  const g = liveHtml(r.live);
+  assert.ok(g.indexOf("With the first mate") > 0 && !/Needs you/.test(g));
+  r.deck.stop();
+});

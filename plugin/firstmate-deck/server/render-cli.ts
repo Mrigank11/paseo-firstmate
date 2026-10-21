@@ -28,7 +28,7 @@ try {
   const now = new Date();
   const r = renderProject(model, agents, {
     now,
-    tickSeconds: 5,
+    tickSeconds: 1,
     paseoAgentUrl: (id) => `${process.env.PASEO_WEB_URL ?? "http://localhost:6767/agent/"}${id}`,
     pageFile: basename(target),
   });

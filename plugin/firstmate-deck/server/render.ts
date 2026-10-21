@@ -4,7 +4,7 @@ import { cut } from "./humanize.ts";
 import { markdown } from "./markdown.ts";
 import { pageScript } from "./page-script.ts";
 import { CSS } from "./style.ts";
-import type { ProjectModel, Task } from "./state.ts";
+import type { ProjectModel, Task, TrailComment } from "./state.ts";
 
 export type AgentView = {
   status: "initializing" | "idle" | "running" | "error" | "closed" | "archived" | "unknown";
@@ -127,7 +127,28 @@ function agentBlock(t: Task, group: GroupKey, view: AgentView | undefined, o: Re
   );
 }
 
-type Ctx = { byId: Map<string, Task>; unblocks: Map<string, string[]>; agents: Record<string, AgentView>; o: RenderOpts };
+const DAY_MS = 24 * 3600 * 1000;
+const LATE_MS = 10_000;
+
+/** The captain's comment trail for one target: latest comment, a count, and where it stands (from the inbox flags). */
+export function trailHtml(all: TrailComment[], target: string, now: Date): string {
+  const mine = all.filter((c) => c.target === target && (!c.answered || now.getTime() - Date.parse(c.at) < DAY_MS));
+  if (!mine.length) return "";
+  const last = mine.reduce((a, b) => (Date.parse(b.at) >= Date.parse(a.at) ? b : a));
+  const d = new Date(last.at);
+  const hm = isNaN(d.getTime()) ? "" : ` · ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  const said = last.choice
+    ? `picked <b>${esc(cut(last.choice.option, 100))}</b>`
+    : `“${esc(cut(last.text.replace(/\s+/g, " ").trim(), 100))}”`;
+  let chip: string;
+  if (last.answered) chip = `<span class="st st-answered">answered</span>`;
+  else if (last.delivered) chip = `<span class="st st-has">first mate has it</span>`;
+  else chip = `<span class="st ${now.getTime() - Date.parse(last.at) > LATE_MS ? "st-late" : "st-send"}">sending…</span>`;
+  const n = mine.length > 1 ? `<span class="tr-n">${mine.length} comments</span>` : "";
+  return `<div class="trail"><span class="tr-who">💬 You${hm}</span><span class="tr-txt">${said}</span>${n}${chip}</div>`;
+}
+
+type Ctx = { byId: Map<string, Task>; unblocks: Map<string, string[]>; agents: Record<string, AgentView>; o: RenderOpts; comments: TrailComment[] };
 
 function row(t: Task, group: GroupKey, ctx: Ctx): string {
   const name = t.title || t.intent || t.id;
@@ -137,16 +158,30 @@ function row(t: Task, group: GroupKey, ctx: Ctx): string {
   const out = [
     `<article class="task s-${group}${failed ? " s-failed" : ""}" id="t-${esc(t.id)}">`,
     `<div class="tt"><span class="ttl">${title}</span>${chip}</div>`,
+    trailHtml(ctx.comments, `t-${t.id}`, ctx.o.now),
   ];
   t.asks.forEach((a, i) => {
-    if (a.repliedAt) {
+    if (a.repliedAt && a.replyChoice) {
+      out.push(
+        `<div class="ask asked">${a.text}</div>` +
+        `<div class="ask replied picked">You picked <b>${esc(a.replyChoice)}</b> · the first mate is applying it</div>`,
+      );
+    } else if (a.repliedAt) {
       const d = new Date(a.repliedAt);
       const hm = isNaN(d.getTime()) ? "" : ` ${pad(d.getHours())}:${pad(d.getMinutes())}`;
       out.push(
         `<div class="ask asked">${a.text}</div>` +
         `<div class="ask replied">You replied${hm}: “${esc(cut(a.replyText ?? "", 120))}” · the first mate is on it</div>`,
       );
-    } else out.push(`<div class="ask"><b>Your call:</b> ${a.text}</div>`);
+    } else {
+      out.push(`<div class="ask"><b>Your call:</b> ${a.text}</div>`);
+      if (a.options?.length) {
+        const key = `ask-${t.id}-${i + 1}`;
+        const btns = a.options.map((o) =>
+          `<button type="button" class="opt" data-task="${esc(t.id)}" data-ask="${i + 1}" data-opt="${esc(o)}" data-title="${esc(plain(name))}">${esc(o)}</button>`).join("");
+        out.push(`<div class="opts" data-key="${esc(key)}"><div class="opt-row">${btns}<span class="hint">or comment on the card</span></div><div class="pickline" role="status" hidden></div></div>`);
+      }
+    }
     if (a.contextMd.trim()) {
       out.push(`<details class="actx" id="a-${esc(t.id)}-${i + 1}"><summary>Context</summary><div>${markdown(a.contextMd)}</div></details>`);
     }
@@ -174,7 +209,7 @@ function renderLive(model: ProjectModel, agents: Record<string, AgentView>, o: R
   const byId = new Map(all.map((t) => [t.id, t]));
   const unblocks = new Map<string, string[]>();
   for (const t of all) for (const d of t.depends_on) unblocks.set(d, [...(unblocks.get(d) ?? []), t.id]);
-  const ctx: Ctx = { byId, unblocks, agents, o };
+  const ctx: Ctx = { byId, unblocks, agents, o, comments: model.comments };
 
   const buckets: Record<GroupKey, { t: Task; g: GroupKey }[]> = { you: [], fm: [], running: [], next: [], parked: [], done: [] };
   for (const t of model.tasks) buckets[groupOf(t, true)].push({ t, g: groupOf(t, true) });
@@ -187,7 +222,7 @@ function renderLive(model: ProjectModel, agents: Record<string, AgentView>, o: R
     .map(([k, n]) => `<a href="#g-${k}" class="sum c-${k}">${buckets[k].length} ${k === "you" ? "needs you" : n.toLowerCase()}</a>`)
     .join("");
   if (busy) summary += `<span class="sum c-running">${busy} agent${busy > 1 ? "s" : ""} working</span>`;
-  const parts = [`<div class="summary">${summary}<span class="m">live, checked every ${o.tickSeconds} s (last {TS})</span></div>`];
+  const parts = [`<div class="summary">${summary}<span class="m">live, checked ${o.tickSeconds === 1 ? "every second" : `every ${o.tickSeconds} s`} (last {TS})</span></div>`];
   for (const [k, n] of GROUPS) {
     const items = buckets[k];
     if (!items.length) continue;
@@ -197,6 +232,12 @@ function renderLive(model: ProjectModel, agents: Record<string, AgentView>, o: R
     else parts.push(`<section class="grp" id="g-${k}">${h}\n${rows}</section>`);
   }
   if (parts.length === 1) parts.push(`<div class="m">No tasks for this project yet.</div>`);
+  // Trails for the page and the sections live outside the live block (page.html is not rewritten per comment);
+  // the page script copies these into their slots after every swap.
+  const slots = ["page", ...model.sections.map((s) => s.name)]
+    .map((k) => [k, trailHtml(model.comments, k, o.now)] as const).filter(([, h]) => h)
+    .map(([k, h]) => `<div data-trail-for="${esc(k)}">${h}</div>`).join("");
+  parts.push(`<div hidden data-trails>${slots}</div>`);
   return parts.join("\n");
 }
 
@@ -204,7 +245,7 @@ function renderSection(model: ProjectModel, name: string): string {
   const s = model.sections.find((x) => x.name === name)!;
   const title = model.sectionTitles[name] ?? DEFAULT_TITLES[name] ?? titleCase(name);
   const body = s.kind === "html" ? s.content : markdown(s.content);
-  return `<section id="${esc(name)}" data-section="${esc(name)}"><h2>${esc(title)}</h2>\n${body}\n</section>`;
+  return `<section id="${esc(name)}" data-section="${esc(name)}"><h2>${esc(title)}</h2>\n<div class="trail-slot" data-trail-slot="${esc(name)}"></div>\n${body}\n</section>`;
 }
 
 export function liveJs(liveHtml: string): string {
@@ -218,7 +259,7 @@ export function renderProject(model: ProjectModel, agents: Record<string, AgentV
 
   const sig = createHash("sha1")
     .update(JSON.stringify([
-      model,
+      { ...model, comments: undefined },
       opts.banner ?? null,
       Object.keys(agents).sort().map((id) => [id, agents[id].status]),
     ]))
@@ -242,6 +283,7 @@ ${CSS}
 <h1>${esc(model.title)}</h1>
 <div class="sub">Updated by the first mate on every event · last update <b>${esc(stampLong(opts.now))}</b></div>
 <p class="chan"><b>This page is our channel.</b> Comment on any card or block, then Send; the first mate answers here.</p>
+<div class="trail-slot" data-trail-slot="page"></div>
 ${banner}
 <nav>${nav}</nav>
 

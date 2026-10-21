@@ -30,6 +30,8 @@ The page re-renders on its own within seconds of any of these writes.
 
 **Every question for the captain about this project is an ask on the page, never a chat question.** That includes "merge these branches?" and "which format?" at the end of a task. If a task is already done or archived, raise the ask on the task anyway before archiving it. `bin/fleet archive` refuses tasks with open asks, so the task stays visible until the captain answers.
 
+**Use `--options` whenever an ask has a fixed set of answers** (A/B/C, yes/no): `bin/fleet ask <id> "<question>" --options "A index card|B live console|C status board"` (2 to 6 options, each ≤60 chars; combine with `--context-file`; `reask` keeps or replaces them). The page shows them as buttons under the question and the captain answers with one click, no typing.
+
 **Asks are BLUF.** The ask text is the question the captain answers, readable on its own: "Ship without onboarding_path, or block staging on it?" The reasoning, options and evidence go in the context file, which opens under an expander.
 
 ## Answering page comments
@@ -37,6 +39,7 @@ The page re-renders on its own within seconds of any of these writes.
 A message starting `## Page comments · <project>` lists each comment with the card or section it was made on (`t-<taskId>` is a task card).
 
 1. Act on each comment: steer crew, answer an ask (`bin/fleet answer`), write a note, or dispatch.
+   A line like `- [t-<task>] picked option "<option>" for ask <n> (...)` (with `Apply with: bin/fleet answer <task> <n>`) is an `ask-choice` click: it IS the answer. Run `bin/fleet answer <task> <n>`, act on the choice, then reply. Don't ask the captain to confirm it.
 2. Answer once per message, with `bin/page reply <project> "<reply>"` (or `-` to read Markdown from stdin). Say what you did, briefly, and give one line per comment when there are several.
 3. A comment on an ask card that asks for more information instead of answering ("show me options in detail") is not an answer. Keep the ask open, reply saying what you're doing, and dispatch the work. The page then shows the ask as "With the first mate". Once the follow-up is ready, run `bin/fleet reask <id> <n>` (optionally with sharper text: `bin/fleet reask <id> <n> "<new text>"`) so it returns to Needs you.
 4. Chat stays quiet. Don't repeat the reply in chat.
