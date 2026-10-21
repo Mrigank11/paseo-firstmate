@@ -38,6 +38,8 @@ export type PageJson = {
   lavishStateDir?: string | null;
   /** Timeline rows still saying "awaiting reply": row id -> the agent that got them and the inbox ids they carry. */
   openRows?: Record<string, { agentId: string; ids: string[] }>;
+  /** Last-known agent pills (agent id -> view), shown marked stale when the daemon cannot be asked (e.g. right after a reload). */
+  agentViews?: Record<string, import("./render.ts").AgentView>;
   /** Banner text currently shown on the page, if any. */
   banner?: string | null;
 };

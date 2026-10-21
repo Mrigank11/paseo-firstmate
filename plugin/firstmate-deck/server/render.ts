@@ -13,11 +13,17 @@ export type AgentView = {
   model?: string;
   thinking?: string;
   stepCount: number;
+  /** `stepCount` is a lower bound: only a bounded tail of the agent's timeline was read. */
+  stepsAtLeast?: boolean;
+  /** Last-known state, shown while the daemon cannot be asked (no SDK handle yet, or the last refresh failed). */
+  stale?: boolean;
   /** Already humanized, oldest first, max 8. */
   recent: string[];
   /** The DONE:/BLOCKED: line, if any. */
   final?: string;
 };
+
+export const STALE_PILL = "status unknown (reconnecting)";
 
 export type Banner = { kind: "unreachable" | "ended" | "plugin-down"; text: string };
 
@@ -102,16 +108,16 @@ function agentBlock(t: Task, group: GroupKey, view: AgentView | undefined, o: Re
     return `<div class="ag"><span class="pill p-${cls}"><span class="dot"></span>${label}</span><a class="open" href="${url}">Open in Paseo</a></div>`;
   }
   const a: AgentView = view ?? { status: "unknown", stepCount: 0, recent: [] };
-  const ast = a.status;
-  const [cls, label] = pill(group, ast);
+  const ast = a.stale ? "unknown" : a.status;
+  const [cls, label] = a.stale ? ["idle", STALE_PILL] : pill(group, ast);
   const c = a.createdAt ? new Date(a.createdAt) : null;
   const u = a.updatedAt ? new Date(a.updatedAt) : null;
   const ok = (d: Date | null): d is Date => !!d && !isNaN(d.getTime());
-  const el = ok(c) && ok(u)
+  const el = !a.stale && ok(c) && ok(u)
     ? ACTIVE.has(ast) ? `${dur((o.now.getTime() - c.getTime()) / 1000)} so far` : `took ${dur((u.getTime() - c.getTime()) / 1000)}`
     : "";
   const model = [a.model, a.thinking].filter(Boolean).join(" ");
-  const facts = [a.stepCount ? `${a.stepCount} steps` : "", el, model, ast === "archived" ? "archived" : ""].filter(Boolean).join(" · ");
+  const facts = [a.stepCount ? `${a.stepCount}${a.stepsAtLeast ? "+" : ""} steps` : "", el, model, ast === "archived" ? "archived" : ""].filter(Boolean).join(" · ");
   const cur = ACTIVE.has(ast) && a.recent.length ? a.recent[a.recent.length - 1] : a.final || a.recent[a.recent.length - 1] || "";
   const head =
     `<div class="ag"><span class="pill p-${cls}"><span class="dot"></span>${esc(label)}</span>` +

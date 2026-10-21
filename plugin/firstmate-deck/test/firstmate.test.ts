@@ -3,7 +3,8 @@ import assert from "node:assert/strict";
 import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { NoFirstMateError, resolveFirstMate, sendToFirstMate } from "../server/paseo-cli.ts";
+import { CliPort } from "../server/paseo-cli.ts";
+import { NoFirstMateError, PortSelector, resolveFirstMate, sendToFirstMate } from "../server/paseo-port.ts";
 
 // A checkout with optional claim, live fleet tasks and archive lines.
 function checkout(o: { claim?: string; crew?: string[]; archived?: string[] } = {}) {
@@ -31,20 +32,20 @@ function fakeExec(all: { id: string; status: string; created?: string }[], label
 test("the claimed agent wins over any label, and nothing is ever relabelled", async () => {
   const root = checkout({ claim: "fm-new" });
   const f = fakeExec([{ id: "fm-new", status: "idle" }, { id: "fm-old", status: "idle", created: "2026-10-22T00:00:00Z" }], ["fm-old"]);
-  assert.deepEqual(await resolveFirstMate(f.exec, "firstmate=true", root), { id: "fm-new", status: "idle" });
+  assert.deepEqual(await resolveFirstMate(new CliPort(f.exec), "firstmate=true", root), { id: "fm-new", status: "idle" });
   assert.equal(f.calls.some((c) => c[0] === "agent"), false);
 });
 
 test("a stale label loses to the claim", async () => {
   const root = checkout({ claim: "fm-new" });
   const f = fakeExec([{ id: "fm-old", status: "idle" }, { id: "fm-new", status: "running" }], ["fm-old"]);
-  assert.equal((await resolveFirstMate(f.exec, "firstmate=true", root))?.id, "fm-new");
+  assert.equal((await resolveFirstMate(new CliPort(f.exec), "firstmate=true", root))?.id, "fm-new");
 });
 
 test("a claim whose agent is gone (archived) falls back to the label", async () => {
   const root = checkout({ claim: "fm-gone" });
   const f = fakeExec([{ id: "fm-labelled", status: "idle" }], ["fm-labelled"]);
-  assert.equal((await resolveFirstMate(f.exec, "firstmate=true", root))?.id, "fm-labelled");
+  assert.equal((await resolveFirstMate(new CliPort(f.exec), "firstmate=true", root))?.id, "fm-labelled");
 });
 
 test("without a claim, the newest live labelled agent wins and a crew id carrying the label is excluded", async () => {
@@ -55,25 +56,25 @@ test("without a claim, the newest live labelled agent wins and a crew id carryin
     { id: "fm-a", status: "idle", created: "2026-10-21T08:00:00Z" },
     { id: "fm-b", status: "idle", created: "2026-10-21T09:00:00Z" },
   ], ["scout-1", "scout-0", "fm-a", "fm-b"]);
-  assert.equal((await resolveFirstMate(f.exec, "firstmate=true", root))?.id, "fm-b");
+  assert.equal((await resolveFirstMate(new CliPort(f.exec), "firstmate=true", root))?.id, "fm-b");
 });
 
 test("no claim and no label: null, even when an agent runs in the checkout", async () => {
   const root = checkout();
   const f = fakeExec([{ id: "scout", status: "running" }], []);
-  assert.equal(await resolveFirstMate(f.exec, "firstmate=true", root), null);
+  assert.equal(await resolveFirstMate(new CliPort(f.exec), "firstmate=true", root), null);
   assert.equal(f.calls.some((c) => c[0] === "agent"), false, "no auto-labelling");
 });
 
 test("a label held only by crew resolves to null", async () => {
   const root = checkout({ crew: ["scout-1"] });
   const f = fakeExec([{ id: "scout-1", status: "idle" }], ["scout-1"]);
-  assert.equal(await resolveFirstMate(f.exec, "firstmate=true", root), null);
+  assert.equal(await resolveFirstMate(new CliPort(f.exec), "firstmate=true", root), null);
 });
 
 test("sending with nobody to send to throws NoFirstMateError with the claim hint", async () => {
   const root = checkout();
   const f = fakeExec([], []);
-  await assert.rejects(sendToFirstMate(f.exec, "firstmate=true", "hi", undefined, root), (e: Error) =>
+  await assert.rejects(sendToFirstMate(new PortSelector(new CliPort(f.exec)), "firstmate=true", "hi", undefined, root), (e: Error) =>
     e instanceof NoFirstMateError && /No first mate claimed this checkout: run bin\/page claim in the first mate's session/.test(e.message));
 });

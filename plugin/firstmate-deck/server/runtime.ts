@@ -6,7 +6,9 @@ import type { ChildProcess } from "node:child_process";
 import { normalizeRoot, type DeckConfig } from "./config.ts";
 import { hasLivePoll, killAllPolls, killStalePoll, lavishEnv, PagePoller, removePid, resolveLavishBin, spawnPoll, writePid } from "./lavish.ts";
 import { decodePoll } from "./toon.ts";
-import { AgentSource, NO_CLAIM_MESSAGE, NoFirstMateError, resolveFirstMate, sendToFirstMate, type Exec, type FirstMate } from "./paseo-cli.ts";
+import { AgentViews } from "./agent-views.ts";
+import { CliPort, type Exec } from "./paseo-cli.ts";
+import { NO_CLAIM_MESSAGE, NoFirstMateError, PortSelector, resolveFirstMate, sendToFirstMate, type CommentRowData, type FirstMate } from "./paseo-port.ts";
 import { Relay, newEntries, parseTarget, type TargetInfo } from "./relay.ts";
 import { groupOf, liveJs, renderProject, type AgentView, type Banner } from "./render.ts";
 import { loadProject, type ProjectModel, type Task } from "./state.ts";
@@ -22,12 +24,13 @@ export type Summary = {
 };
 
 export type DeckOpts = {
+  /** The `paseo` CLI: the cold-start delivery fallback, and `paseo status` for the agent links. */
   exec: Exec;
+  /** Which API to use; defaults to the CLI until `capture()` hands it an SDK handle. */
+  ports?: PortSelector;
   home?: string;
   log?: (msg: string) => void;
   readConfig: () => Promise<DeckConfig>;
-  /** Append the timeline row for delivered comments, if an SDK handle is available (else no-op). */
-  timelineRow?: (agentId: string, rowId: string, data: { project: string; pageUrl: string | null; at: string; comments: { target: string; text: string }[]; replied: boolean }) => Promise<void>;
   batchMs?: number;
   tickMs?: number;
   rescanMs?: number;
@@ -44,6 +47,9 @@ const INSTANT_MS = 30;
 const LATE_MS = 10_500;
 const IGNORED = /(^|\/)(\.[^/]*|[^/]*\.tmp|[^/]*\.lock|page\.html|[^/]*\.live\.js|inbox\.jsonl)$/;
 
+/** Shown for an agent nothing is known about yet (no SDK handle and nothing remembered). */
+const STALE_UNKNOWN: AgentView = { status: "unknown", stepCount: 0, recent: [], stale: true };
+
 const plainTitle = (t: Task) => t.title || t.intent || t.id;
 
 type PollerEntry = { poller: PagePoller; child: ChildProcess | null; last: ChildProcess | null };
@@ -51,12 +57,15 @@ const killEntry = (e: PollerEntry) => { e.poller.stop(); try { e.child?.kill("SI
 
 export class Deck {
   private cfg: DeckConfig = { root: "", firstmateLabel: "firstmate=true" };
-  private agents: AgentSource;
+  private agents: AgentViews;
+  private ports: PortSelector;
+  /** Projects whose remembered agent views were read back from page.json. */
+  private viewsHydrated = new Set<string>();
   private relay: Relay;
   private log: (m: string) => void;
   private watchers = new Map<string, FSWatcher>();
   /** Timeline rows posted this process lifetime that still say "awaiting reply". */
-  private openRows = new Map<string, { project: string; agentId: string; ids: string[]; data?: { project: string; pageUrl: string | null; at: string; comments: { target: string; text: string }[]; replied: boolean } }>();
+  private openRows = new Map<string, { project: string; agentId: string; ids: string[]; data?: CommentRowData }>();
   /** Projects whose openRows were read back from page.json (after a plugin reload). */
   private hydrated = new Set<string>();
   /** Single-flight guards: configure() and reconcilePollers() can be triggered from several places at once. */
@@ -93,13 +102,16 @@ export class Deck {
   constructor(o: DeckOpts) {
     this.o = o;
     this.log = o.log ?? (() => {});
-    this.agents = new AgentSource(o.exec);
+    this.agents = new AgentViews((m) => this.log(m));
+    this.ports = o.ports ?? new PortSelector(new CliPort(o.exec), (m) => this.log(m));
+    // the first handle: everything on the pages was last-known until now, so ask about it all
+    this.ports.onFirstHandle = () => this.scheduleAll("handle", 0);
     this.relay = new Relay({
       send: async (_p, msg) => {
         const early = this.early && Date.now() - this.early.at < 10_000 ? this.early.p : undefined;
         this.early = null;
         try {
-          const id = await sendToFirstMate(o.exec, this.cfg.firstmateLabel, msg, early, this.cfg.root);
+          const id = await sendToFirstMate(this.ports, this.cfg.firstmateLabel, msg, early, this.cfg.root);
           this.noClaim = false;
           return id;
         } catch (e) {
@@ -311,9 +323,9 @@ export class Deck {
     }, delayMs));
   }
 
-  /** Agent lifecycle event: drop cached views, re-render the projects whose tasks use that agent. */
+  /** Agent lifecycle event: that agent's view is refreshed (SDK) by the next render, which these projects get now. Re-render the projects whose tasks use that agent. */
   onAgentEvent(agentId: string): void {
-    this.agents.invalidate(agentId);
+    this.agents.markDirty(agentId);
     for (const p of this.agentProjects.get(agentId) ?? []) this.scheduleRender(p, DEBOUNCE_MS, "agent");
   }
 
@@ -356,15 +368,18 @@ export class Deck {
         this.writePage(project, model);
         const ids = this.trackedAgents(project, model);
         if (!ids.length) continue;
-        let listed;
-        try { listed = await this.agents.list(); } catch (e) { this.log(`paseo ls failed: ${e}`); continue; }
-        await Promise.all(ids.map((id) => this.agents.view(id, listed).catch((e) => this.log(`agent ${id}: ${e}`))));
-        const key = JSON.stringify(ids.map((id) => this.agents.peek(id) ?? null));
+        const sdk = this.ports.sdkPort();
+        if (sdk) await this.agents.refresh(ids, sdk); // only the agents that are running, dirty or unseen
+        const key = this.viewsKey(ids);
         if (key !== this.usedViews.get(project)) this.writePage(project, this.load(project) ?? model);
       } while (state.again && !this.stopped);
     } finally {
       this.rendering.delete(project);
     }
+  }
+
+  private viewsKey(ids: string[]): string {
+    return JSON.stringify(ids.map((id) => this.agents.peek(id) ?? null));
   }
 
   private load(project: string): ProjectModel | null {
@@ -390,12 +405,13 @@ export class Deck {
     // a project exists only while its project.json does; never resurrect a deleted project's dir
     if (!existsSync(join(projectDir(this.cfg.root, project), "project.json"))) return;
     const ids = this.trackedAgents(project, model);
-    const views: Record<string, AgentView> = {};
-    for (const id of ids) {
-      const v = this.agents.peek(id);
-      if (v) views[id] = v;
+    if (!this.viewsHydrated.has(project)) {
+      this.viewsHydrated.add(project);
+      this.agents.hydrate(readPageJson(pageJsonPath(this.cfg.root, project)).agentViews);
     }
-    this.usedViews.set(project, JSON.stringify(ids.map((id) => this.agents.peek(id) ?? null)));
+    const views: Record<string, AgentView> = {};
+    for (const id of ids) views[id] = this.agents.peek(id) ?? STALE_UNKNOWN;
+    this.usedViews.set(project, this.viewsKey(ids));
     const pj = readPageJson(pageJsonPath(this.cfg.root, project));
     const target = this.pagePath(project);
     const now = new Date();
@@ -412,7 +428,7 @@ export class Deck {
       rewrote = true;
     }
     writeAtomic(target.replace(/\.[^./]*$/, "") + ".live.js", liveJs(r.live.replace(/\{TS\}/g, ts), now.toISOString()));
-    patchPageJson(pageJsonPath(this.cfg.root, project), { lastRender: now.toISOString(), banner: banner?.text ?? null });
+    patchPageJson(pageJsonPath(this.cfg.root, project), { lastRender: now.toISOString(), banner: banner?.text ?? null, agentViews: this.agents.snapshot(ids) });
     if (rewrote) this.log(`rendered ${project} (${r.signature.slice(0, 8)})`);
   }
 
@@ -546,7 +562,7 @@ export class Deck {
     late.unref?.();
     this.late.add(late);
     // Look the first mate up now, while the batch window is open, so the send itself is one CLI call.
-    this.early = { at: Date.now(), p: resolveFirstMate(this.o.exec, this.cfg.firstmateLabel, this.cfg.root) };
+    this.early = { at: Date.now(), p: resolveFirstMate(this.ports.current(), this.cfg.firstmateLabel, this.cfg.root) };
     this.early.p.catch(() => {});
     this.relay.enqueue(project, entries);
   }
@@ -601,18 +617,22 @@ export class Deck {
   }
 
   private async afterSend(project: string, entries: InboxEntry[], agentId: string): Promise<void> {
-    if (!this.o.timelineRow) return;
     const pj = readPageJson(pageJsonPath(this.cfg.root, project));
     const rowId = `pc-${entries[0].id}`;
-    const data = { project, pageUrl: pj.lavishUrl, at: entries[0].at, comments: entries.map((e) => ({ target: e.target, text: e.text })), replied: false };
-    await this.o.timelineRow(agentId, rowId, data);
+    const data: CommentRowData = { project, pageUrl: pj.lavishUrl, at: entries[0].at, comments: entries.map((e) => ({ target: e.target, text: e.text })), replied: false };
+    await this.appendRow(agentId, rowId, data);
     this.openRows.set(rowId, { project, agentId, ids: entries.map((e) => e.id), data });
     this.persistRows(project);
   }
 
+  private async appendRow(agentId: string, rowId: string, data: CommentRowData): Promise<void> {
+    const port = this.ports.current();
+    if (await port.appendTimelineRow(agentId, rowId, data)) this.log(`timeline row ${rowId} appended to ${agentId}`);
+    else this.log("timeline row skipped: no SDK handle yet (none of the hooks or RPCs has fired)");
+  }
+
   /** bin/page reply marks inbox entries answered; flip each fully answered row to replied (same id replaces it). */
   private async markRowsReplied(project: string): Promise<void> {
-    if (!this.o.timelineRow) return;
     const inbox = readInbox(inboxPath(this.cfg.root, project));
     const answered = new Set(inbox.filter((e) => e.answered).map((e) => e.id));
     let changed = false;
@@ -626,7 +646,7 @@ export class Deck {
         if (!es.length) continue;
         data = { project, pageUrl: readPageJson(pageJsonPath(this.cfg.root, project)).lavishUrl, at: es[0].at, comments: es.map((e) => ({ target: e.target, text: e.text })), replied: false };
       }
-      try { await this.o.timelineRow(r.agentId, rowId, { ...data, replied: true }); }
+      try { await this.appendRow(r.agentId, rowId, { ...data, replied: true }); }
       catch (e) { this.log(`timeline row ${rowId} replied-update failed: ${e}`); }
     }
     if (changed) this.persistRows(project);
@@ -642,7 +662,7 @@ export class Deck {
   private async firstMateId(): Promise<string | null> {
     if (this.fmCache && Date.now() - this.fmCache.at < 10_000) return this.fmCache.id;
     let id: string | null = null;
-    try { id = (await resolveFirstMate(this.o.exec, this.cfg.firstmateLabel, this.cfg.root))?.id ?? null; } catch {}
+    try { id = (await resolveFirstMate(this.ports.current(), this.cfg.firstmateLabel, this.cfg.root))?.id ?? null; } catch {}
     this.fmCache = { at: Date.now(), id };
     return id;
   }
@@ -673,7 +693,7 @@ export class Deck {
           const v = t.agentId ? this.agents.peek(t.agentId) : undefined;
           running.push({
             taskId: t.id, taskTitle: plainTitle(t), agentId: t.agentId ?? null,
-            agentStatus: t.agentId ? (this.agents.peekStatus(t.agentId) || v?.status || "unknown") : "unknown",
+            agentStatus: t.agentId ? (this.agents.status(t.agentId)) : "unknown",
             current: v ? (v.recent[v.recent.length - 1] ?? v.final ?? "") : "", startedAt: v?.createdAt ?? null,
           });
         } else if (g === "done") counts.done++;

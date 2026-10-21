@@ -13,36 +13,55 @@ async function until(cond: () => boolean, ms = 3000) {
   while (!cond()) { if (Date.now() - t0 > ms) throw new Error("timeout"); await sleep(10); }
 }
 
-type World = { status: string; sendFails: boolean; sent: string[]; labelled: object[]; all: object[] };
-function rig(fleet: object) {
+import { CliPort } from "../server/paseo-cli.ts";
+import { PortSelector } from "../server/paseo-port.ts";
+import { FakeWorld, fakePaseo, shell } from "./fake-paseo.ts";
+
+/**
+ * A daemon with two agents (ag-1 running, fm-1 the labelled first mate), reachable through a fake `paseo` CLI
+ * (exec) and, once `sdk` is on (the default), through a fake SDK handle that is already captured.
+ */
+function rig(fleet: object, o: { sdk?: boolean } = {}) {
   const root = mkdtempSync(join(tmpdir(), "deck-rt-"));
   const pdir = join(root, "state", "projects", "demo");
   mkdirSync(join(pdir, "sections"), { recursive: true });
   writeFileSync(join(pdir, "project.json"), JSON.stringify({ title: "Demo", sections: ["endpoints"] }));
   writeFileSync(join(pdir, "sections", "endpoints.md"), "- GET /x\n");
   writeFileSync(join(root, "state", "fleet.json"), JSON.stringify(fleet));
-  const world: World = { status: "running", sendFails: false, sent: [], labelled: [{ id: "fm-1", status: "idle" }], all: [] };
+  const fw = new FakeWorld().add(
+    { id: "ag-1", status: "running", createdAt: "2026-10-21T10:00:00Z", updatedAt: "2026-10-21T10:05:00Z", model: "m", items: [shell("make build")] },
+    { id: "fm-1", status: "idle", labels: { firstmate: "true" } },
+  );
+  const cliCalls: string[][] = [];
   const exec = async (args: string[]) => {
+    cliCalls.push(args);
+    const live = [...fw.agents.values()].filter((a) => !a.archivedAt);
     if (args[0] === "status") return JSON.stringify({ listen: "127.0.0.1:1", serverId: "srv" });
-    if (args[0] === "ls" && args.includes("--label")) return JSON.stringify(world.labelled);
-    if (args[0] === "ls" && args.includes("-g")) return JSON.stringify(world.all);
-    if (args[0] === "ls") return JSON.stringify([{ id: "ag-1", status: world.status }]);
-    if (args[0] === "inspect") return JSON.stringify({ CreatedAt: "2026-10-21T10:00:00Z", UpdatedAt: "2026-10-21T10:05:00Z", Model: "m" });
-    if (args[0] === "logs") return "[Shell] ls -la\n";
+    if (args[0] === "ls" && args.includes("--label")) return JSON.stringify(live.filter((a) => a.labels?.firstmate === "true").map((a) => ({ id: a.id, status: a.status })));
+    if (args[0] === "ls") return JSON.stringify(live.map((a) => ({ id: a.id, status: a.status })));
+    if (args[0] === "inspect") return JSON.stringify({ CreatedAt: fw.agents.get(args[1])?.createdAt ?? "2026-10-21T10:00:00Z" });
     if (args[0] === "send") {
-      if (world.sendFails) throw new Error("daemon down");
-      world.sent.push(readFileSync(args[args.indexOf("--prompt-file") + 1], "utf8"));
+      if (fw.sendFails) throw new Error("daemon down");
+      fw.sent.push({ id: args[1], text: readFileSync(args[args.indexOf("--prompt-file") + 1], "utf8"), options: "cli" });
       return "";
     }
     throw new Error("unexpected " + args.join(" "));
   };
-  const rows: any[] = [];
-  const mkDeck = () => new Deck({
-    exec, batchMs: 30, readConfig: async () => ({ root, firstmateLabel: "firstmate=true" }),
-    timelineRow: async (agentId, id, data) => { rows.push({ agentId, id, data }); },
-  });
+  const ports = new PortSelector(new CliPort(exec));
+  if (o.sdk ?? true) ports.capture({ paseo: fakePaseo(fw) }, "test");
+  const world = {
+    set status(v: string) { fw.agents.get("ag-1")!.status = v as any; },
+    set sendFails(v: boolean) { fw.sendFails = v; },
+    get sent() { return fw.sent.map((x) => x.text); },
+    set labelled(l: unknown[]) { if (!l.length) fw.agents.get("fm-1")!.labels = {}; },
+    set all(l: { id: string; status: string }[]) { for (const a of l) fw.add({ id: a.id, status: a.status as any }); },
+  };
+  const mkDeck = () => new Deck({ exec, ports, batchMs: 30, readConfig: async () => ({ root, firstmateLabel: "firstmate=true" }) });
   const deck = mkDeck();
-  return { root, pdir, world, deck, mkDeck, rows, page: join(pdir, "page.html"), live: join(pdir, "page.live.js") };
+  return {
+    root, pdir, world, fw, cliCalls, ports, deck, mkDeck, page: join(pdir, "page.html"), live: join(pdir, "page.live.js"),
+    get rows() { return fw.rows.map((r) => ({ agentId: r.agentId, id: (r.item as any).id as string, data: (r.item as any).data })); },
+  };
 }
 const FLEET = { tasks: [{ id: "t1", intent: "do it", status: "running", project: "demo", agentId: "ag-1", shape: "ship" }] };
 
@@ -356,4 +375,121 @@ test("an open session is polled through a real child: listener goes ok while the
     if (prev === undefined) delete process.env.LAVISH_AXI_BIN; else process.env.LAVISH_AXI_BIN = prev;
     r.deck.stop();
   }
+});
+
+// ---------- agent views: SDK only, stale without a handle, refreshed by events ----------
+
+const pill = (f: string) => /<span class="pill p-[\w-]+"><span class="dot"><\/span>([^<]*)<\/span>/.exec(liveHtml(f))?.[1];
+const VIEW_CALLS = /^(ls|inspect|logs)$/;
+
+test("rendering never touches the CLI: pills and steps come from the SDK", async () => {
+  const r = rig(FLEET);
+  await r.deck.configure();
+  await r.deck.render("demo");
+  assert.equal(pill(r.live), "running");
+  assert.match(liveHtml(r.live), /Ran make build/);
+  assert.match(liveHtml(r.live), /1 steps/);
+  assert.deepEqual(r.cliCalls.filter((c) => VIEW_CALLS.test(c[0])), []);
+  assert.ok(r.fw.count("refetch:ag-1") >= 1);
+  r.deck.stop();
+});
+
+test("without a handle the last-known views (remembered in page.json) are shown as 'status unknown (reconnecting)'", async () => {
+  const r = rig(FLEET, { sdk: false });
+  const view = { status: "running", createdAt: "2026-10-21T10:00:00Z", updatedAt: "2026-10-21T10:05:00Z", model: "m", stepCount: 7, recent: ["Ran make build"] };
+  writeFileSync(join(r.pdir, "page.json"), JSON.stringify({ lavishUrl: null, session: "unknown", lastRender: null, lastDelivery: null, undelivered: 0, agentViews: { "ag-1": view } }));
+  await r.deck.configure();
+  await r.deck.render("demo");
+  assert.equal(pill(r.live), "status unknown (reconnecting)");
+  assert.match(liveHtml(r.live), /7 steps/, "the last-known facts are kept");
+  assert.match(liveHtml(r.live), /Ran make build/);
+  assert.deepEqual(r.cliCalls.filter((c) => VIEW_CALLS.test(c[0])), [], "no CLI calls to render");
+  assert.equal(readPageJson(join(r.pdir, "page.json")).agentViews!["ag-1"].stepCount, 7, "the remembered view survives");
+  // the first hook hands over a handle: the very next render asks the daemon and the pill is real again
+  r.ports.capture({ paseo: fakePaseo(r.fw) }, "hook agent.turn_started");
+  await until(() => pill(r.live) === "running", 1500);
+  assert.match(liveHtml(r.live), /Ran make build/);
+  r.deck.stop();
+});
+
+test("no handle and nothing remembered: the pill says the status is unknown, not a guess", async () => {
+  const r = rig(FLEET, { sdk: false });
+  await r.deck.configure();
+  await r.deck.render("demo");
+  assert.equal(pill(r.live), "status unknown (reconnecting)");
+  assert.deepEqual(r.cliCalls.filter((c) => VIEW_CALLS.test(c[0])), []);
+  r.deck.stop();
+});
+
+test("a failed SDK read keeps the last view but marks it stale", async () => {
+  const r = rig(FLEET);
+  await r.deck.configure();
+  await r.deck.render("demo");
+  assert.equal(pill(r.live), "running");
+  r.fw.refetchFails.add("ag-1");
+  await r.deck.render("demo");
+  assert.equal(pill(r.live), "status unknown (reconnecting)");
+  r.fw.refetchFails.clear();
+  await r.deck.render("demo");
+  assert.equal(pill(r.live), "running");
+  r.deck.stop();
+});
+
+test("an agent event refreshes just that agent and re-renders its project; ticks refresh only running agents", async () => {
+  const fleet = { tasks: [
+    { id: "t1", intent: "do it", status: "running", project: "demo", agentId: "ag-1", shape: "ship" },
+    { id: "t2", intent: "idle one", status: "running", project: "demo", agentId: "ag-2", shape: "ship" },
+  ] };
+  const r = rig(fleet);
+  r.fw.add({ id: "ag-2", status: "idle", items: [shell("make two")] });
+  await r.deck.configure();
+  await r.deck.render("demo");
+  assert.equal(r.fw.count("refetch:ag-1"), 1);
+  assert.equal(r.fw.count("refetch:ag-2"), 1);
+
+  await r.deck.render("demo"); // a tick: the idle agent's cached view is kept
+  assert.equal(r.fw.count("refetch:ag-1"), 2, "running: refreshed every render");
+  assert.equal(r.fw.count("refetch:ag-2"), 1, "idle: cached until its status changes");
+
+  r.fw.agents.get("ag-2")!.status = "running";
+  r.fw.agents.get("ag-2")!.items!.push(shell("make three"));
+  r.deck.onAgentEvent("ag-2"); // turn_started
+  await until(() => r.fw.count("refetch:ag-2") === 2 && /Ran make three/.test(liveHtml(r.live)), 1500);
+  assert.equal(r.fw.count("refetch:ag-1"), 3 - 1 + 1 - 1 + (r.fw.count("refetch:ag-1") - 2), "ag-1 only refreshes because it is running");
+
+  r.fw.agents.get("ag-2")!.status = "idle";
+  r.deck.onAgentEvent("ag-2"); // turn_ended
+  await until(() => r.fw.count("refetch:ag-2") === 3, 1500);
+  const settled = r.fw.count("refetch:ag-2");
+  await r.deck.render("demo");
+  assert.equal(r.fw.count("refetch:ag-2"), settled, "idle again: cached");
+  r.deck.stop();
+});
+
+test("a project with no running agent asks the daemon nothing on a tick", async () => {
+  const r = rig({ tasks: [{ id: "t1", intent: "x", status: "running", project: "demo", agentId: "ag-1" }] });
+  r.world.status = "idle";
+  await r.deck.configure();
+  await r.deck.render("demo");
+  const n = r.fw.count("refetch:");
+  await r.deck.render("demo");
+  await r.deck.render("demo");
+  assert.equal(r.fw.count("refetch:"), n);
+  r.deck.stop();
+});
+
+test("cold start end to end: comment goes out through the CLI, the handle arrives, the next one goes through the SDK", async () => {
+  const r = rig(FLEET, { sdk: false });
+  await r.deck.configure();
+  r.deck.ingest("demo", [{ prompt: "first", selector: "#t-t1" }]);
+  await until(() => r.fw.sent.length === 1, 2000);
+  assert.equal(r.fw.sent[0].options, "cli");
+  assert.equal(r.rows.length, 0, "the CLI cannot write the timeline row");
+  r.ports.capture({ paseo: fakePaseo(r.fw) }, "hook agent.turn_started");
+  r.deck.ingest("demo", [{ prompt: "second", selector: "#t-t1" }]);
+  await until(() => r.fw.sent.length === 2, 2000);
+  assert.deepEqual(r.fw.sent[1].options, { activeTurnBehavior: "steer" });
+  await until(() => r.rows.length === 1, 1000);
+  assert.equal(r.rows[0].agentId, "fm-1");
+  r.deck.stop();
 });
