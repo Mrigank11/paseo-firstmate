@@ -126,3 +126,39 @@ test("loader: missing is empty; a broken fleet.json is reported, not thrown; a b
   const m = loadProject(dir, "p");
   assert.deepEqual([m.archive.map((t) => t.id), m.archiveSkipped, m.fleetError], [["a", "b"], 2, undefined]);
 });
+
+test("Done sorts by last update, newest first, live and archived together", () => {
+  // done-live has a card, so it sits in "Done, unread"; the other two are read-less and sort within Done
+  const done = r.live.slice(r.live.indexOf('id="g-done"'));
+  assert.ok(done.indexOf('id="t-arch-recon"') > 0 && done.indexOf('id="t-arch-recon"') < done.indexOf('id="t-arch-schema"'));
+  const noCard = renderProject(structuredClone({ ...model, tasks: model.tasks.map((t) => (t.id === "done-live" ? { ...t, card: "" } : t)) }), agents, opts).live;
+  const dn = noCard.slice(noCard.indexOf('id="g-done"'));
+  assert.ok(dn.indexOf('id="t-arch-schema"') < dn.indexOf('id="t-done-live"'));
+  // an archived task that is updated later moves up; an explicit order still pins
+  const m = structuredClone(model);
+  m.archive.find((t) => t.id === "arch-schema")!.updatedMs = Date.parse("2026-10-21T09:30:00Z");
+  const d2 = renderProject(m, agents, opts).live;
+  assert.ok(d2.indexOf('id="t-arch-schema"') < d2.indexOf('id="t-arch-recon"'));
+});
+
+test("an archived task keeps its answered ask, its context and a report pointer", () => {
+  const t = model.archive.find((x) => x.id === "arch-schema")!;
+  assert.deepEqual(t.answered.map((a) => [a.id, a.text]), [["a1", "Postgres or SQLite?"]]);
+  assert.ok(t.hasReport);
+  const card = r.live.slice(r.live.indexOf('id="t-arch-schema"'), r.live.indexOf('id="t-broke-build"'));
+  assert.match(card, /Answered/);
+  assert.match(card, /Postgres or SQLite\?/);
+  assert.match(card, /<b>wins<\/b> on concurrent writes/);
+  assert.match(card, /state\/tasks\/arch-schema\/report\.md/);
+});
+
+test("a context file with no answer record (answered before records existed) still shows; notes survive next to a card", () => {
+  const dir = mkdtempSync(join(tmpdir(), "deck-"));
+  mkdirSync(join(dir, "state", "tasks", "old", "asks"), { recursive: true });
+  writeFileSync(join(dir, "state", "tasks", "old", "asks", "1.md"), "Old context body");
+  writeFileSync(join(dir, "state", "tasks", "old", "card.md"), "Brief text");
+  writeFileSync(join(dir, "state", "fleet-archive.jsonl"), '{"id":"old","project":"p","status":"done","notes":"Extra notes kept","lastEvent":"2026-10-21T01:00:00Z"}\n');
+  const live = renderProject(loadProject(dir, "p"), {}, opts).live;
+  assert.match(live, /Old context body/);
+  assert.match(live, /Extra notes kept/);
+});

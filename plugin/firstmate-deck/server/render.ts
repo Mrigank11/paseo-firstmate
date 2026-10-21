@@ -257,9 +257,21 @@ function row(t: Task, group: GroupKey, ctx: Ctx, idx = 0): string {
     // One block per ask: a comment anywhere inside it (text, option buttons, context) targets this ask.
     out.push(`<div class="askbox" id="a-${esc(t.id)}-${esc(a.id)}">${box.join("")}</div>`);
   });
+  // asks the first mate already answered stay readable on the finished card
+  if (group === "done") for (const a of t.answered ?? []) {
+    const ctxMd = contextBody(a.text, a.contextMd);
+    const ans = a.text ? `<div class="ask asked">${esc(a.text)}</div>` : "";
+    const detail = ctxMd.trim() ? `<details class="actx" id="x-${esc(t.id)}-${esc(a.id)}"><summary>Context</summary><div>${markdown(ctxMd)}</div></details>` : "";
+    if (ans || detail) out.push(`<div class="askbox answered" id="a-${esc(t.id)}-${esc(a.id)}"><div class="ask-tag">Answered</div>${ans}${detail}</div>`);
+  }
   if (t.agentId) out.push(agentBlock(t, group, ctx.agents[t.agentId], ctx.o));
   const body = t.card.trim() ? cardHtml(t) : esc(t.notes);
   if (body) out.push(`<div class="nt">${body}</div>`);
+  // a done card with a card.md keeps its notes in the same place; a report on disk is pointed at, not inlined
+  if (group === "done" && t.card.trim() && t.notes.trim() && !t.card.includes(t.notes.trim())) {
+    out.push(`<details class="cnotes" id="fn-${esc(t.id)}"><summary>Notes</summary>${markdown(t.notes)}</details>`);
+  }
+  if (group === "done" && t.hasReport) out.push(`<div class="dp">Report: <code>state/tasks/${esc(t.id)}/report.md</code></div>`);
   const link = (id: string) => `<a href="#t-${esc(id)}">${esc(ctx.byId.get(id)!.title || ctx.byId.get(id)!.intent || id)}</a>`;
   const dep = t.depends_on.filter((d) => ctx.byId.has(d)).map(link);
   const unb = (ctx.unblocks.get(t.id) ?? []).map(link);
@@ -293,7 +305,8 @@ function renderLive(model: ProjectModel, agents: Record<string, AgentView>, o: R
   const buckets: Record<GroupKey, { t: Task; g: GroupKey }[]> = { you: [], fm: [], running: [], next: [], parked: [], done: [] };
   for (const t of model.tasks) buckets[groupOf(t, true)].push({ t, g: groupOf(t, true) });
   for (const t of archive) buckets.done.push({ t, g: "done" });
-  // live done tasks come before archived ones (model.tasks were pushed first); an explicit `order` beats both
+  // Done: most recently updated (lastEvent) first, live and archived together. An explicit `order` still pins a task ahead of the rest in any group.
+  buckets.done.sort((a, b) => b.t.updatedMs - a.t.updatedMs);
   for (const k of Object.keys(buckets) as GroupKey[]) buckets[k] = byOrder(buckets[k].map((x) => ({ ...x, order: x.t.order }))).map(({ t, g }) => ({ t, g }));
 
   const busy = GROUPS.filter(([k]) => k !== "done").flatMap(([k]) => buckets[k])

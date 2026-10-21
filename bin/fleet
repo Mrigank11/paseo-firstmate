@@ -367,6 +367,11 @@ cmd_answer() {
   local id="$1" ref="$2"
   entry_exists "$id" || die "no task $id"
   local aid; aid="$(resolve_ask "$id" "$ref")"
+  # keep the answered ask (text, context path, options) in the task's own folder so a finished card can still show it;
+  # fleet.json stays small because the record lives outside it
+  mkdir -p "$TASKS/$id"
+  jq -c --arg id "$id" --arg aid "$aid" --arg at "$(now)" \
+    '.tasks | map(select(.id == $id))[0].asks // [] | map(select(.id == $aid))[0] | . + {answeredAt: $at}' "$FLEET" >>"$TASKS/$id/asks.jsonl"
   atomic_jq --arg id "$id" --arg aid "$aid" \
     '.tasks |= map(if .id == $id then .asks = ((.asks // []) | map(select(.id != $aid))) else . end)';
 }

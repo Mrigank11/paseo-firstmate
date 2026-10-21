@@ -1,6 +1,6 @@
 // Read-only loader: first-mate state on disk -> a typed model of one project's status page.
 // Missing files mean empty values. Malformed JSON throws a clear Error naming the file.
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { basename, join, resolve, sep } from "node:path";
 import { cleanUi } from "./marks.ts";
 import { askIdOf } from "./store.ts";
@@ -53,7 +53,15 @@ export type Task = {
   lastEvent?: string;
   /** Markdown from state/tasks/<id>/card.md ("" when absent). */
   card: string;
+  /** Asks the first mate has answered (state/tasks/<id>/asks.jsonl, written by `bin/fleet answer`), oldest first; context files left without a record come last with no text. */
+  answered: AnsweredAsk[];
+  /** state/tasks/<id>/report.md exists: the page points at it. */
+  hasReport: boolean;
+  /** `lastEvent` as epoch ms (0 when absent): what the Done group sorts by. */
+  updatedMs: number;
 };
+
+export type AnsweredAsk = { id: string; text: string; since?: string; answeredAt?: string; contextMd: string };
 
 export type Section = { name: string; kind: "md" | "html"; content: string };
 
@@ -138,6 +146,37 @@ export function orderOf(v: unknown): number | undefined {
   return typeof n === "number" && Number.isInteger(n) && n >= 0 ? n : undefined;
 }
 
+function readContext(root: string, rel: unknown): string {
+  const stateDir = resolve(root, "state");
+  if (typeof rel !== "string" || !rel) return "";
+  const p = resolve(stateDir, rel);
+  return p.startsWith(stateDir + sep) ? readText(p) : "";
+}
+
+/** Answered asks of a task: the records bin/fleet answer kept, then any asks/<n>.md context with no record (answered before records existed). */
+function loadAnswered(root: string, id: string): AnsweredAsk[] {
+  if (!/^[\w.-]+$/.test(id)) return [];
+  const dir = join(root, "state", "tasks", id);
+  const out: AnsweredAsk[] = [];
+  for (const line of readText(join(dir, "asks.jsonl")).split("\n")) {
+    if (!line.trim()) continue;
+    try {
+      const a = JSON.parse(line);
+      const aid = askIdOf(a?.id);
+      if (!aid || out.some((x) => x.id === aid)) continue;
+      out.push({ id: aid, text: String(a.text ?? ""), since: a.since, answeredAt: a.answeredAt, contextMd: readContext(root, a.context) });
+    } catch { /* bad line */ }
+  }
+  let files: string[] = [];
+  try { files = readdirSync(join(dir, "asks")).filter((f) => /^\d+\.md$/.test(f)); } catch { /* none */ }
+  files.sort((a, b) => parseInt(a) - parseInt(b));
+  for (const f of files) {
+    const aid = `a${parseInt(f)}`;
+    if (!out.some((x) => x.id === aid)) out.push({ id: aid, text: "", contextMd: readText(join(dir, "asks", f)) });
+  }
+  return out;
+}
+
 function toTask(raw: any, root: string, label: string, inbox: Comment[] = []): Task {
   if (!raw || typeof raw !== "object" || typeof raw.id !== "string") throw new Error(`${label}: task without a string id`);
   const asks: Ask[] = (Array.isArray(raw.asks) ? raw.asks : []).map((a: any, i: number) => {
@@ -179,6 +218,8 @@ function toTask(raw: any, root: string, label: string, inbox: Comment[] = []): T
     }
     return ask;
   });
+  const slug = /^[\w.-]+$/.test(raw.id);
+  const answeredIds = new Set(asks.map((a) => a.id));
   return {
     id: raw.id,
     intent: String(raw.intent ?? ""),
@@ -196,7 +237,10 @@ function toTask(raw: any, root: string, label: string, inbox: Comment[] = []): T
     pr: raw.pr || undefined,
     branch: raw.branch || undefined,
     lastEvent: raw.lastEvent || undefined,
-    card: /^[\w.-]+$/.test(raw.id) ? readText(join(root, "state", "tasks", raw.id, "card.md")) : "",
+    card: slug ? readText(join(root, "state", "tasks", raw.id, "card.md")) : "",
+    answered: loadAnswered(root, raw.id).filter((a) => !answeredIds.has(a.id)),
+    hasReport: slug && existsSync(join(root, "state", "tasks", raw.id, "report.md")),
+    updatedMs: Date.parse(raw.lastEvent ?? "") || 0,
   };
 }
 

@@ -73,6 +73,7 @@ Rules:
 - `notes` holds at most 200 chars. Anything longer is narrative — append it with `bin/fleet log <id> "…"` and keep one line in `notes`.
 - `asks` is the task's open questions for the captain. An ask outlives the step that raised it: closing a task never closes its asks. `bin/fleet archive` REFUSES a task with open asks — answer (`ask`/`answer`) or explicitly drop each one first.
 - `preview` records a crew dev/preview server from its final message (`preview: <port> <pid>`). Teardown kills that pid (after checking it is still the same process) and runs `clear-preview` before archiving.
+- `bin/fleet answer` first appends the ask (id, text, `since`, context path, options, `answeredAt`) to `state/tasks/<id>/asks.jsonl`, so a finished card keeps showing it with its context file; `fleet.json` stays small. The Done group sorts by `lastEvent`, newest first (an explicit `order` still pins ahead), and a done card also shows its notes and a pointer to `report.md`.
 - A `done`/`failed` task with no open asks leaves the index: `bin/fleet archive <id>` appends it to `fleet-archive.jsonl` and removes it. Never delete a task any other way.
 
 ## Reading on a wake (token budget)
