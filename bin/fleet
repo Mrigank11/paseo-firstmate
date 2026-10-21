@@ -17,6 +17,10 @@
 #   bin/fleet ask <id> "<text>" [--context-file <path>]
 #                                     append {text, since} to asks; the file is copied to
 #                                     tasks/<id>/asks/<n>.md and linked as "context"
+#   bin/fleet reask <id> <n> ["<new text>"] [--context-file <path>]
+#                                     reset ask n's "since" to now (back to Needs you on the page after
+#                                     the captain's follow-up was answered); optionally replace its text
+#                                     (<=200 chars) and context file, the way ask does
 #   bin/fleet depend <id> <dep-id>... append to depends_on (de-duplicated; deps may be archived ids)
 #   bin/fleet undepend <id> <dep-id>  remove one id from depends_on
 #   bin/fleet answer <id> <n>         resolve ask by 1-based index
@@ -185,6 +189,33 @@ cmd_ask() {
   fi
 }
 
+cmd_reask() {
+  local id="$1" n="$2" settext="$3" text="$4" ctx="$5"
+  entry_exists "$id" || die "no task $id"
+  [[ "$n" =~ ^[0-9]+$ ]] && ((n >= 1)) || die "reask needs a 1-based ask index (see 'fleet asks')"
+  local count; count="$(jq --arg id "$id" '.tasks | map(select(.id == $id))[0] | (.asks // []) | length' "$FLEET")"
+  ((n <= count)) || die "task $id has only $count open ask(s)"
+  if ((settext)); then
+    ((${#text} > 0)) || die "ask text is empty"
+    ((${#text} <= MAXLEN)) || die "ask over $MAXLEN chars"
+  fi
+  local rel="" k
+  if [[ -n "$ctx" ]]; then
+    [[ -f "$ctx" ]] || die "context file '$ctx' not found"
+    k=$((count + 1))
+    while [[ -e "$TASKS/$id/asks/$k.md" ]]; do k=$((k + 1)); done
+    rel="tasks/$id/asks/$k.md"
+    mkdir -p "$TASKS/$id/asks"
+    cp "$ctx" "$STATE_DIR/$rel"
+  fi
+  if ! ( atomic_jq --arg id "$id" --argjson n "$n" --argjson st "$settext" --arg t "$text" --arg c "$rel" --arg s "$(now)" '
+    .tasks |= map(if .id == $id then .asks[$n - 1] |= (.since = $s
+      | (if $st == 1 then .text = $t else . end)
+      | (if $c != "" then .context = $c else . end)) else . end)' ); then
+    [[ -z "$rel" ]] || rm -f "$STATE_DIR/$rel"; exit 1
+  fi
+}
+
 cmd_depend() {
   local id="$1"; shift
   entry_exists "$id" || die "no task $id"
@@ -264,6 +295,11 @@ case "$cmd" in
   ask)           if [[ $# -eq 2 ]]; then cmd_ask "$1" "$2"
                  elif [[ $# -eq 4 && "$3" == "--context-file" ]]; then cmd_ask "$1" "$2" "$4"
                  else die "usage: fleet ask <id> \"<text>\" [--context-file <path>]"; fi;;
+  reask)         if [[ $# -eq 2 ]]; then cmd_reask "$1" "$2" 0 "" ""
+                 elif [[ $# -eq 3 && "$3" != "--context-file" ]]; then cmd_reask "$1" "$2" 1 "$3" ""
+                 elif [[ $# -eq 4 && "$3" == "--context-file" ]]; then cmd_reask "$1" "$2" 0 "" "$4"
+                 elif [[ $# -eq 5 && "$4" == "--context-file" ]]; then cmd_reask "$1" "$2" 1 "$3" "$5"
+                 else die "usage: fleet reask <id> <n> [\"<new text>\"] [--context-file <path>]"; fi;;
   depend)        [[ $# -ge 2 ]] || die "usage: fleet depend <id> <dep-id>..."; cmd_depend "$@";;
   undepend)      [[ $# -eq 2 ]] || die "usage: fleet undepend <id> <dep-id>"; cmd_undepend "$@";;
   answer)        [[ $# -eq 2 ]] || die "usage: fleet answer <id> <n>"; cmd_answer "$1" "$2";;

@@ -104,5 +104,31 @@ $F preview r 4321 99 >/dev/null; eq "$($F get r | jq -c .preview)" '{"port":4321
 $F clear-preview r >/dev/null; eq "$($F get r | jq -c '.preview')" null; check "clear-preview" $?
 $F answer r 1 >/dev/null; eq "$($F get r | jq '.asks|length')" 0; check "answer" $?
 
+# reask
+reset
+$F add q intent=x shape=scout status=needs-captain >/dev/null
+$F ask q "first?" >/dev/null
+$F ask q "second?" >/dev/null
+jq '.tasks[0].asks |= map(.since = "2020-01-01T00:00:00Z")' "$FLEET_FILE" >"$T/f.tmp" && mv "$T/f.tmp" "$FLEET_FILE"
+$F reask q 2 >/dev/null
+eq "$($F get q | jq -r '.asks[1].since | startswith("2020") | not')" true; check "reask bumps since" $?
+eq "$($F get q | jq -r '.asks[0].since')" "2020-01-01T00:00:00Z"; check "reask leaves other asks" $?
+eq "$($F get q | jq -r '.asks[1].text')" "second?"; check "reask keeps text" $?
+$F reask q 1 "sharper question?" >/dev/null
+eq "$($F get q | jq -r '.asks[0].text')" "sharper question?"; check "reask replaces text" $?
+echo "# details" >"$T/rctx.md"
+$F reask q 1 "with details" --context-file "$T/rctx.md" >/dev/null
+rel="$($F get q | jq -r '.asks[0].context')"
+[[ -f "$T/$rel" ]] && eq "$(cat "$T/$rel")" "# details"; check "reask copies context file" $?
+$F reask q 2 --context-file "$T/rctx.md" >/dev/null
+eq "$($F get q | jq -r '.asks[1].text')" "second?" && [[ -n "$($F get q | jq -r '.asks[1].context')" ]]; check "reask context only keeps text" $?
+refused "reask bad index (0)" $F reask q 0
+refused "reask index past end" $F reask q 3
+refused "reask non-numeric index" $F reask q x
+refused "reask unknown task" $F reask nope 1
+refused "reask text over 200" $F reask q 1 "$(printf 'x%.0s' $(seq 201))"
+refused "reask empty text" $F reask q 1 ""
+refused "reask missing context file" $F reask q 1 "t" --context-file "$T/nope.md"
+
 echo "---- $pass passed, $fail failed"
 [[ $fail -eq 0 ]]

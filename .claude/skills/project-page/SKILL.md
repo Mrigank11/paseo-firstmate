@@ -38,7 +38,8 @@ A message starting `## Page comments · <project>` lists each comment with the c
 
 1. Act on each comment: steer crew, answer an ask (`bin/fleet answer`), write a note, or dispatch.
 2. Answer once per message, with `bin/page reply <project> "<reply>"` (or `-` to read Markdown from stdin). Say what you did, briefly, and give one line per comment when there are several.
-3. Chat stays quiet. Don't repeat the reply in chat.
+3. A comment on an ask card that asks for more information instead of answering ("show me options in detail") is not an answer. Keep the ask open, reply saying what you're doing, and dispatch the work. The page then shows the ask as "With the first mate". Once the follow-up is ready, run `bin/fleet reask <id> <n>` (optionally with sharper text: `bin/fleet reask <id> <n> "<new text>"`) so it returns to Needs you.
+4. Chat stays quiet. Don't repeat the reply in chat.
 
 The captain's Lavish panel shows "Working" until your reply, so always reply, even if the reply is "noted, nothing to change".
 

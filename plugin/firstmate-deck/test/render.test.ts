@@ -5,7 +5,7 @@ import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { loadProject } from "../server/state.ts";
-import { liveJs, renderProject } from "../server/render.ts";
+import { groupOf, liveJs, renderProject } from "../server/render.ts";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const root = join(here, "fixtures", "root");
@@ -25,9 +25,41 @@ test("each task appears exactly once; Needs you wins", () => {
     assert.equal(r.live.split(`id="t-${id}"`).length - 1, 1, id);
   }
   assert.ok(!r.live.includes("other-thing") && !r.live.includes("arch-other"));
-  const you = r.live.slice(r.live.indexOf('id="g-you"'), r.live.indexOf('id="g-running"'));
+  const you = r.live.slice(r.live.indexOf('id="g-you"'), r.live.indexOf('id="g-fm"'));
   assert.ok(you.includes('id="t-pick-db"'));
   assert.equal(you.split("Your call:").length - 1, 2);
+  assert.ok(!you.includes('id="t-ask-fm"'));
+});
+
+test("replied ask: state loading, muted card, With the first mate group", () => {
+  const t = model.tasks.find((x) => x.id === "ask-fm")!;
+  assert.equal(t.asks[0].repliedAt, "2026-10-21T09:10:00Z");
+  assert.equal(t.asks[0].replyText, "show me both in detail");
+  const fm = r.live.slice(r.live.indexOf('id="g-fm"'), r.live.indexOf('id="g-running"'));
+  assert.ok(fm.includes('id="t-ask-fm"'));
+  assert.match(fm, /You replied 09:10: “show me both in detail” · the first mate is on it/);
+  assert.ok(fm.includes("Layout A or B?") && !fm.includes("Your call:") && !fm.includes("waiting on you"));
+  assert.ok(r.live.indexOf('id="g-you"') < r.live.indexOf('id="g-fm"'));
+  assert.ok(!r.live.slice(r.live.indexOf('id="g-you"'), r.live.indexOf('id="g-fm"')).includes('id="t-ask-fm"'));
+  assert.match(r.live, /<a href="#g-you" class="sum c-you">1 needs you<\/a><a href="#g-fm" class="sum c-fm">1 with the first mate<\/a>/);
+});
+
+test("a task with one replied and one open ask stays in Needs you", () => {
+  const m = structuredClone(model);
+  const t = m.tasks.find((x) => x.id === "ask-fm")!;
+  t.asks.push({ text: "Second?", contextMd: "" });
+  const live = renderProject(m, agents, opts).live;
+  assert.ok(live.slice(live.indexOf('id="g-you"'), live.indexOf('id="g-fm"')).includes('id="t-ask-fm"'));
+  assert.ok(!live.includes('id="g-fm"'));
+  assert.equal(groupOf(t, true), "you");
+  t.asks[1].repliedAt = "2026-10-21T09:30:00Z";
+  assert.equal(groupOf(t, true), "fm");
+});
+
+test("replying changes the signature", () => {
+  const m = structuredClone(model);
+  delete m.tasks.find((x) => x.id === "ask-fm")!.asks[0].repliedAt;
+  assert.notEqual(renderProject(m, agents, opts).signature, r.signature);
 });
 
 test("failed marker, done collapsed, dependency across the archive", () => {

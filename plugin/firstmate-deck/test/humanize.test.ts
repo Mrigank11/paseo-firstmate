@@ -37,6 +37,13 @@ test("human by tag", () => {
   assert.equal(human("Todo", "x".repeat(150)), "Todo: " + "x".repeat(99) + "…");
 });
 
+test("empty step text is still readable", () => {
+  assert.equal(human("Bash", ""), "Running a shell command");
+  assert.equal(human("Bash", "   "), "Running a shell command");
+  assert.equal(human("Shell", ""), "Running a shell command");
+  assert.equal(human("Grep", ""), "Grep");
+});
+
 test("parseStep", () => {
   assert.deepEqual(parseStep("[Shell] npm test"), ["Shell", "npm test"]);
   assert.equal(parseStep("[User] hello"), null);

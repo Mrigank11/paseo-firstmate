@@ -41,6 +41,7 @@ export function shellPhrase(cmdIn: string): string {
 
 export function human(tag: string, text: string): string {
   const t = text.trim();
+  if (!t) return tag === "Bash" || tag === "Shell" ? "Running a shell command" : tag;
   if (tag === "Shell") return shellPhrase(t);
   if (tag === "Task notification") {
     const p = shellPhrase(t);

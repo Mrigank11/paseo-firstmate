@@ -34,6 +34,7 @@ export type Rendered = { page: string; live: string; signature: string };
 
 const GROUPS = [
   ["you", "Needs you"],
+  ["fm", "With the first mate"],
   ["running", "Running"],
   ["next", "Next up"],
   ["parked", "Parked"],
@@ -78,7 +79,8 @@ const stampShort = (d: Date) => `${pad(d.getHours())}:${pad(d.getMinutes())}:${p
 const titleCase = (s: string) => s.replace(/[-_]+/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
 
 export function groupOf(t: Task, live: boolean): GroupKey {
-  if (live && (t.asks.length > 0 || t.status === "needs-captain")) return "you";
+  if (live && t.asks.length > 0) return t.asks.some((a) => !a.repliedAt) ? "you" : "fm";
+  if (live && t.status === "needs-captain") return "you";
   if (t.status === "dispatched" || t.status === "running") return "running";
   if (t.status === "done" || t.status === "failed") return "done";
   if (t.status === "parked") return "parked";
@@ -137,7 +139,14 @@ function row(t: Task, group: GroupKey, ctx: Ctx): string {
     `<div class="tt"><span class="ttl">${title}</span>${chip}</div>`,
   ];
   t.asks.forEach((a, i) => {
-    out.push(`<div class="ask"><b>Your call:</b> ${a.text}</div>`);
+    if (a.repliedAt) {
+      const d = new Date(a.repliedAt);
+      const hm = isNaN(d.getTime()) ? "" : ` ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+      out.push(
+        `<div class="ask asked">${a.text}</div>` +
+        `<div class="ask replied">You replied${hm}: “${esc(cut(a.replyText ?? "", 120))}” · the first mate is on it</div>`,
+      );
+    } else out.push(`<div class="ask"><b>Your call:</b> ${a.text}</div>`);
     if (a.contextMd.trim()) {
       out.push(`<details class="actx" id="a-${esc(t.id)}-${i + 1}"><summary>Context</summary><div>${markdown(a.contextMd)}</div></details>`);
     }
@@ -167,7 +176,7 @@ function renderLive(model: ProjectModel, agents: Record<string, AgentView>, o: R
   for (const t of all) for (const d of t.depends_on) unblocks.set(d, [...(unblocks.get(d) ?? []), t.id]);
   const ctx: Ctx = { byId, unblocks, agents, o };
 
-  const buckets: Record<GroupKey, { t: Task; g: GroupKey }[]> = { you: [], running: [], next: [], parked: [], done: [] };
+  const buckets: Record<GroupKey, { t: Task; g: GroupKey }[]> = { you: [], fm: [], running: [], next: [], parked: [], done: [] };
   for (const t of model.tasks) buckets[groupOf(t, true)].push({ t, g: groupOf(t, true) });
   for (const t of archive) buckets.done.push({ t, g: "done" });
   // live done tasks come before archived ones (model.tasks were pushed first)

@@ -153,10 +153,12 @@ test("summary follows the contract shape", async () => {
   const r = rig({ tasks: [
     { id: "a", intent: "ask", status: "needs-captain", project: "demo", asks: [{ text: "Which?", since: "2026-10-20" }] },
     { id: "b", intent: "run", status: "running", project: "demo", agentId: "ag-1" },
+    { id: "f", intent: "replied", status: "needs-captain", project: "demo", asks: [{ text: "Options?", since: "2026-10-21T09:00:00Z" }] },
     { id: "c", intent: "later", status: "queued", project: "demo" },
     { id: "d", intent: "hold", status: "parked", project: "demo" },
     { id: "e", intent: "fin", status: "done", project: "demo" },
   ] });
+  writeFileSync(join(r.pdir, "inbox.jsonl"), JSON.stringify({ id: "c1", at: "2026-10-21T09:05:00Z", project: "demo", target: "t-f", text: "more detail" }) + "\n");
   await r.deck.configure();
   await r.deck.render("demo");
   const s = await r.deck.summary();

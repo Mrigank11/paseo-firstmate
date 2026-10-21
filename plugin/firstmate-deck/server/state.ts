@@ -3,7 +3,7 @@
 import { readFileSync } from "node:fs";
 import { join, resolve, sep } from "node:path";
 
-export type Ask = { text: string; since?: string; context?: string; contextMd: string };
+export type Ask = { text: string; since?: string; context?: string; contextMd: string; repliedAt?: string; replyText?: string };
 
 export type Task = {
   id: string;
@@ -54,7 +54,23 @@ function parseJson(text: string, label: string): unknown {
   }
 }
 
-function toTask(raw: any, root: string, label: string): Task {
+type Comment = { target: string; at: number; atIso: string; text: string };
+
+/** Captain comments from inbox.jsonl. Read-only; a missing file or bad lines are skipped. */
+function readInbox(path: string): Comment[] {
+  const out: Comment[] = [];
+  for (const line of readText(path).split("\n")) {
+    if (!line.trim()) continue;
+    try {
+      const c = JSON.parse(line);
+      const at = Date.parse(c?.at);
+      if (c && typeof c.target === "string" && typeof c.text === "string" && !isNaN(at)) out.push({ target: c.target, at, atIso: c.at, text: c.text });
+    } catch { /* bad line */ }
+  }
+  return out;
+}
+
+function toTask(raw: any, root: string, label: string, inbox: Comment[] = []): Task {
   if (!raw || typeof raw !== "object" || typeof raw.id !== "string") throw new Error(`${label}: task without a string id`);
   const asks: Ask[] = (Array.isArray(raw.asks) ? raw.asks : []).map((a: any) => {
     const stateDir = resolve(root, "state");
@@ -63,7 +79,12 @@ function toTask(raw: any, root: string, label: string): Task {
       const p = resolve(stateDir, a.context);
       if (p.startsWith(stateDir + sep)) contextMd = readText(p);
     }
-    return { text: String(a?.text ?? ""), since: a?.since, context: a?.context, contextMd };
+    const ask: Ask = { text: String(a?.text ?? ""), since: a?.since, context: a?.context, contextMd };
+    const since = Date.parse(a?.since ?? "");
+    let best: Comment | undefined;
+    if (!isNaN(since)) for (const c of inbox) if (c.target === `t-${raw.id}` && c.at > since && (!best || c.at >= best.at)) best = c;
+    if (best) { ask.repliedAt = best.atIso; ask.replyText = best.text; }
+    return ask;
   });
   return {
     id: raw.id,
@@ -92,11 +113,13 @@ export function loadProject(root: string, project: string): ProjectModel {
   const cfgText = readText(cfgPath);
   const cfg: any = cfgText.trim() ? parseJson(cfgText, cfgPath) : {};
 
+  const inbox = readInbox(join(pdir, "inbox.jsonl"));
+
   const fleetPath = join(state, "fleet.json");
   const fleetText = readText(fleetPath);
   const fleet: any = fleetText.trim() ? parseJson(fleetText, fleetPath) : { tasks: [] };
   const live: any[] = Array.isArray(fleet?.tasks) ? fleet.tasks : [];
-  const tasks = live.filter((t) => t && t.project === project).map((t) => toTask(t, root, fleetPath));
+  const tasks = live.filter((t) => t && t.project === project).map((t) => toTask(t, root, fleetPath, inbox));
 
   const archPath = join(state, "fleet-archive.jsonl");
   const archive: Task[] = [];

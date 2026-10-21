@@ -1,0 +1,5 @@
+{"id":"c1","at":"2026-10-21T08:00:00Z","project":"deck-demo","target":"t-ask-fm","text":"before the ask, ignored"}
+not json
+{"id":"c2","at":"2026-10-21T09:05:00Z","project":"deck-demo","target":"t-ask-fm","text":"older follow-up"}
+{"id":"c3","at":"2026-10-21T09:10:00Z","project":"deck-demo","target":"t-ask-fm","text":"show me both in detail"}
+{"id":"c4","at":"2026-10-21T09:20:00Z","project":"deck-demo","target":"t-write-docs","text":"other task"}

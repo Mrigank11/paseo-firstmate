@@ -484,8 +484,10 @@ export class Deck {
         const g = groupOf(t, true);
         if (g === "you") {
           counts.needsYou++;
-          if (t.asks.length) for (const a of t.asks) needsYou.push({ taskId: t.id, taskTitle: plainTitle(t), text: a.text, since: a.since ?? "" });
+          if (t.asks.length) for (const a of t.asks.filter((a) => !a.repliedAt)) needsYou.push({ taskId: t.id, taskTitle: plainTitle(t), text: a.text, since: a.since ?? "" });
           else needsYou.push({ taskId: t.id, taskTitle: plainTitle(t), text: t.notes || "Needs your call", since: "" });
+        } else if (g === "fm") {
+          // the captain replied; the next move is the first mate's, so it is not counted as needing the captain
         } else if (g === "running") {
           counts.running++;
           const v = t.agentId ? this.agents.peek(t.agentId) : undefined;

@@ -1,4 +1,5 @@
 {"tasks":[
+{"id":"ask-fm","intent":"Pick a layout","title":"Pick a layout","shape":"scout","status":"needs-captain","project":"deck-demo","asks":[{"text":"Layout A or B?","since":"2026-10-21T09:00:00Z"}],"notes":"Waiting."},
 {"id":"pick-db","intent":"Choose the database","title":"Choose the <b>database</b> for the demo","shape":"scout","status":"needs-captain","agentId":"ag-pick","project":"deck-demo","depends_on":["arch-schema"],"asks":[{"text":"Postgres or SQLite for the demo? <b>BLUF: SQLite</b> unless you need concurrent writers.","since":"2026-10-19","context":"tasks/pick-db/asks/1.md"},{"text":"OK to add the <code>DATABASE_URL</code> flag to the staging env?","since":"2026-10-19"}],"notes":"Waiting on two answers."},
 {"id":"ship-api","intent":"Ship the API","title":"Ship the demo API","shape":"ship","status":"running","agentId":"ag-api","project":"deck-demo","depends_on":["pick-db"],"branch":"feat/api","notes":"Endpoints /health and /items are in."},
 {"id":"write-docs","intent":"Write the docs","shape":"ship","status":"queued","project":"deck-demo","depends_on":["ship-api","done-live"],"notes":"Starts once the API lands."},
