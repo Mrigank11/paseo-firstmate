@@ -1,0 +1,4 @@
+{"id":"arch-recon","intent":"Recon the repo","title":"Recon the repo","shape":"scout","status":"done","agentId":"ag-recon","project":"deck-demo","depends_on":[],"notes":"Report in tasks/arch-recon/report.md."}
+
+{"id":"arch-schema","intent":"Draft the schema","title":"Draft the schema","shape":"scout","status":"done","agentId":"ag-schema","project":"deck-demo","depends_on":["arch-recon"]}
+{"id":"arch-other","intent":"x","status":"done","project":"another"}

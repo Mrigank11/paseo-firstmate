@@ -6,3 +6,5 @@ state/secondmates.md
 state/afk-log.md
 state/tasks/
 state/projects/
+node_modules/
+plugin/spike/

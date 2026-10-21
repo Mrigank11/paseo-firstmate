@@ -1,0 +1,6 @@
+{
+ "ag-pick": {"status":"idle","createdAt":"2026-10-19T09:00:00Z","updatedAt":"2026-10-19T09:21:00Z","model":"claude-opus-5-5","thinking":"medium","stepCount":23,"recent":["Reading schema.sql","Thinking: Two options, SQLite or Postgres.","Ran npm run check"],"final":"DONE: need two answers"},
+ "ag-api": {"status":"running","createdAt":"2026-10-21T08:00:00Z","updatedAt":"2026-10-21T10:10:00Z","model":"claude-sonnet-5-5","thinking":"medium","stepCount":41,"recent":["Reading routes.ts","Editing routes.ts","Ran npm run check","Searched handler routes","Called localhost:4000/health","Editing routes.ts","Ran npm run check","Writing items.test.ts"]},
+ "ag-done": {"status":"closed","stepCount":9,"recent":[]},
+ "ag-broke": {"status":"error","stepCount":3,"recent":["Ran npm install"]}
+}

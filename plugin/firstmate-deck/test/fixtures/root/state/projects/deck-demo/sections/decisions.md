@@ -1,0 +1,2 @@
+- **SQLite** for the demo (pending your call).
+- Ports stay on loopback.
