@@ -18,6 +18,7 @@ export const deckSettings = defineSettings({
 
 const askSchema = z.object({
   taskId: z.string(),
+  askId: z.string().nullable().optional(), // bin/fleet's stable ask id ("a2"); null for a task that needs you without an ask
   taskTitle: z.string(),
   text: z.string(), // the BLUF question
   since: z.string(),
@@ -40,7 +41,7 @@ export const projectSummarySchema = z.object({
   session: z.enum(["open", "ended", "unknown"]),
   needsYou: z.array(askSchema),
   running: z.array(runningSchema),
-  counts: z.object({ needsYou: z.number(), withFirstMate: z.number().optional(), running: z.number(), next: z.number(), parked: z.number(), done: z.number() }),
+  counts: z.object({ needsYou: z.number(), withFirstMate: z.number().optional(), running: z.number(), next: z.number(), parked: z.number(), done: z.number(), failed: z.number().optional() }), // failed tasks are not counted as done
   undelivered: z.number(), // comments not yet delivered to the first mate
   banner: z.string().nullable(), // e.g. "first mate unreachable, 2 comments queued"
 });

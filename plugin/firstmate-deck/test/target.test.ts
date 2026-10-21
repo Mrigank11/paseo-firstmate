@@ -23,6 +23,11 @@ test("steps belong to the task card; the ask block, its buttons and its context 
   assert.equal(extractTarget("#x-ab-gap-2 > summary", known), "t-ab-gap#a2");
   assert.equal(extractTarget("#a-ab-gap-1", {}), "t-ab-gap#a1");
   assert.equal(extractTarget("#a-nope-1 > div", known), "page");
+  // stable ask ids in the DOM ids: a-<task>-<askId>
+  assert.equal(extractTarget("#a-ab-gap-a2 > div", known), "t-ab-gap#a2");
+  assert.equal(extractTarget("article#t-ab-gap > div#a-ab-gap-a12 > div.opts > div.opt-row > button#o-ab-gap-a12-1", known), "t-ab-gap#a12");
+  assert.equal(extractTarget("details#x-ab-gap-a3 > summary", known), "t-ab-gap#a3");
+  assert.equal(extractTarget("#a-nope-a1 > div", known), "page");
 });
 
 test("sections", () => {

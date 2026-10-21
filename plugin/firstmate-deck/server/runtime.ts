@@ -9,16 +9,16 @@ import { decodePoll } from "./toon.ts";
 import { AgentViews } from "./agent-views.ts";
 import { CliPort, type Exec } from "./paseo-cli.ts";
 import { NO_CLAIM_MESSAGE, NoFirstMateError, PortSelector, resolveFirstMate, sendToFirstMate, type CommentRowData, type FirstMate } from "./paseo-port.ts";
-import { Relay, newEntries, parseTarget, type TargetInfo } from "./relay.ts";
+import { Relay, newEntries, parseTarget, type AskLookup, type TargetInfo } from "./relay.ts";
 import { groupOf, liveJs, renderProject, type AgentView, type Banner } from "./render.ts";
 import { loadProject, type ProjectModel, type Task } from "./state.ts";
 import { appendInbox, inboxPath, pageJsonPath, patchPageJson, pidPath, projectDir, readInbox, readPageJson, updateInbox, writeAtomic, type InboxEntry, type PageJson } from "./store.ts";
 
 export type Summary = {
   project: string; title: string; repo: string | null; pageUrl: string | null; session: "open" | "ended" | "unknown";
-  needsYou: { taskId: string; taskTitle: string; text: string; since: string }[];
+  needsYou: { taskId: string; askId: string | null; taskTitle: string; text: string; since: string }[];
   running: { taskId: string; taskTitle: string; agentId: string | null; agentStatus: string; current: string; startedAt: string | null }[];
-  counts: { needsYou: number; withFirstMate: number; running: number; next: number; parked: number; done: number };
+  counts: { needsYou: number; withFirstMate: number; running: number; next: number; parked: number; done: number; failed: number };
   undelivered: number;
   banner: string | null;
 };
@@ -80,6 +80,12 @@ export class Deck {
   private noClaim = false;
   private rootProblem: string | null = null;
   private memo: { project: string; at: number; model: ProjectModel | null } | null = null;
+  /** The last model of each project that loaded cleanly: shown while a state file is unreadable. */
+  private lastGood = new Map<string, ProjectModel>();
+  /** Why each project's state cannot be read right now ("<file>: <why>"), mirrored to page.json `loadError`. */
+  private loadErrors = new Map<string, string>();
+  private skippedLogged = new Map<string, number>();
+  private liveSeq = Date.now();
   private watchedDir = "";
   private timers: ReturnType<typeof setInterval>[] = [];
   private debounce = new Map<string, ReturnType<typeof setTimeout>>();
@@ -111,7 +117,7 @@ export class Deck {
         const early = this.early && Date.now() - this.early.at < 10_000 ? this.early.p : undefined;
         this.early = null;
         try {
-          const id = await sendToFirstMate(this.ports, this.cfg.firstmateLabel, msg, early, this.cfg.root);
+          const id = await sendToFirstMate(this.ports, this.cfg.firstmateLabel, msg, early, this.cfg.root, (m) => this.log(m));
           this.noClaim = false;
           return id;
         } catch (e) {
@@ -343,6 +349,11 @@ export class Deck {
       const q = `${n} comment${n === 1 ? "" : "s"} queued`;
       return { kind: "unreachable", text: this.noClaim ? `${NO_CLAIM_MESSAGE} (${q})` : `First mate unreachable, ${q}` };
     }
+    const bad = this.loadErrors.get(project);
+    if (bad) {
+      const file = bad.split(":")[0];
+      return { kind: "state", text: `Task state could not be read (${file}): showing the last good view` };
+    }
     const l = this.listener.get(project);
     if (session !== "ended" && l?.state === "active-elsewhere") {
       return { kind: "unreachable", text: `Another process holds this page's Lavish listener, so comments may not be picked up (${l.detail || "unknown holder"}).` };
@@ -382,13 +393,41 @@ export class Deck {
     return JSON.stringify(ids.map((id) => this.agents.peek(id) ?? null));
   }
 
+  /**
+   * The project's model, or the last good one while a state file is unreadable (a truncated or empty fleet.json must
+   * not blank the page or kill every project). The problem goes to the log, page.json `loadError` and a page banner.
+   */
   private load(project: string): ProjectModel | null {
+    let model: ProjectModel | null = null;
+    let problem: string | null = null;
     try {
-      return loadProject(this.cfg.root, project);
+      const m = loadProject(this.cfg.root, project);
+      if (m.fleetError) problem = `${m.fleetError.file}: ${m.fleetError.message}`;
+      else model = m;
+      if (m.archiveSkipped && this.skippedLogged.get(project) !== m.archiveSkipped) {
+        this.skippedLogged.set(project, m.archiveSkipped);
+        this.log(`${project}: skipped ${m.archiveSkipped} malformed line(s) in fleet-archive.jsonl`);
+      } else if (!m.archiveSkipped) this.skippedLogged.delete(project);
+      if (!model) {
+        const good = this.lastGood.get(project);
+        // no last good view (plugin just started): show the page without tasks; the banner says why
+        // (comments, sections and the title are read fresh: only the task list is held back)
+        model = good ? { ...good, title: m.title, page: m.page, sections: m.sections, sectionTitles: m.sectionTitles, comments: m.comments, fleetError: m.fleetError } : m;
+      }
     } catch (e) {
-      this.log(`cannot load ${project}: ${(e as Error).message}`);
-      return null;
+      problem = (e as Error).message;
+      model = this.lastGood.get(project) ?? null;
     }
+    if (!problem) this.lastGood.set(project, model!);
+    this.setLoadError(project, problem);
+    return model;
+  }
+
+  private setLoadError(project: string, problem: string | null): void {
+    if ((this.loadErrors.get(project) ?? null) === problem) return;
+    if (problem) { this.loadErrors.set(project, problem); this.log(`PROBLEM: cannot read ${project}'s state: ${problem}; showing the last good view`); }
+    else { this.loadErrors.delete(project); this.log(`${project}: state files readable again`); }
+    if (existsSync(join(projectDir(this.cfg.root, project), "project.json"))) patchPageJson(pageJsonPath(this.cfg.root, project), { loadError: problem });
   }
 
   private trackedAgents(project: string, model: ProjectModel): string[] {
@@ -427,7 +466,7 @@ export class Deck {
       this.sigs.set(project, r.signature);
       rewrote = true;
     }
-    writeAtomic(target.replace(/\.[^./]*$/, "") + ".live.js", liveJs(r.live.replace(/\{TS\}/g, ts), now.toISOString()));
+    writeAtomic(target.replace(/\.[^./]*$/, "") + ".live.js", liveJs(r.live.replace(/\{TS\}/g, ts), now.toISOString(), ++this.liveSeq));
     patchPageJson(pageJsonPath(this.cfg.root, project), { lastRender: now.toISOString(), banner: banner?.text ?? null, agentViews: this.agents.snapshot(ids) });
     if (rewrote) this.log(`rendered ${project} (${r.signature.slice(0, 8)})`);
   }
@@ -551,18 +590,22 @@ export class Deck {
     let known = { tasks: [] as string[], sections: [] as string[] };
     const model = this.load(project);
     if (model) known = { tasks: [...model.tasks, ...model.archive].map((t) => t.id), sections: model.sections.map((s) => s.name) };
-    const askText = (task: string, n: number) => model?.tasks.find((t) => t.id === task)?.asks[n - 1]?.text;
-    const entries = newEntries(project, prompts as any, known, new Date(), askText);
+    // a click is checked against the ask as it is NOW: the ask must still be open and the option one of its own
+    const lookup: AskLookup = (task, ask) => {
+      const a = model?.tasks.find((t) => t.id === task)?.asks.find((x) => x.id === ask);
+      return a && { text: a.text, options: a.options };
+    };
+    const entries = newEntries(project, prompts as any, known, new Date(), lookup);
     // Inbox first: if anything below fails, the comments are on disk and get retried at the next start.
     const file = inboxPath(this.cfg.root, project);
     appendInbox(file, entries);
-    this.log(`${project}: ${entries.length} comment(s) -> inbox`);
+    this.log(`${project}: ${entries.length} comment(s) -> inbox${entries.some((e) => e.stale) ? " (some are stale option clicks)" : ""}`);
     this.scheduleRender(project, INSTANT_MS, "comment");
     const late = setTimeout(() => { this.late.delete(late); this.scheduleRender(project, 0, "late"); }, LATE_MS);
     late.unref?.();
     this.late.add(late);
     // Look the first mate up now, while the batch window is open, so the send itself is one CLI call.
-    this.early = { at: Date.now(), p: resolveFirstMate(this.ports.current(), this.cfg.firstmateLabel, this.cfg.root) };
+    this.early = { at: Date.now(), p: resolveFirstMate(this.ports.current(), this.cfg.firstmateLabel, this.cfg.root, (m) => this.log(m)) };
     this.early.p.catch(() => {});
     this.relay.enqueue(project, entries);
   }
@@ -595,7 +638,7 @@ export class Deck {
     if (!this.memo || this.memo.project !== project || Date.now() - this.memo.at > 500) this.memo = { project, at: Date.now(), model: this.load(project) };
     const m = this.memo.model;
     const t = m && [...m.tasks, ...m.archive].find((x) => x.id === at.task);
-    return t ? { title: plainTitle(t), asks: t.asks.map((a) => a.text) } : undefined;
+    return t ? { title: plainTitle(t), asks: t.asks.map((a) => ({ id: a.id, text: a.text })) } : undefined;
   }
 
   // ---------- timeline rows that still say "awaiting reply" (kept in page.json so a reload does not forget them) ----------
@@ -662,7 +705,7 @@ export class Deck {
   private async firstMateId(): Promise<string | null> {
     if (this.fmCache && Date.now() - this.fmCache.at < 10_000) return this.fmCache.id;
     let id: string | null = null;
-    try { id = (await resolveFirstMate(this.ports.current(), this.cfg.firstmateLabel, this.cfg.root))?.id ?? null; } catch {}
+    try { id = (await resolveFirstMate(this.ports.current(), this.cfg.firstmateLabel, this.cfg.root, (m) => this.log(m)))?.id ?? null; } catch {}
     this.fmCache = { at: Date.now(), id };
     return id;
   }
@@ -677,15 +720,16 @@ export class Deck {
       let repo: string | null = null;
       try { repo = JSON.parse(readFileSync(join(projectDir(this.cfg.root, p), "project.json"), "utf8")).repo ?? null; } catch {}
       const pj = readPageJson(pageJsonPath(this.cfg.root, p));
-      const counts = { needsYou: 0, withFirstMate: 0, running: 0, next: 0, parked: 0, done: model.archive.filter((a) => !model.tasks.some((t) => t.id === a.id)).length };
+      const archived = model.archive.filter((a) => !model.tasks.some((t) => t.id === a.id));
+      const counts = { needsYou: 0, withFirstMate: 0, running: 0, next: 0, parked: 0, done: archived.filter((a) => a.status !== "failed").length, failed: archived.filter((a) => a.status === "failed").length };
       const needsYou: Summary["needsYou"] = [];
       const running: Summary["running"] = [];
       for (const t of model.tasks) {
         const g = groupOf(t, true);
         if (g === "you") {
           counts.needsYou++;
-          if (t.asks.length) for (const a of t.asks.filter((a) => !a.repliedAt)) needsYou.push({ taskId: t.id, taskTitle: plainTitle(t), text: a.text, since: a.since ?? "" });
-          else needsYou.push({ taskId: t.id, taskTitle: plainTitle(t), text: t.notes || "Needs your call", since: "" });
+          if (t.asks.length) for (const a of t.asks.filter((a) => !a.repliedAt)) needsYou.push({ taskId: t.id, askId: a.id, taskTitle: plainTitle(t), text: a.text, since: a.since ?? "" });
+          else needsYou.push({ taskId: t.id, askId: null, taskTitle: plainTitle(t), text: t.notes || "Needs your call", since: "" });
         } else if (g === "fm") {
           counts.withFirstMate++; // the next move is the first mate's, so it does not count as needing the captain
         } else if (g === "running") {
@@ -696,7 +740,7 @@ export class Deck {
             agentStatus: t.agentId ? (this.agents.status(t.agentId)) : "unknown",
             current: v ? (v.recent[v.recent.length - 1] ?? v.final ?? "") : "", startedAt: v?.createdAt ?? null,
           });
-        } else if (g === "done") counts.done++;
+        } else if (g === "done") { if (t.status === "failed") counts.failed++; else counts.done++; }
         else if (g === "parked") counts.parked++;
         else counts.next++;
       }

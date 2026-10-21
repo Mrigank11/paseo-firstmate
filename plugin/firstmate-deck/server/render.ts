@@ -25,7 +25,7 @@ export type AgentView = {
 
 export const STALE_PILL = "status unknown (reconnecting)";
 
-export type Banner = { kind: "unreachable" | "ended" | "plugin-down"; text: string };
+export type Banner = { kind: "unreachable" | "ended" | "plugin-down" | "state"; text: string };
 
 export type RenderOpts = {
   now: Date;
@@ -135,23 +135,30 @@ function agentBlock(t: Task, group: GroupKey, view: AgentView | undefined, o: Re
 const DAY_MS = 24 * 3600 * 1000;
 const LATE_MS = 10_000;
 
-/** The captain's comment trail for one target: latest comment, a count, and where it stands (from the inbox flags). */
-export function trailHtml(all: TrailComment[], target: string, now: Date): string {
-  // comments on an ask ("t-<task>#a<n>") show in their card's trail too
-  const mine = all.filter((c) => (c.target === target || c.target.startsWith(target + "#")) && (!c.answered || now.getTime() - Date.parse(c.at) < DAY_MS));
+/** Where a comment stands: sending… / first mate has it / answered (from the inbox flags). */
+export function chipHtml(c: { at: string; delivered: boolean; answered: boolean }, now: Date): string {
+  if (c.answered) return `<span class="st st-answered">answered</span>`;
+  if (c.delivered) return `<span class="st st-has">first mate has it</span>`;
+  return `<span class="st ${now.getTime() - Date.parse(c.at) > LATE_MS ? "st-late" : "st-send"}">sending…</span>`;
+}
+
+/**
+ * The captain's comment trail for one target: latest comment, a count, and where it stands. Exactly the comments on
+ * `target`, plus any `also` accepts (a card also shows the comments on asks that are no longer open).
+ */
+export function trailHtml(all: TrailComment[], target: string, now: Date, also?: (c: TrailComment) => boolean): string {
+  const mine = all.filter((c) => (c.target === target || also?.(c)) && (!c.answered || now.getTime() - Date.parse(c.at) < DAY_MS));
   if (!mine.length) return "";
   const last = mine.reduce((a, b) => (Date.parse(b.at) >= Date.parse(a.at) ? b : a));
   const d = new Date(last.at);
   const hm = isNaN(d.getTime()) ? "" : ` · ${pad(d.getHours())}:${pad(d.getMinutes())}`;
   const said = last.choice
-    ? `picked <b>${esc(cut(last.choice.option, 100))}</b>`
+    ? last.stale
+      ? `clicked <b>${esc(cut(last.choice.option, 100))}</b> <span class="tr-stale">(that question was already closed, so it was not applied)</span>`
+      : `picked <b>${esc(cut(last.choice.option, 100))}</b>`
     : `“${esc(cut(last.text.replace(/\s+/g, " ").trim(), 100))}”`;
-  let chip: string;
-  if (last.answered) chip = `<span class="st st-answered">answered</span>`;
-  else if (last.delivered) chip = `<span class="st st-has">first mate has it</span>`;
-  else chip = `<span class="st ${now.getTime() - Date.parse(last.at) > LATE_MS ? "st-late" : "st-send"}">sending…</span>`;
   const n = mine.length > 1 ? `<span class="tr-n">${mine.length} comments</span>` : "";
-  return `<div class="trail"><span class="tr-who">💬 You${hm}</span><span class="tr-txt">${said}</span>${n}${chip}</div>`;
+  return `<div class="trail"><span class="tr-who">💬 You${hm}</span><span class="tr-txt">${said}</span>${n}${chipHtml(last, now)}</div>`;
 }
 
 type Ctx = { byId: Map<string, Task>; unblocks: Map<string, string[]>; agents: Record<string, AgentView>; o: RenderOpts; comments: TrailComment[] };
@@ -164,34 +171,44 @@ function row(t: Task, group: GroupKey, ctx: Ctx): string {
   const out = [
     `<article class="task s-${group}${failed ? " s-failed" : ""}" id="t-${esc(t.id)}">`,
     `<div class="tt"><span class="ttl">${title}</span>${chip}</div>`,
-    trailHtml(ctx.comments, `t-${t.id}`, ctx.o.now),
+    // card-level comments, plus comments on asks that are gone (an answered ask takes its own trail with it)
+    trailHtml(ctx.comments, `t-${t.id}`, ctx.o.now, (c) => c.target.startsWith(`t-${t.id}#`) && !t.asks.some((a) => c.target === `t-${t.id}#${a.id}`)),
   ];
-  t.asks.forEach((a, i) => {
-    const n = i + 1;
+  t.asks.forEach((a) => {
     const box: string[] = [];
     const asked = `<div class="ask asked">${esc(a.text)}</div>`;
+    const key = `ask-${t.id}-${a.id}`;
+    const buttons = (picked?: string) => (a.options ?? []).map((o, k) => {
+      const on = picked !== undefined && o === picked;
+      return `<button type="button" class="opt${on ? " on" : ""}" id="o-${esc(t.id)}-${esc(a.id)}-${k + 1}" data-task="${esc(t.id)}" data-ask="${esc(a.id)}" data-opt="${esc(o)}" data-title="${name}" aria-pressed="${on}"${picked !== undefined && !on ? " disabled" : ""}>${esc(o)}</button>`;
+    }).join("");
+    const reply = { at: a.repliedAt ?? "", delivered: a.replyDelivered === true, answered: a.replyAnswered === true };
+    let trail = "";
     if (a.repliedAt && a.replyChoice) {
-      box.push(asked, `<div class="ask replied picked">You picked <b>${esc(a.replyChoice)}</b> · the first mate is applying it</div>`);
+      box.push(asked);
+      const line = `<div class="pickline" role="status">You picked <b>${esc(a.replyChoice)}</b> · the first mate is applying it ${chipHtml(reply, ctx.o.now)}</div>`;
+      box.push(a.options?.includes(a.replyChoice)
+        ? `<div class="opts" data-key="${esc(key)}"><div class="opt-row">${buttons(a.replyChoice)}</div>${line}</div>`
+        : `<div class="ask replied picked">${line}</div>`);
     } else if (a.repliedAt && a.replyText !== undefined) {
       const d = new Date(a.repliedAt);
       const hm = isNaN(d.getTime()) ? "" : ` ${pad(d.getHours())}:${pad(d.getMinutes())}`;
-      box.push(asked, `<div class="ask replied">You replied${hm}: “${esc(cut(a.replyText, 120))}” · the first mate is on it</div>`);
+      box.push(asked, `<div class="ask replied">You replied${hm}: “${esc(cut(a.replyText, 120))}” · the first mate is on it ${chipHtml(reply, ctx.o.now)}</div>`);
     } else if (a.repliedAt) { // marked pending by the first mate (bin/page reply --followup), no comment to quote
       box.push(asked, `<div class="ask replied">The first mate is working on a follow-up</div>`);
     } else {
       box.push(`<div class="ask"><b>Your call:</b> ${esc(a.text)}</div>`);
       if (a.options?.length) {
-        const key = `ask-${t.id}-${n}`;
-        const btns = a.options.map((o) =>
-          `<button type="button" class="opt" data-task="${esc(t.id)}" data-ask="${n}" data-opt="${esc(o)}" data-title="${name}">${esc(o)}</button>`).join("");
-        box.push(`<div class="opts" data-key="${esc(key)}"><div class="opt-row">${btns}<span class="hint">or comment on the card</span></div><div class="pickline" role="status" hidden></div></div>`);
+        box.push(`<div class="opts" data-key="${esc(key)}"><div class="opt-row">${buttons()}<span class="hint">or comment on the card</span></div><div class="pickline" role="status" hidden></div></div>`);
       }
+      trail = trailHtml(ctx.comments, `t-${t.id}#${a.id}`, ctx.o.now); // this ask's own comments, right under it
     }
+    if (trail) box.push(trail);
     if (a.contextMd.trim()) {
-      box.push(`<details class="actx" id="x-${esc(t.id)}-${n}"><summary>Context</summary><div>${markdown(a.contextMd)}</div></details>`);
+      box.push(`<details class="actx" id="x-${esc(t.id)}-${esc(a.id)}"><summary>Context</summary><div>${markdown(a.contextMd)}</div></details>`);
     }
     // One block per ask: a comment anywhere inside it (text, option buttons, context) targets this ask.
-    out.push(`<div class="askbox" id="a-${esc(t.id)}-${n}">${box.join("")}</div>`);
+    out.push(`<div class="askbox" id="a-${esc(t.id)}-${esc(a.id)}">${box.join("")}</div>`);
   });
   if (t.agentId) out.push(agentBlock(t, group, ctx.agents[t.agentId], ctx.o));
   const body = t.card.trim() ? markdown(t.card) : esc(t.notes);
@@ -225,9 +242,12 @@ function renderLive(model: ProjectModel, agents: Record<string, AgentView>, o: R
 
   const busy = GROUPS.filter(([k]) => k !== "done").flatMap(([k]) => buckets[k])
     .filter(({ t }) => t.agentId && ACTIVE.has(agents[t.agentId]?.status ?? "")).length;
-  let summary = GROUPS.filter(([k]) => buckets[k].length)
-    .map(([k, n]) => `<a href="#g-${k}" class="sum c-${k}">${buckets[k].length} ${k === "you" ? "needs you" : n.toLowerCase()}</a>`)
+  const failedN = buckets.done.filter(({ t }) => t.status === "failed").length;
+  const countOf = (k: GroupKey) => (k === "done" ? buckets.done.length - failedN : buckets[k].length); // a failed task is not "done"
+  let summary = GROUPS.filter(([k]) => countOf(k))
+    .map(([k, n]) => `<a href="#g-${k}" class="sum c-${k}">${countOf(k)} ${k === "you" ? "needs you" : n.toLowerCase()}</a>`)
     .join("");
+  if (failedN) summary += `<a href="#g-done" class="sum c-fail">${failedN} failed</a>`;
   if (busy) summary += `<span class="sum c-running">${busy} agent${busy > 1 ? "s" : ""} working</span>`;
   const parts = [`<div class="summary">${summary}<span class="m">live: the page checks ${o.tickSeconds === 1 ? "every second" : `every ${o.tickSeconds} s`}; the plugin refreshes it on every change and at least every ${o.refreshSeconds ?? 20} s (last refresh {TS})</span></div>`];
   for (const [k, n] of GROUPS) {
@@ -255,12 +275,17 @@ function renderSection(model: ProjectModel, name: string): string {
   return `<section id="${esc(name)}" data-section="${esc(name)}"><h2>${esc(title)}</h2>\n<div class="trail-slot" data-trail-slot="${esc(name)}"></div>\n${body}\n</section>`;
 }
 
-/** `iso` is when the plugin produced this payload; the page script compares it with the browser clock to flag a stalled plugin. */
-export function liveJs(liveHtml: string, iso?: string): string {
-  return `window.__fdLive&&window.__fdLive(${JSON.stringify(liveHtml)}${iso ? `,${JSON.stringify(iso)}` : ""});\n`;
+/**
+ * `iso` is when the plugin produced this payload and `seq` a counter that grows with every payload. The page script
+ * never compares `iso` with the browser clock (they can disagree by minutes); it only notices that the payload keeps
+ * changing, on its own clock.
+ */
+export function liveJs(liveHtml: string, iso?: string, seq?: number): string {
+  const extra = iso || seq !== undefined ? `,${JSON.stringify(iso ?? "")}${seq !== undefined ? `,${seq}` : ""}` : "";
+  return `window.__fdLive&&window.__fdLive(${JSON.stringify(liveHtml)}${extra});\n`;
 }
 
-export const STALE_TEXT = "This page stopped updating: comments may not reach the first mate. Ask the first mate to run bin/page heal.";
+export const STALE_TEXT = "This page stopped updating. Your comments may not reach the first mate until it's fixed (the first mate can run bin/page heal).";
 
 export function renderProject(model: ProjectModel, agents: Record<string, AgentView>, opts: RenderOpts): Rendered {
   const live = renderLive(model, agents, opts);

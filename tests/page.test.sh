@@ -190,8 +190,48 @@ rm -f "$FAKE_LS"
 rm -f "$T/root/state/firstmate.json"
 PASEO_AGENT_ID=agent-fm-9 go claimdemo >/dev/null
 eq "$(jq -r .agentId "$T/root/state/firstmate.json")" agent-fm-9 "start claims first"
+rm -f "$T/root/state/firstmate.json"
 PASEO_AGENT_ID= go refused >/dev/null 2>&1 && bad "start without PASEO_AGENT_ID refused" || ok "start without PASEO_AGENT_ID refused"
 [[ ! -d "$T/root/state/projects/refused" ]] && ok "...before scaffolding anything" || bad "refused start scaffolded"
+
+# ---- crew can never become the first mate (C2) ----
+cp "$T/root/state/fleet.json" "$T/fleet.keep" 2>/dev/null || true
+cat >"$T/root/state/fleet.json" <<'J'
+{"tasks":[{"id":"scout-1","intent":"x","shape":"scout","status":"running","agentId":"crew-9"}]}
+J
+echo '{"id":"old-crew","intent":"x","shape":"ship","status":"done","agentId":"crew-archived"}' >"$T/root/state/fleet-archive.jsonl"
+echo '{"agentId":"agent-fm-1","claimedAt":"2026-10-21T00:00:00Z"}' >"$T/root/state/firstmate.json"
+: >"$FAKE_LOG"
+msg="$(PASEO_AGENT_ID=crew-9 "$P" claim 2>&1)"; rc=$?
+[[ $rc -ne 0 ]] && grep -q "agent crew-9 is crew on task scout-1; only the first mate may claim" <<<"$msg" && ok "claim refuses an agent that is crew on a live task" || bad "claim refuses live crew" "$msg"
+eq "$(jq -r .agentId "$T/root/state/firstmate.json")" agent-fm-1 "...the real claim is untouched"
+grep -q "agent update" "$FAKE_LOG" && bad "...and no label is touched" || ok "...and no label is touched"
+msg="$(PASEO_AGENT_ID=crew-archived "$P" claim 2>&1)"; rc=$?
+[[ $rc -ne 0 ]] && grep -q "is crew on task old-crew" <<<"$msg" && ok "claim refuses an agent that is crew in the archive" || bad "claim refuses archived crew" "$msg"
+printf '{garbage\n{"id":"old-crew2","agentId":"crew-after-garbage"}\n' >"$T/root/state/fleet-archive.jsonl"
+msg="$(PASEO_AGENT_ID=crew-after-garbage "$P" claim 2>&1)"; rc=$?
+[[ $rc -ne 0 ]] && grep -q "is crew on task old-crew2" <<<"$msg" && ok "...a malformed archive line does not hide later crew" || bad "archive with a bad line" "$msg"
+rm -f "$T/root/state/firstmate.json"
+PASEO_AGENT_ID=crew-9 go claimcrew >/dev/null 2>&1 && bad "start by a crew agent with no live claim is refused" || ok "start by a crew agent with no live claim is refused"
+rm -f "$T/root/state/fleet-archive.jsonl"
+
+# ---- start does not steal a live claim ----
+echo '{"agentId":"agent-fm-1","claimedAt":"2026-10-21T00:00:00Z"}' >"$T/root/state/firstmate.json"
+sim_plugin stealdemo ok "$T/root" null
+msg="$(PASEO_AGENT_ID=agent-fm-2 "$P" start stealdemo 2>&1 >"$T/vout")"; rc=$?; end_sim
+eq "$rc" 0 "start by a second session still opens the page"
+eq "$(jq -r .agentId "$T/root/state/firstmate.json")" agent-fm-1 "...but does NOT steal the claim from a live first mate"
+grep -q "warning: agent agent-fm-1 is the live first mate of this checkout; start did NOT take over the claim" <<<"$msg" && ok "...and warns, naming the holder" || bad "start warns about the holder" "$msg"
+PASEO_AGENT_ID=agent-fm-2 "$P" claim >/dev/null 2>&1
+eq "$(jq -r .agentId "$T/root/state/firstmate.json")" agent-fm-2 "an explicit bin/page claim does take over"
+FAKE_UNKNOWN_AGENTS=agent-fm-2 sim_plugin stealdemo ok "$T/root" null
+FAKE_UNKNOWN_AGENTS=agent-fm-2 PASEO_AGENT_ID=agent-fm-3 "$P" start stealdemo >/dev/null 2>&1; end_sim
+eq "$(jq -r .agentId "$T/root/state/firstmate.json")" agent-fm-3 "start claims when the held claim is not a live agent any more"
+sim_plugin stealdemo ok "$T/root" null
+PASEO_AGENT_ID=agent-fm-3 "$P" start stealdemo >/dev/null 2>&1; end_sim
+eq "$(jq -r .agentId "$T/root/state/firstmate.json")" agent-fm-3 "start by the claim holder keeps the claim"
+cp "$T/fleet.keep" "$T/root/state/fleet.json" 2>/dev/null || rm -f "$T/root/state/fleet.json"
+PASEO_AGENT_ID=agent-fm-1 "$P" claim >/dev/null 2>&1
 
 # ---- start verifies the plugin is polling this page ----
 vstart() { # label rc-want message-grep  (plugin stand-in args follow)
@@ -246,6 +286,88 @@ grep -q "lavish-axi reply" "$FAKE_LOG" && bad "a bad --followup is refused befor
 printf 'md body\n' | "$P" reply demo - --followup pick-db:2 >/dev/null
 eq "$(jq -r '.tasks[0].asks[1] | has("pendingSince")' "$T/root/state/fleet.json")" true "reply - (stdin) takes --followup too"
 
+# ---- reply applies option picks (stable ask ids) ----
+cat >"$T/root/state/fleet.json" <<'J'
+{"tasks":[{"id":"pick","intent":"x","shape":"scout","status":"needs-captain","project":"demo","asks":[
+ {"id":"a1","text":"DB?","since":"2026-10-21T09:00:00Z","options":["Postgres","SQLite"]},
+ {"id":"a2","text":"CI?","since":"2026-10-21T09:00:00Z","options":["Buildkite","Actions"]},
+ {"id":"a3","text":"Region?","since":"2026-10-21T09:00:00Z","options":["eu","us"]}]}]}
+J
+cat >"$PROJ/inbox.jsonl" <<'J'
+{"id":"k1","at":"2026-10-21T10:00:00Z","project":"demo","target":"t-pick#a2","text":"Picked: Buildkite","prompt":{},"delivered":true,"answered":false,"choice":{"task":"pick","ask":"a2","option":"Buildkite"}}
+{"id":"k2","at":"2026-10-21T10:00:01Z","project":"demo","target":"t-pick#a3","text":"Picked: eu","prompt":{},"delivered":true,"answered":false,"choice":{"task":"pick","ask":"a3","option":"eu"}}
+{"id":"k3","at":"2026-10-21T10:00:02Z","project":"demo","target":"t-pick#a9","text":"Picked: x","prompt":{},"delivered":true,"answered":false,"stale":true,"choice":{"task":"pick","ask":"a9","option":"x"}}
+{"id":"k4","at":"2026-10-21T10:00:03Z","project":"demo","target":"t-pick#a1","text":"Picked: SQLite","prompt":{},"delivered":false,"answered":false,"choice":{"task":"pick","ask":"a1","option":"SQLite"}}
+J
+out="$("$P" reply demo "Going with Buildkite and eu" --keep-open pick#a3 2>&1)"
+eq "$(jq -c '[.tasks[0].asks[].id]' "$T/root/state/fleet.json")" '["a1","a3"]' "reply applies the delivered pick on a2 by its stable id (a1, a3 stay)"
+grep -q "applied option picks: pick#a2" <<<"$out" && ok "...and reports what it applied" || bad "reply reports applied picks" "$out"
+eq "$(jq -r 'select(.id=="k2") | .answered' "$PROJ/inbox.jsonl")" true "--keep-open keeps the ask a3 open but still answers its comment"
+eq "$(jq -r 'select(.id=="k4") | .answered' "$PROJ/inbox.jsonl")" false "an undelivered pick is neither applied nor answered"
+cat >"$T/root/state/fleet.json" <<'J'
+{"tasks":[{"id":"pick","intent":"x","shape":"scout","status":"needs-captain","project":"demo","asks":[
+ {"id":"a1","text":"DB?","since":"2026-10-21T09:00:00Z","options":["Postgres","SQLite"]}]}]}
+J
+cp "$T/root/state/fleet.json" "$T/fleet.before"
+echo '{"id":"k5","at":"2026-10-21T10:00:03Z","project":"demo","target":"t-pick#a7","text":"Picked: x","prompt":{},"delivered":true,"answered":false,"stale":true,"choice":{"task":"pick","ask":"a7","option":"x"}}' >"$PROJ/inbox.jsonl"
+"$P" reply demo "ack" >/dev/null 2>&1
+cmp -s "$T/root/state/fleet.json" "$T/fleet.before" && ok "a stale pick is never applied" || bad "stale pick applied"
+printf '%s\n' '{"id":"k6","at":"2026-10-21T10:00:00Z","project":"demo","target":"t-pick#a1","text":"Picked: Postgres","prompt":{},"delivered":true,"answered":false,"choice":{"task":"pick","ask":"a1","option":"Postgres"}}' '{"id":"k7","at":"2026-10-21T10:00:01Z","project":"demo","target":"t-pick#a1","text":"Picked: SQLite","prompt":{},"delivered":true,"answered":false,"choice":{"task":"pick","ask":"a1","option":"SQLite"}}' >"$PROJ/inbox.jsonl"
+"$P" reply demo "double click" >/dev/null 2>&1; rc=$?
+eq "$rc" 0 "two picks on one ask: the second does not fail the reply"
+eq "$(jq -c '.tasks[0].asks' "$T/root/state/fleet.json")" '[]' "...and the ask is answered once"
+cat >"$T/root/state/fleet.json" <<'J'
+{"tasks":[{"id":"pick","intent":"x","shape":"scout","status":"needs-captain","project":"demo","asks":[{"id":"a1","text":"DB?","since":"2026-10-21T09:00:00Z"},{"id":"a2","text":"CI?","since":"2026-10-21T09:00:00Z"}]}]}
+J
+echo '{"id":"k8","at":"2026-10-21T10:00:00Z","project":"demo","target":"t-pick#a1","text":"Picked: A","prompt":{},"delivered":true,"answered":false,"choice":{"task":"pick","ask":"a1","option":"A"}}' >"$PROJ/inbox.jsonl"
+"$P" reply demo "need detail" --followup pick:a1 >/dev/null 2>&1
+eq "$(jq -c '[.tasks[0].asks[] | [.id, has("pendingSince")]]' "$T/root/state/fleet.json")" '[["a1",true],["a2",false]]' "--followup on a picked ask marks it pending instead of answering it"
+"$P" reply demo "x" --keep-open nonsense >/dev/null 2>&1 && bad "malformed --keep-open refused" || ok "malformed --keep-open refused"
+# a comment that arrives after the reply started stays unanswered
+printf '%s\n' '{"id":"m1","at":"2026-10-21T10:00:00Z","project":"demo","target":"page","text":"early","prompt":{},"delivered":true,"answered":false}' >"$PROJ/inbox.jsonl"
+cat >"$T/fakebin/lavish-axi" <<'F'
+#!/usr/bin/env bash
+echo "lavish-axi $* port=${LAVISH_AXI_PORT:-} sdir=${LAVISH_AXI_STATE_DIR:-}" >>"$FAKE_LOG"
+case "$1" in
+  reply) cat >>"$FAKE_LOG"; echo >>"$FAKE_LOG"
+    if [[ -n "${FAKE_LATE_COMMENT:-}" ]]; then echo '{"id":"m2","at":"2026-10-21T10:00:05Z","project":"demo","target":"page","text":"late","prompt":{},"delivered":true,"answered":false}' >>"$FAKE_LATE_COMMENT"; fi
+    echo "status: sent" ;;
+  *) printf 'session:\n  file: %s\n  url: "http://fake.test:4390/session/abc123"\n  status: opened\nnext_step: "run poll"\n' "$1" ;;
+esac
+F
+FAKE_LATE_COMMENT="$PROJ/inbox.jsonl" "$P" reply demo "ok" >/dev/null 2>&1
+eq "$(jq -r '[.id,.answered]|join(":")' "$PROJ/inbox.jsonl" | paste -sd' ')" "m1:true m2:false" "a comment delivered while the reply goes out is not marked answered"
+
+# ---- status shows a state-file problem; heal does not reload for it (C3) ----
+jq '.loadError="fleet.json: file is empty"' "$PROJ/page.json" >"$PROJ/p.tmp" && mv "$PROJ/p.tmp" "$PROJ/page.json"
+"$P" status demo | grep -q "state file problem: fleet.json: file is empty" && ok "status shows the loadError" || bad "status shows loadError" "$("$P" status demo)"
+jq '.session="open" | .lastRender=(now-600|todate)' "$PROJ/page.json" >"$PROJ/p.tmp" && mv "$PROJ/p.tmp" "$PROJ/page.json"
+: >"$FAKE_LOG"
+out="$("$P" heal)"
+grep -q "state file problem: demo: fleet.json: file is empty" <<<"$out" && ok "heal names the state file problem" || bad "heal names the problem" "$out"
+grep -q "plugin reload" "$FAKE_LOG" && bad "heal must NOT reload for a load error" || ok "heal does not reload for a load error, even when the render looks old"
+: >"$FAKE_LOG"
+FAKE_PLUGIN_STATUS=failed "$P" heal >/dev/null
+grep -q "plugin reload" "$FAKE_LOG" && ok "heal still reloads a failed plugin" || bad "heal reloads failed"
+jq 'del(.loadError)' "$PROJ/page.json" >"$PROJ/p.tmp" && mv "$PROJ/p.tmp" "$PROJ/page.json"
+: >"$FAKE_LOG"; "$P" heal >/dev/null
+grep -q "plugin reload" "$FAKE_LOG" && ok "heal reloads a genuinely stalled plugin (no load error)" || bad "heal stalled without loadError"
+jq '.lastRender=(now-5|todate)' "$PROJ/page.json" >"$PROJ/p.tmp" && mv "$PROJ/p.tmp" "$PROJ/page.json"
+
+# ---- status warns about live tasks with no project ----
+cat >"$T/root/state/fleet.json" <<J
+{"tasks":[{"id":"loose-in-repo","intent":"x","shape":"ship","status":"running","workspaceId":"/tmp/some-repo-wt/feat"},
+{"id":"loose-in-repo2","intent":"x","shape":"ship","status":"running","workspaceId":"/tmp/some-repo/sub"},
+{"id":"loose-other","intent":"x","shape":"scout","status":"queued"},
+{"id":"done-loose","intent":"x","shape":"scout","status":"done"},
+{"id":"tagged","intent":"x","shape":"scout","status":"running","project":"demo"}]}
+J
+w="$("$P" status 2>&1 >/dev/null)"
+grep -q "live task loose-in-repo2 has no project, but its workspace is in project demo's repo (/tmp/some-repo): bin/fleet set loose-in-repo2 project=demo" <<<"$w" && ok "status warns about a project-less task whose workspace is in a project's repo" || bad "status repo warning" "$w"
+grep -q "1 live task has no project while project pages exist (loose-other)\|2 live tasks have no project while project pages exist (loose-in-repo, loose-other)" <<<"$w" && ok "...and counts the other project-less live tasks" || bad "status generic warning" "$w"
+grep -q "done-loose\|tagged" <<<"$w" && bad "done and tagged tasks are not warned about" || ok "done and tagged tasks are not warned about"
+rm -f "$T/root/state/fleet.json"
+
 # ---- the plugin's Lavish config wins over env and state/page.env ----
 echo 'export LAVISH_AXI_PORT=4999' >"$T/root/state/page.env"
 jq 'del(.lavishPort) | del(.lavishStateDir)' "$PROJ/page.json" >"$PROJ/p.tmp" && mv "$PROJ/p.tmp" "$PROJ/page.json"
@@ -270,7 +392,7 @@ echo '{"version":1,"values":{"firstmateLabel":"fm=mine","lavishPort":4400}}' >"$
 rm -f "$FAKE_INSTALLED"; : >"$FAKE_LOG"
 out="$(FAKE_PLUGIN_STATUS=installable "$P" install 2>&1)"; rc=$?
 eq "$rc" 0 "install succeeds with fakes"
-grep -q "npm install --no-audit --no-fund (cwd .*plugin/firstmate-deck)" "$FAKE_LOG" && ok "install runs npm install in the plugin dir" || bad "install runs npm install" "$(cat "$FAKE_LOG")"
+grep -q "npm ci --omit=dev --no-audit --no-fund (cwd .*plugin/firstmate-deck)" "$FAKE_LOG" && ok "install runs npm ci --omit=dev (runtime dependencies only) in the plugin dir" || bad "install runs npm ci --omit=dev" "$(cat "$FAKE_LOG")"
 eq "$(jq -r '.values.firstmateRoot' "$SETTINGS")" "$(cd "$T/root" && pwd -P)" "install writes this checkout's realpath as firstmateRoot"
 eq "$(jq -c '[.version, .values.firstmateLabel, .values.lavishPort]' "$SETTINGS")" '[1,"fm=mine",4400]' "...merging, not clobbering, other values"
 eq "$(stat -c %a "$SETTINGS")" 600 "...and chmods the settings file 600"
@@ -290,6 +412,14 @@ echo 'not json' >"$SETTINGS"
 msg="$(FAKE_PLUGIN_STATUS=running "$P" install 2>&1)"; rc=$?
 [[ $rc -ne 0 ]] && grep -q "not a JSON object" <<<"$msg" && ok "install refuses to overwrite a corrupt settings file" || bad "corrupt settings" "$msg"
 eq "$(cat "$SETTINGS")" "not json" "...and leaves it alone"
+
+# install: no lockfile -> npm install --omit=dev; --dev -> the full npm install
+mkdir -p "$T/plugin-nolock"; cp "$HERE/plugin/firstmate-deck/paseo-plugin.json" "$HERE/plugin/firstmate-deck/package.json" "$T/plugin-nolock/"
+: >"$FAKE_LOG"; PAGE_PLUGIN_DIR="$T/plugin-nolock" FAKE_PLUGIN_STATUS=running "$P" install >/dev/null 2>&1
+grep -q "npm install --omit=dev --no-audit --no-fund (cwd $T/plugin-nolock)" "$FAKE_LOG" && ok "install without a lockfile uses npm install --omit=dev" || bad "install without lockfile" "$(cat "$FAKE_LOG")"
+: >"$FAKE_LOG"; FAKE_PLUGIN_STATUS=running "$P" install --dev >/dev/null 2>&1
+grep -q "npm install --no-audit --no-fund (cwd .*plugin/firstmate-deck)" "$FAKE_LOG" && ! grep -q -- "--omit=dev" "$FAKE_LOG" && ok "install --dev installs the dev dependencies too" || bad "install --dev" "$(cat "$FAKE_LOG")"
+"$P" install --bogus >/dev/null 2>&1 && bad "install refuses unknown options" || ok "install refuses unknown options"
 unset PASEO_HOME
 
 echo; echo "page.test.sh: $pass passed, $fail failed"

@@ -31,8 +31,8 @@ const mk = (project: string, ...texts: string[]): InboxEntry[] =>
   newEntries(project, texts.map((t) => ({ prompt: t, selector: "body" })), {});
 
 test("message format is exact: id, target, task title and open asks on every line", () => {
-  const info: Record<string, { title: string; asks: string[] }> = {
-    "t-pick-db": { title: "Choose the database", asks: ["Postgres or SQLite?", "Add the DATABASE_URL flag?"] },
+  const info: Record<string, { title: string; asks: { id: string; text: string }[] }> = {
+    "t-pick-db": { title: "Choose the database", asks: [{ id: "a1", text: "Postgres or SQLite?" }, { id: "a2", text: "Add the DATABASE_URL flag?" }] },
   };
   const describe = (t: string) => info[t.replace(/#a\d+$/, "")];
   assert.equal(
@@ -44,8 +44,8 @@ test("message format is exact: id, target, task title and open asks on every lin
     ], describe),
     [
       "## Page comments · deck",
-      '- [t-pick-db · "Choose the database" · ask 1: "Postgres or SQLite?" · ask 2: "Add the DATABASE_URL flag?"] (c-abc123) "Is this right?"',
-      '- [t-pick-db#a2 · "Choose the database" · ask 2: "Add the DATABASE_URL flag?"] (c-def456) "which env? staging?"',
+      '- [t-pick-db · "Choose the database" · ask a1: "Postgres or SQLite?" · ask a2: "Add the DATABASE_URL flag?"] (c-abc123) "Is this right?"',
+      '- [t-pick-db#a2 · "Choose the database" · ask a2: "Add the DATABASE_URL flag?"] (c-def456) "which env? staging?"',
       '- [endpoints] (c-ghi789) "two lines"',
       '- [t-gone] (c-jkl000) "no such task"',
       'Reply with: bin/page reply deck "<your reply>"',

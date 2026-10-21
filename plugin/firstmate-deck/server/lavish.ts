@@ -2,11 +2,10 @@
 // is resolved once and spawned directly with node (about 160 ms per poll versus about 1 s through npx),
 // and the next poll is started before the previous batch is handled.
 import { execFile, spawn, type ChildProcess } from "node:child_process";
-import { existsSync, readdirSync, readFileSync, realpathSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs";
-import { homedir, tmpdir } from "node:os";
-import { dirname, join } from "node:path";
-import { createHash } from "node:crypto";
-import { POLL_WRAPPER_SOURCE } from "./poll-wrapper-source.ts";
+import { existsSync, readdirSync, readFileSync, realpathSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import { homedir } from "node:os";
+import { join } from "node:path";
+import { POLL_WRAPPER_MARKER, POLL_WRAPPER_SOURCE } from "./poll-wrapper-source.ts";
 import { classifyPoll, decodePoll, type PollOutcome, type Prompt } from "./toon.ts";
 
 // ---------- binary resolution ----------
@@ -195,20 +194,9 @@ export function hasLivePoll(page: string, except?: ChildProcess | null): boolean
   return false;
 }
 
-/** Path of the poll wrapper, written once per content hash into the temp dir (see poll-wrapper-source.ts). */
-export function pollWrapperPath(): string {
-  const hash = createHash("sha256").update(POLL_WRAPPER_SOURCE).digest("hex").slice(0, 12);
-  const path = join(tmpdir(), `firstmate-deck-poll-wrapper-${hash}.mjs`);
-  if (!existsSync(path)) {
-    const tmp = `${path}.${process.pid}.${Math.random().toString(36).slice(2)}`;
-    writeFileSync(tmp, POLL_WRAPPER_SOURCE);
-    renameSync(tmp, path);
-  }
-  return path;
-}
-
 /**
- * Spawn one `lavish-axi poll` through poll-wrapper.mjs. The wrapper's stdin stays an open pipe for as long as this
+ * Spawn one `lavish-axi poll` through the poll wrapper, run as `node -e <source> -- <marker> ...` (no file is written
+ * anywhere; see poll-wrapper-source.ts). The wrapper's stdin stays an open pipe for as long as this
  * process lives; when this process dies (even with -9) the pipe closes and the wrapper kills the poll, so an
  * orphaned poll can never keep the Lavish listener and swallow comments. The result resolves as soon as the
  * document is complete, which is when its `next_step:` line appears (the prompts table always precedes it), NOT
@@ -219,8 +207,8 @@ export function pollWrapperPath(): string {
  * Never pass --owner: Lavish reports an owned poll as an "external listener" and shows a permanent "Working..."
  * bubble on the page. Unowned, the page shows "Working" only while picked-up comments await `lavish-axi reply`.
  */
-export function spawnPoll(bin: string, page: string, env: NodeJS.ProcessEnv, owner?: string, wrapper = pollWrapperPath()): SpawnedPoll {
-  const child = spawn(process.execPath, [wrapper, bin, "poll", page, ...(owner ? ["--owner", owner] : [])], { env, stdio: ["pipe", "pipe", "pipe"] });
+export function spawnPoll(bin: string, page: string, env: NodeJS.ProcessEnv, owner?: string): SpawnedPoll {
+  const child = spawn(process.execPath, ["-e", POLL_WRAPPER_SOURCE, "--", POLL_WRAPPER_MARKER, bin, "poll", page, ...(owner ? ["--owner", owner] : [])], { env, stdio: ["pipe", "pipe", "pipe"] });
   child.stdin!.on("error", () => {}); // the wrapper may already be gone
   spawned.set(child, page);
   let out = "";
@@ -237,14 +225,18 @@ export function spawnPoll(bin: string, page: string, env: NodeJS.ProcessEnv, own
   return { child, result };
 }
 
-/** Kill a still-alive poll recorded in a pid file, if its command line really is `lavish-axi ... poll <page>`. */
+/**
+ * Kill a still-alive poll recorded in a pid file, if its command line really is ours: the poll wrapper (our marker
+ * argument) or `lavish-axi ... poll`, with `poll` and the page as exact arguments (not substrings of the wrapper's source).
+ */
 export function killStalePoll(pidFile: string, page: string): boolean {
   let pid = NaN;
   try { pid = parseInt(readFileSync(pidFile, "utf8").trim(), 10); } catch { return false; }
   if (!Number.isInteger(pid) || pid <= 1) return false;
   try {
-    const cmd = readFileSync(`/proc/${pid}/cmdline`, "utf8").split("\0").join(" ");
-    if ((cmd.includes("lavish-axi") || cmd.includes("poll-wrapper")) && cmd.includes(" poll ") && cmd.includes(page)) {
+    const argv = readFileSync(`/proc/${pid}/cmdline`, "utf8").split("\0");
+    const ours = argv.includes(POLL_WRAPPER_MARKER) || argv.some((a) => a.includes("lavish-axi"));
+    if (ours && argv.includes("poll") && argv.includes(page)) {
       process.kill(pid, "SIGTERM");
       try { unlinkSync(pidFile); } catch {}
       return true;

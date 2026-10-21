@@ -98,7 +98,7 @@ $F ask r "q?" >/dev/null
 [[ -n "$($F get r)" ]]; check "get" $?
 eq "$($F by-agent A1 | jq -r .id)" r; check "by-agent" $?
 eq "$($F active | jq -r '.[0].id')" r; check "active" $?
-$F asks | grep -q '^r \[1\]: q?'; check "asks" $?
+$F asks | grep -q '^r \[a1\]: q?'; check "asks" $?
 $F log r "hello" >/dev/null; grep -q hello "$T/tasks/r/log.md"; check "log" $?
 $F preview r 4321 99 >/dev/null; eq "$($F get r | jq -c .preview)" '{"port":4321,"pid":99}'; check "preview" $?
 $F clear-preview r >/dev/null; eq "$($F get r | jq -c '.preview')" null; check "clear-preview" $?
@@ -171,6 +171,122 @@ $F answer pd 1 >/dev/null
 eq "$($F get pd | jq -c '[.asks[].text, (.asks[0] | has("pendingSince"))]')" '["Second?",true]'; check "answer removes the ask; the other keeps its mark" $?
 $F reask pd 1 "Second, sharper?" >/dev/null
 eq "$($F get pd | jq -c '.asks[0] | [.text, has("pendingSince")]')" '["Second, sharper?",false]'; check "reask with new text also clears the mark" $?
+
+# stable ask ids (C1): assigned by ask, never reused, kept by reask/pending/answer; numbers still work
+reset
+$F add sid intent=x shape=scout status=needs-captain >/dev/null
+eq "$($F ask sid "One?" --options "A|B")" a1; check "ask prints its id" $?
+$F ask sid "Two?" >/dev/null; $F ask sid "Three?" >/dev/null
+eq "$($F get sid | jq -c '[.asks[].id]')" '["a1","a2","a3"]'; check "asks get stable ids a1..a3" $?
+$F answer sid a1 >/dev/null
+eq "$($F get sid | jq -c '[.asks[] | [.id,.text]]')" '[["a2","Two?"],["a3","Three?"]]'; check "answering a1 leaves a2/a3 with their ids" $?
+$F pending sid a3 >/dev/null
+eq "$($F get sid | jq -c '[.asks[] | has("pendingSince")]')" '[false,true]'; check "pending by id hits ask a3 after a1 was answered" $?
+$F reask sid a2 "Two, sharper?" >/dev/null
+eq "$($F get sid | jq -c '[.asks[] | [.id,.text]]')" '[["a2","Two, sharper?"],["a3","Three?"]]'; check "reask by id keeps ids" $?
+$F answer sid a2 >/dev/null
+eq "$($F get sid | jq -c '[.asks[].text]')" '["Three?"]'; check "answer by id removes exactly that ask" $?
+$F ask sid "Four?" >/dev/null
+eq "$($F get sid | jq -c '[.asks[].id]')" '["a3","a4"]'; check "a new ask never reuses an answered id" $?
+$F answer sid a4 >/dev/null; $F answer sid a3 >/dev/null
+$F ask sid "Five?" >/dev/null
+eq "$($F get sid | jq -c '[.asks[].id]')" '["a5"]'; check "ids keep counting after every ask was answered" $?
+refused "answer an id that is gone" $F answer sid a1
+refused "pending an id that is gone" $F pending sid a1
+refused "reask an id that is gone" $F reask sid a2
+refused "answer garbage ref" $F answer sid x1
+reset
+$F add num intent=x shape=scout status=needs-captain >/dev/null
+$F ask num "P?" >/dev/null; $F ask num "Q?" >/dev/null
+$F answer num 1 >/dev/null
+eq "$($F get num | jq -c '[.asks[] | [.id,.text]]')" '[["a2","Q?"]]'; check "a plain 1-based number still resolves" $?
+# asks written before ids existed get them lazily, from their index, on the first write
+reset
+cat >"$FLEET_FILE" <<'J'
+{"tasks":[{"id":"old","intent":"x","shape":"scout","status":"needs-captain","asks":[{"text":"First?","since":"2026-01-01T00:00:00Z"},{"text":"Second?","since":"2026-01-01T00:00:00Z"},{"text":"Third?","since":"2026-01-01T00:00:00Z"}]}]}
+J
+$F asks | grep -q '^old \[a2\]: Second?'; check "asks lists an id-less ask under its index id" $?
+$F answer old 1 >/dev/null
+eq "$($F get old | jq -c '[.asks[] | [.id,.text]]')" '[["a2","Second?"],["a3","Third?"]]'; check "id-less asks get index ids at first touch, then answer removes by that" $?
+$F ask old "Fourth?" >/dev/null
+eq "$($F get old | jq -c '[.asks[].id]')" '["a2","a3","a4"]'; check "a new ask after lazy ids takes the next number" $?
+reset
+cat >"$FLEET_FILE" <<'J'
+{"tasks":[{"id":"mix","intent":"x","shape":"scout","status":"needs-captain","asks":[{"text":"Plain?","since":"2026-01-01T00:00:00Z"},{"id":"a1","text":"Has id?","since":"2026-01-01T00:00:00Z"}]}]}
+J
+$F pending mix 1 >/dev/null
+eq "$($F get mix | jq -c '[.asks[] | .id]')" '["a2","a1"]'; check "a lazy id never collides with an existing one" $?
+
+# fallback lock without flock: parallel writers still do not lose updates
+reset
+mkdir -p "$T/noflock"
+for b in bash jq date mktemp mv rm cat mkdir dirname sleep find rmdir sed head grep tail git env; do p="$(command -v $b)" && ln -sf "$p" "$T/noflock/$b"; done
+for i in $(seq 1 16); do PATH="$T/noflock" "$T/noflock/bash" "$F" add "nf-$i" intent=x shape=scout status=queued >/dev/null 2>&1 & done
+wait
+eq "$(jq '.tasks | length' "$FLEET_FILE")" 16; check "16 parallel adds all land without flock (mkdir lock)" $?
+
+# project inheritance through depends_on (proposal 3)
+reset
+$F add base intent=x shape=scout status=done project=deck >/dev/null
+$F add child intent=x shape=ship status=queued depends_on=base >/dev/null 2>&1
+eq "$($F get child | jq -r '.project')" deck; check "add depends_on=<dep> inherits the dep's project" $?
+eq "$($F get child | jq -c '.depends_on')" '["base"]'; check "add stores depends_on as an array" $?
+$F add child2 intent=x shape=ship status=queued project=other depends_on=base >/dev/null 2>&1
+eq "$($F get child2 | jq -r '.project')" other; check "an explicit project= wins over inheritance" $?
+$F add free intent=x shape=ship status=queued >/dev/null
+$F add c3 intent=x shape=ship status=queued depends_on=free,base >/dev/null 2>&1
+eq "$($F get c3 | jq -r '.project')" deck; check "inherits from the first dependency that has a project" $?
+$F depend free base >/dev/null 2>&1
+eq "$($F get free | jq -r '.project')" deck; check "depend gives a project-less task the dep's project" $?
+$F add keep intent=x shape=ship status=queued project=mine >/dev/null; $F depend keep base >/dev/null 2>&1
+eq "$($F get keep | jq -r '.project')" mine; check "depend leaves an existing project alone" $?
+echo '{"id":"gone","intent":"x","shape":"scout","status":"done","project":"arch"}' >"$T/fleet-archive.jsonl"
+$F add fromarch intent=x shape=ship status=queued depends_on=gone >/dev/null 2>&1
+eq "$($F get fromarch | jq -r '.project')" arch; check "inherits from an archived dependency" $?
+refused "add with a bad depends_on id" $F add bad2 intent=x shape=ship status=queued depends_on=Bad_Id
+refused "add depending on itself" $F add selfdep intent=x shape=ship status=queued depends_on=selfdep
+
+# finish (proposal 4)
+reset
+REPO="$T/repo"; mkdir -p "$REPO"
+git -C "$REPO" init -q -b main && git -C "$REPO" config user.email t@t && git -C "$REPO" config user.name t
+echo 1 >"$REPO/f"; git -C "$REPO" add f && git -C "$REPO" commit -qm "base commit"
+git -C "$REPO" checkout -qb feat/x
+echo 2 >>"$REPO/f"; git -C "$REPO" commit -qam "first change"
+echo 3 >>"$REPO/f"; git -C "$REPO" commit -qam "second change"
+mkdir -p "$T/projects/demo"; echo "{\"title\":\"Demo\",\"repo\":\"$REPO\"}" >"$T/projects/demo/project.json"
+$F add fin intent="Build the thing" shape=ship status=running project=demo notes="Added the thing; tests green" pr=https://example.test/pr/1 >/dev/null
+$F finish fin --branch feat/x >/dev/null 2>"$T/fin.err"
+eq "$($F get fin | jq -r '[.status,.branch]|join(" ")')" "done feat/x"; check "finish sets status=done and the branch" $?
+grep -q "Added the thing; tests green" "$T/tasks/fin/card.md" && grep -q 'Branch: `feat/x` · PR: https://example.test/pr/1' "$T/tasks/fin/card.md"; check "finish writes a default card from notes + branch/PR" $?
+code="$T/projects/demo/sections/code.md"
+[[ "$(grep -c -E '^- [0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2} [0-9a-f]{7,} (first|second) change$' "$code")" == 2 ]]; check "finish appends dated commit lines to sections/code.md" $?
+grep -n "first change" "$code" | cut -d: -f1 | { read a; grep -n "second change" "$code" | cut -d: -f1 | { read b; [[ $a -lt $b ]]; }; }; check "...oldest commit first" $?
+$F finish fin --branch feat/x >/dev/null 2>&1
+eq "$(wc -l <"$code" | tr -d ' ')" 2; check "finish twice does not duplicate commit lines" $?
+echo 4 >>"$REPO/f"; git -C "$REPO" commit -qam "third change"
+$F finish fin >/dev/null 2>&1
+eq "$(wc -l <"$code" | tr -d ' ')" 3; check "...a later commit is appended, earlier ones are not repeated" $?
+printf 'No local code changes recorded yet.\n' >"$code"
+$F finish fin >/dev/null 2>&1
+grep -q "No local code changes" "$code" && bad "placeholder removed" || ok "finish replaces the section's placeholder line"
+$F add fin2 intent=y shape=ship status=running project=demo >/dev/null
+printf 'Hand-written card.\nSecond line.\n' | $F finish fin2 --card - --failed >/dev/null 2>&1
+eq "$($F get fin2 | jq -r .status)" failed; check "finish --failed sets status=failed" $?
+eq "$(cat "$T/tasks/fin2/card.md")" "$(printf 'Hand-written card.\nSecond line.')"; check "finish --card - writes the given card" $?
+printf 'File card\n' >"$T/c.md"; $F finish fin2 --card-file "$T/c.md" >/dev/null 2>&1
+eq "$(cat "$T/tasks/fin2/card.md")" "File card"; check "finish --card-file writes the file as the card" $?
+$F finish fin2 >/dev/null 2>&1
+eq "$(cat "$T/tasks/fin2/card.md")" "File card"; check "a default finish never overwrites an existing card" $?
+$F add fin3 intent=z shape=scout status=running >/dev/null
+$F finish fin3 --branch nope >/dev/null 2>&1; check "finish on a task with no project works" $?
+$F add fin4 intent=z shape=ship status=running project=demo >/dev/null
+$F finish fin4 --branch no-such-branch >/dev/null 2>"$T/fin4.err"; rc=$?
+eq "$rc" 0; check "finish with an unknown branch still finishes" $?
+grep -q "skipped the code section" "$T/fin4.err"; check "...and says it skipped the code section" $?
+eq "$($F get fin4 | jq -r .status)" done; check "...with status done" $?
+refused "finish an unknown task" $F finish nope
+refused "finish with a bad option" $F finish fin --bogus
 
 # lock: parallel writers must not lose updates (read-modify-write under flock)
 if command -v flock >/dev/null; then

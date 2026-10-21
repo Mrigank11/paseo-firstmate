@@ -1,7 +1,8 @@
 process.env.TZ = "UTC";
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { loadProject } from "../server/state.ts";
@@ -47,7 +48,7 @@ test("replied ask: state loading, muted card, With the first mate group", () => 
 test("a task with one replied and one open ask stays in Needs you", () => {
   const m = structuredClone(model);
   const t = m.tasks.find((x) => x.id === "ask-fm")!;
-  t.asks.push({ text: "Second?", contextMd: "" });
+  t.asks.push({ id: "a2", text: "Second?", contextMd: "" });
   const live = renderProject(m, agents, opts).live;
   assert.ok(live.slice(live.indexOf('id="g-you"'), live.indexOf('id="g-fm"')).includes('id="t-ask-fm"'));
   assert.ok(!live.includes('id="g-fm"'));
@@ -106,10 +107,22 @@ test("agent step text is escaped; banner renders", () => {
   assert.match(out.page, /<div class="banner b-bad" role="status">Plugin &lt;down&gt;<\/div>/);
 });
 
-test("loader: missing is empty, malformed throws", () => {
+test("loader: missing is empty; a broken fleet.json is reported, not thrown; a broken archive line is skipped", () => {
   const empty = loadProject(join(here, "fixtures", "nonexistent"), "nothing");
   assert.deepEqual([empty.tasks, empty.archive, empty.sections, empty.title], [[], [], [], "nothing"]);
   assert.equal(renderProject(empty, {}, opts).live.includes("No tasks"), true);
   assert.equal(model.archive.length, 2);
-  assert.throws(() => loadProject(join(here, "fixtures", "bad"), "x"), /fleet\.json: invalid JSON/);
+  const bad = loadProject(join(here, "fixtures", "bad"), "x");
+  assert.match(bad.fleetError?.message ?? "", /^invalid JSON/);
+  assert.equal(bad.fleetError?.file, "fleet.json");
+  assert.deepEqual(bad.tasks, [], "the caller keeps its last good model; the loader hands back no tasks");
+  const dir = mkdtempSync(join(tmpdir(), "deck-load-"));
+  mkdirSync(join(dir, "state", "projects", "p"), { recursive: true });
+  writeFileSync(join(dir, "state", "projects", "p", "project.json"), "{}");
+  writeFileSync(join(dir, "state", "fleet.json"), "  \n");
+  assert.equal(loadProject(dir, "p").fleetError?.message, "file is empty", "an empty fleet.json is an error, not zero tasks");
+  writeFileSync(join(dir, "state", "fleet.json"), '{"tasks":[]}');
+  writeFileSync(join(dir, "state", "fleet-archive.jsonl"), '{"id":"a","project":"p","status":"done"}\n{"id":"half","proj\nnot json at all\n{"id":"b","project":"p","status":"done"}\n');
+  const m = loadProject(dir, "p");
+  assert.deepEqual([m.archive.map((t) => t.id), m.archiveSkipped, m.fleetError], [["a", "b"], 2, undefined]);
 });

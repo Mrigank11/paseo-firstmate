@@ -1,5 +1,5 @@
-// Where on the page a Lavish comment points: "t-<taskId>" for a task card, "t-<taskId>#a<n>" for ask n of a task
-// (its block, option buttons or context expander), a section id, or "page".
+// Where on the page a Lavish comment points: "t-<taskId>" for a task card, "t-<taskId>#<askId>" for an ask of a task
+// (its block, option buttons or context expander; the ask id is bin/fleet's stable "a2"), a section id, or "page".
 
 export type Known = { tasks?: Iterable<string>; sections?: Iterable<string> };
 
@@ -21,8 +21,9 @@ export function extractTarget(selector: string | undefined, known: Known = {}): 
     if (m && (!tasks || tasks.has(m[1]))) return "t-" + m[1];
     m = /^s-(.+)$/.exec(id);
     if (m && (!tasks || tasks.has(m[1]))) return "t-" + m[1];
-    m = /^[ax]-(.+)-(\d+)$/.exec(id); // a-<task>-<n>: the ask block; x-<task>-<n>: its context expander
-    if (m && (!tasks || tasks.has(m[1]))) return `t-${m[1]}#a${m[2]}`;
+    // a-<task>-<askId>: the ask block; x-<task>-<askId>: its context expander (a bare number is an older page: ask "a<n>")
+    m = /^[ax]-(.+)-(a?[1-9][0-9]*)$/.exec(id);
+    if (m && (!tasks || tasks.has(m[1]))) return `t-${m[1]}#${m[2].startsWith("a") ? m[2] : "a" + m[2]}`;
     return null;
   };
   for (let i = parts.length - 1; i >= 0; i--) {

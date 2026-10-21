@@ -63,18 +63,23 @@ test("comments do not move the page signature (no page reload per comment)", () 
 test("options render as real buttons with a hint; picked card shows the choice", () => {
   const m = structuredClone(base);
   const t = m.tasks.find((x) => x.id === "ask-fm")!;
-  t.asks[0] = { text: "Layout?", contextMd: "", options: ["A index card", "B live <console>", "C status board"] };
+  t.asks[0] = { id: "a1", text: "Layout?", contextMd: "", options: ["A index card", "B live <console>", "C status board"] };
   let live = renderProject(m, {}, opts).live;
   assert.equal((live.match(/<button type="button" class="opt"/g) ?? []).length, 3);
-  assert.match(live, /data-task="ask-fm" data-ask="1" data-opt="B live &lt;console&gt;"/);
+  assert.match(live, /data-task="ask-fm" data-ask="a1" data-opt="B live &lt;console&gt;"/);
   assert.match(live, /or comment on the card/);
-  assert.match(live, /data-key="ask-ask-fm-1"/);
+  assert.match(live, /data-key="ask-ask-fm-a1"/);
   t.asks[0] = { ...t.asks[0], repliedAt: "2026-10-21T09:10:00Z", replyText: "Picked: B", replyChoice: "B live <console>", replyAnswered: false };
   live = renderProject(m, {}, opts).live;
   const fm = live.slice(live.indexOf('id="g-fm"'), live.indexOf('id="g-running"'));
   assert.ok(fm.includes('id="t-ask-fm"'));
   assert.match(fm, /You picked <b>B live &lt;console&gt;<\/b> · the first mate is applying it/);
-  assert.ok(!fm.includes('class="opt"'));
+  // the pick stays on the page as the pressed button, at full contrast, inside ITS ask; the others are disabled
+  assert.match(fm, /<button type="button" class="opt on" id="o-ask-fm-a1-2"[^>]*aria-pressed="true">B live &lt;console&gt;<\/button>/);
+  assert.match(fm, /<button type="button" class="opt" id="o-ask-fm-a1-1"[^>]*aria-pressed="false" disabled>/);
+  assert.ok(!/class="opt on"[^>]*disabled/.test(fm), "the picked button is not disabled (stays focusable)");
+  assert.ok(fm.indexOf('id="a-ask-fm-a1"') < fm.indexOf("You picked"), "the pick line sits in the ask's own block");
+  assert.ok(!/class="trail"/.test(fm.slice(fm.indexOf('id="t-ask-fm"'), fm.indexOf('id="a-ask-fm-a1"'))), "no card-level trail repeats the pick above the question");
 });
 
 test("page script: 1 s reload, lavish guard, optimistic map, queuePrompt + send", () => {
@@ -89,13 +94,13 @@ test("page script: 1 s reload, lavish guard, optimistic map, queuePrompt + send"
 test("page script in a fake DOM: click marks optimistically, queues, sends, survives a swap", () => {
   // minimal DOM: just enough of the surface the script's click handler and swap re-apply touch
   const mkBtn = (opt: string) => {
-    const attrs: Record<string, string> = { "data-task": "pick-db", "data-ask": "1", "data-opt": opt, "data-title": "Pick DB" };
-    const b: any = { disabled: false, attrs, getAttribute: (k: string) => attrs[k], setAttribute: (k: string, v: string) => (attrs[k] = v), classList: { on: false, toggle(_c: string, on: boolean) { this.on = on; }, remove() { this.on = false; } } };
+    const attrs: Record<string, string> = { "data-task": "pick-db", "data-ask": "a1", "data-opt": opt, "data-title": "Pick DB" };
+    const b: any = { disabled: false, attrs, getAttribute: (k: string) => attrs[k], setAttribute: (k: string, v: string) => (attrs[k] = v), removeAttribute(k: string) { if (k === "disabled") this.disabled = false; }, classList: { on: false, toggle(_c: string, on: boolean) { this.on = on; }, remove() { this.on = false; }, contains() { return this.on; } } };
     return b;
   };
   const btns = [mkBtn("A"), mkBtn("B")];
   const line: any = { hidden: true, textContent: "" };
-  const box: any = { getAttribute: () => "ask-pick-db-1", querySelectorAll: () => btns, querySelector: () => line };
+  const box: any = { getAttribute: () => "ask-pick-db-a1", querySelectorAll: () => btns, querySelector: () => line };
   const card = {};
   btns.forEach((b) => { b.closest = (sel: string) => (sel === ".opts" ? box : card); });
   let click: ((e: any) => void) | undefined;
@@ -110,14 +115,15 @@ test("page script in a fake DOM: click marks optimistically, queues, sends, surv
   const js = pageScript("p", "page.live.js", 1);
   new Function("document", "window", "location", "localStorage", "setInterval", js)(doc, win, { hash: "" }, undefined, () => 0);
   click!({ target: { closest: (s: string) => (s === "button.opt" ? btns[1] : null) } });
-  assert.equal(btns[0].disabled && btns[1].disabled, true);
+  assert.deepEqual([btns[0].disabled, btns[1].disabled], [true, false], "the others are disabled, the pick stays enabled (focusable) and pressed");
+  assert.deepEqual([btns[0].attrs["aria-pressed"], btns[1].attrs["aria-pressed"]], ["false", "true"]);
   assert.equal(btns[1].classList.on, true);
   assert.equal(btns[0].classList.on, false);
   assert.equal(line.textContent, "You picked B · sending…");
   assert.equal(queued.length, 1);
   assert.equal(queued[0][0], "Picked: B");
-  assert.deepEqual(queued[0][1].data, { kind: "ask-choice", task: "pick-db", ask: 1, option: "B" });
-  assert.equal(queued[0][1].queueKey, "ask-pick-db-1");
+  assert.deepEqual(queued[0][1].data, { kind: "ask-choice", task: "pick-db", ask: "a1", option: "B" });
+  assert.equal(queued[0][1].queueKey, "ask-pick-db-a1");
   assert.equal(queued[0][1].tag, "choice");
   assert.equal(queued[0][1].text, "Pick DB: B");
   assert.equal(queued[0][1].element, card);
@@ -140,12 +146,13 @@ test("ask-choice parsed from a realistic poll prompt (lavish folds data into the
   const o = classifyPoll(await decodePoll(readFileSync(join(here, "fixtures", "feedback_choice.toon"), "utf8")));
   assert.equal(o.prompts.length, 1);
   const parsed = parseChoice(o.prompts[0])!;
-  assert.deepEqual(parsed.choice, { task: "pick-db", ask: 1, option: "B live console" });
+  assert.deepEqual(parsed.choice, { task: "pick-db", ask: "a1", option: "B live console" });
   assert.equal(parsed.text, "Picked: B live console");
-  const [e] = newEntries("deck-demo", o.prompts, { tasks: ["pick-db"] }, new Date("2026-10-21T10:00:00Z"), (t, n) => (t === "pick-db" && n === 1 ? "Postgres or SQLite?" : undefined));
+  const [e] = newEntries("deck-demo", o.prompts, { tasks: ["pick-db"] }, new Date("2026-10-21T10:00:00Z"), (t, a) => (t === "pick-db" && a === "a1" ? { text: "Postgres or SQLite?", options: ["A live", "B live console"] } : undefined));
   assert.equal(e.target, "t-pick-db#a1");
   assert.equal(e.text, "Picked: B live console");
-  assert.deepEqual(e.choice, { task: "pick-db", ask: 1, option: "B live console", askText: "Postgres or SQLite?" });
+  assert.deepEqual(e.choice, { task: "pick-db", ask: "a1", option: "B live console", askText: "Postgres or SQLite?" });
+  assert.equal(e.stale, undefined);
 });
 
 test("choice parsing rejects malformed data and also reads a separate data field", () => {
@@ -153,19 +160,24 @@ test("choice parsing rejects malformed data and also reads a separate data field
   assert.equal(parseChoice({ prompt: "x\n\nContext data:\n{not json" }), null);
   assert.equal(parseChoice({ prompt: "x", data: { kind: "ask-choice", task: "../evil", ask: 1, option: "A" } }), null);
   assert.equal(parseChoice({ prompt: "x", data: { kind: "ask-choice", task: "ok", ask: 0, option: "A" } }), null);
-  assert.deepEqual(parseChoice({ prompt: "x", data: { kind: "ask-choice", task: "ok", ask: 2, option: "A" } })!.choice, { task: "ok", ask: 2, option: "A" });
+  assert.equal(parseChoice({ prompt: "x", data: { kind: "ask-choice", task: "ok", ask: "second", option: "A" } }), null);
+  assert.deepEqual(parseChoice({ prompt: "x", data: { kind: "ask-choice", task: "ok", ask: "a2", option: "A" } })!.choice, { task: "ok", ask: "a2", option: "A" });
+  // a page loaded before ids existed sends the index: it reads as "a<n>"
+  assert.deepEqual(parseChoice({ prompt: "x", data: { kind: "ask-choice", task: "ok", ask: 2, option: "A" } })!.choice, { task: "ok", ask: "a2", option: "A" });
 });
 
-test("relay message names the choice and how to apply it", () => {
+test("relay message names the choice, marks a stale click as ignored, and says picks are applied on reply", () => {
   const msg = formatMessage("deck-demo", [
     { id: "c-1", target: "endpoints", text: "a note", choice: undefined },
-    { id: "c-2", target: "t-pick-db#a1", text: "Picked: B", choice: { task: "pick-db", ask: 1, option: "B live console", askText: "Postgres\nor SQLite?" } },
-  ], (t) => (t.startsWith("t-pick-db") ? { title: "Choose the database", asks: ["Postgres or SQLite?"] } : undefined));
+    { id: "c-2", target: "t-pick-db#a1", text: "Picked: B", choice: { task: "pick-db", ask: "a1", option: "B live console", askText: "Postgres\nor SQLite?" } },
+    { id: "c-3", target: "t-pick-db#a7", text: "Picked: C", stale: true, choice: { task: "pick-db", ask: "a7", option: "C", askText: undefined } },
+  ], (t) => (t.startsWith("t-pick-db") ? { title: "Choose the database", asks: [{ id: "a1", text: "Postgres or SQLite?" }] } : undefined));
   assert.equal(msg, [
     "## Page comments · deck-demo",
     '- [endpoints] (c-1) "a note"',
-    '- [t-pick-db#a1 · "Choose the database"] (c-2) picked option "B live console" for ask 1 ("Postgres or SQLite?")',
+    '- [t-pick-db#a1 · "Choose the database"] (c-2) picked option "B live console" for ask a1 ("Postgres or SQLite?")',
+    '- [t-pick-db#a7 · "Choose the database"] (c-3) option click on an ask that is no longer open, ignored: option "C" for ask a7',
     'Reply with: bin/page reply deck-demo "<your reply>"',
-    "Apply with: bin/fleet answer pick-db 1, then act on it.",
+    "Option picks are applied automatically when you reply; use --keep-open <task>#<askId> to keep an ask open.",
   ].join("\n"));
 });

@@ -1,7 +1,7 @@
 // Delivery of page comments to the first mate. Entries are already in inbox.jsonl when they reach the relay.
 // Batches arriving within BATCH_MS (300 ms: Lavish already hands over one Send as one poll result) become one message; a failed send retries at 2 s, 10 s, 30 s, then every 60 s.
 import { randomBytes } from "node:crypto";
-import type { Choice, InboxEntry } from "./store.ts";
+import { askIdOf, type Choice, type InboxEntry } from "./store.ts";
 import type { Prompt } from "./toon.ts";
 import { extractTarget, type Known } from "./target.ts";
 
@@ -25,13 +25,17 @@ export function parseChoice(p: Prompt): { choice: Choice; text: string } | null 
     text = text.slice(0, at);
   }
   if (!data || typeof data !== "object" || data.kind !== "ask-choice") return null;
-  const { task, ask, option } = data;
+  const { task, option } = data;
+  const ask = askIdOf(data.ask); // the ask's stable id; a bare number comes from a page loaded before ids existed
   if (typeof task !== "string" || !/^[a-z0-9][a-z0-9-]*$/.test(task)) return null;
-  if (!Number.isInteger(ask) || ask < 1 || typeof option !== "string" || !option.trim()) return null;
+  if (!ask || typeof option !== "string" || !option.trim()) return null;
   return { choice: { task, ask, option }, text };
 }
 
-export function newEntries(project: string, prompts: Prompt[], known: Known, now = new Date(), askText?: (task: string, ask: number) => string | undefined): InboxEntry[] {
+/** What the plugin knows about an ask when a click arrives: its text and options, or undefined when it is not open. */
+export type AskLookup = (task: string, ask: string) => { text: string; options?: string[] } | undefined;
+
+export function newEntries(project: string, prompts: Prompt[], known: Known, now = new Date(), lookup?: AskLookup): InboxEntry[] {
   return prompts.map((p) => {
     const picked = parseChoice(p);
     const base = {
@@ -44,8 +48,15 @@ export function newEntries(project: string, prompts: Prompt[], known: Known, now
     };
     if (picked) {
       const { choice } = picked;
-      const at = askText?.(choice.task, choice.ask);
-      return { ...base, target: `t-${choice.task}#a${choice.ask}`, text: picked.text, choice: at ? { ...choice, askText: at } : choice };
+      const a = lookup?.(choice.task, choice.ask);
+      // Validate at ingest: the ask must still be open and the option one of its own. Otherwise the click is kept
+      // (the captain did make it) but marked stale, and the first mate is told it is not to be applied.
+      const stale = lookup ? !a || (!!a.options && !a.options.includes(choice.option)) : false;
+      return {
+        ...base, target: `t-${choice.task}#${choice.ask}`, text: picked.text,
+        choice: a ? { ...choice, askText: a.text } : choice,
+        ...(stale ? { stale: true } : {}),
+      };
     }
     return { ...base, target: extractTarget(p.selector, known), text: p.prompt };
   });
@@ -55,24 +66,26 @@ const oneLine = (s: string) => s.replace(/\s+/g, " ").trim();
 const brief = (s: string, n = 100) => { const t = oneLine(s).replace(/"/g, "'"); return t.length > n ? t.slice(0, n - 1) + "…" : t; };
 
 /** What the first mate needs to know about a comment's target without looking anything up. */
-export type TargetInfo = { title: string; asks: string[] };
+export type TargetInfo = { title: string; asks: { id: string; text: string }[] };
 export type Describe = (target: string) => TargetInfo | undefined;
 
-/** `t-<task>` or `t-<task>#a<n>` -> the task id and, for an ask target, the 1-based ask index. */
-export function parseTarget(target: string): { task: string; ask?: number } | null {
-  const m = /^t-(.+?)(?:#a(\d+))?$/.exec(target);
-  return m ? { task: m[1], ask: m[2] ? Number(m[2]) : undefined } : null;
+/** `t-<task>` or `t-<task>#<askId>` -> the task id and, for an ask target, the ask id ("a2"). */
+export function parseTarget(target: string): { task: string; ask?: string } | null {
+  const m = /^t-(.+?)(?:#(a[1-9][0-9]*))?$/.exec(target);
+  return m ? { task: m[1], ask: m[2] } : null;
 }
+
+export const CHOICES_APPLIED_LINE = "Option picks are applied automatically when you reply; use --keep-open <task>#<askId> to keep an ask open.";
 
 /**
  * One line per comment, self-contained and traceable:
- *   - [t-pick-db · "Choose the database" · ask 1: "Postgres or SQLite?"] (c-abc123) "<text>"
+ *   - [t-pick-db · "Choose the database" · ask a1: "Postgres or SQLite?"] (c-abc123) "<text>"
  * The bracket names the target, the task title and the open ask text(s); the parenthesis is the inbox comment id.
  */
-type Line = Pick<InboxEntry, "target" | "text" | "choice"> & { id?: string };
+type Line = Pick<InboxEntry, "target" | "text" | "choice" | "stale"> & { id?: string };
 
 export function formatMessage(project: string, entries: Line[], describe?: Describe): string {
-  const choices = entries.filter((e) => e.choice).map((e) => e.choice!);
+  const live = entries.some((e) => e.choice && !e.stale);
   const line = (e: Line) => {
     const parts = [e.target];
     const info = describe?.(e.target);
@@ -81,19 +94,21 @@ export function formatMessage(project: string, entries: Line[], describe?: Descr
       const at = parseTarget(e.target);
       if (!e.choice) {
         const only = at?.ask;
-        info.asks.forEach((a, i) => { if ((only === undefined || only === i + 1) && a) parts.push(`ask ${i + 1}: "${brief(a)}"`); });
+        for (const a of info.asks) if ((only === undefined || only === a.id) && a.text) parts.push(`ask ${a.id}: "${brief(a.text)}"`);
       }
     }
     const id = e.id ? ` (${e.id})` : "";
-    return e.choice
-      ? `- [${parts.join(" · ")}]${id} picked option "${oneLine(e.choice.option)}" for ask ${e.choice.ask}${e.choice.askText ? ` ("${oneLine(e.choice.askText)}")` : ""}`
-      : `- [${parts.join(" · ")}]${id} "${oneLine(e.text)}"`;
+    if (!e.choice) return `- [${parts.join(" · ")}]${id} "${oneLine(e.text)}"`;
+    const what = `option "${oneLine(e.choice.option)}" for ask ${e.choice.ask}${e.choice.askText ? ` ("${oneLine(e.choice.askText)}")` : ""}`;
+    return e.stale
+      ? `- [${parts.join(" · ")}]${id} option click on an ask that is no longer open, ignored: ${what}`
+      : `- [${parts.join(" · ")}]${id} picked ${what}`;
   };
   return [
     `## Page comments · ${project}`,
     ...entries.map(line),
     `Reply with: bin/page reply ${project} "<your reply>"`,
-    ...choices.map((c) => `Apply with: bin/fleet answer ${c.task} ${c.ask}, then act on it.`),
+    ...(live ? [CHOICES_APPLIED_LINE] : []),
   ].join("\n");
 }
 

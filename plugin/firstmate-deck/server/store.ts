@@ -16,10 +16,20 @@ export type InboxEntry = {
   answered: boolean;
   /** Set when the comment is a click on an ask's option button. */
   choice?: Choice;
+  /** A choice click that arrived for an ask that is no longer open, or for an option it does not offer. Recorded, never applied. */
+  stale?: boolean;
 };
 
-/** A click on an ask option: which task and ask (1-based), which option, and the ask text for the message. */
-export type Choice = { task: string; ask: number; option: string; askText?: string };
+/** A click on an ask option: which task and ask (its stable id, "a2"), which option, and the ask text for the message. */
+export type Choice = { task: string; ask: string; option: string; askText?: string };
+
+/** An ask id as bin/fleet writes it. Older inbox entries and older pages used the 1-based index, which is read as "a<n>". */
+export const ASK_ID = /^a[1-9][0-9]*$/;
+export function askIdOf(v: unknown): string | null {
+  if (typeof v === "string") return ASK_ID.test(v) ? v : null;
+  if (typeof v === "number" && Number.isInteger(v) && v >= 1) return `a${v}`;
+  return null;
+}
 
 export type PageJson = {
   lavishUrl: string | null;
@@ -42,6 +52,8 @@ export type PageJson = {
   agentViews?: Record<string, import("./render.ts").AgentView>;
   /** Banner text currently shown on the page, if any. */
   banner?: string | null;
+  /** Set while the first mate's state files cannot be read (e.g. a truncated fleet.json): "<file>: <why>". `bin/page status` shows it and `heal` does not reload for it. */
+  loadError?: string | null;
 };
 
 export const projectDir = (root: string, project: string) => join(root, "state", "projects", project);

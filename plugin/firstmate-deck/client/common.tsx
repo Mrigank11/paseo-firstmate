@@ -62,6 +62,7 @@ export function countsLine(p: ProjectSummary): string {
   if (p.counts.withFirstMate) parts.push(`${p.counts.withFirstMate} with the first mate`);
   parts.push(`${p.counts.running} running`);
   parts.push(`${p.counts.done} done`);
+  if (p.counts.failed) parts.push(`${p.counts.failed} failed`);
   return parts.join(" · ");
 }
 

@@ -25,11 +25,11 @@ function evilModel(): ProjectModel {
   const task = (over: Partial<Task>): Task => ({ id: "e", intent: "", status: "queued", depends_on: [], asks: [], notes: "", card: "", ...over });
   m.tasks = [
     task({ id: "e-title", title: EVIL, status: "needs-captain", notes: EVIL,
-      asks: [{ text: EVIL, since: "2026-10-21T09:00:00Z", contextMd: MD_EVIL, options: [EVIL, "B"] }] }),
+      asks: [{ id: "a1", text: EVIL, since: "2026-10-21T09:00:00Z", contextMd: MD_EVIL, options: [EVIL, "B"] }] }),
     task({ id: "e-intent", intent: EVIL, status: "running", agentId: "ag-1", card: MD_EVIL }),
     task({ id: "e-replied", intent: "plain", status: "needs-captain",
-      asks: [{ text: EVIL, since: "2026-10-21T09:00:00Z", contextMd: "", repliedAt: "2026-10-21T09:10:00Z", replyText: EVIL },
-        { text: EVIL, since: "2026-10-21T09:00:00Z", contextMd: "", repliedAt: "2026-10-21T09:10:00Z", replyChoice: EVIL }] }),
+      asks: [{ id: "a1", text: EVIL, since: "2026-10-21T09:00:00Z", contextMd: "", repliedAt: "2026-10-21T09:10:00Z", replyText: EVIL },
+        { id: "a2", text: EVIL, since: "2026-10-21T09:00:00Z", contextMd: "", repliedAt: "2026-10-21T09:10:00Z", replyChoice: EVIL }] }),
     task({ id: "e-dep", intent: "dependent", status: "queued", depends_on: ["e-title"], notes: EVIL }),
   ];
   m.archive = [task({ id: "e-arch", title: EVIL, status: "done", depends_on: ["e-intent"], card: MD_EVIL })];

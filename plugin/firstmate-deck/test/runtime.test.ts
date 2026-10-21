@@ -190,8 +190,8 @@ test("summary follows the contract shape", async () => {
   const s = await r.deck.summary();
   assert.equal(s.firstmateAgentId, "fm-1");
   const p = s.projects[0];
-  assert.deepEqual(p.counts, { needsYou: 1, withFirstMate: 1, running: 1, next: 1, parked: 1, done: 1 });
-  assert.deepEqual(p.needsYou, [{ taskId: "a", taskTitle: "ask", text: "Which?", since: "2026-10-20" }]);
+  assert.deepEqual(p.counts, { needsYou: 1, withFirstMate: 1, running: 1, next: 1, parked: 1, done: 1, failed: 0 });
+  assert.deepEqual(p.needsYou, [{ taskId: "a", askId: "a1", taskTitle: "ask", text: "Which?", since: "2026-10-20" }]);
   assert.equal(p.running[0].agentStatus, "running");
   assert.equal(p.session, "unknown");
   assert.equal(p.pageUrl, null);
@@ -244,17 +244,190 @@ test("an ask-choice prompt is stored with its choice and shows 'You picked' imme
   await r.deck.configure();
   await r.deck.render("demo");
   assert.match(liveHtml(r.live), /class="opt"/);
-  const data = JSON.stringify({ kind: "ask-choice", task: "t1", ask: 1, option: "B console" }, null, 2);
+  const data = JSON.stringify({ kind: "ask-choice", task: "t1", ask: "a1", option: "B console" }, null, 2);
   r.deck.ingest("demo", [{ prompt: `Picked: B console\n\nContext data:\n${data}`, selector: "article#t-t1" }]);
   await until(() => /You picked <b>B console<\/b> · the first mate is applying it/.test(liveHtml(r.live)), 1000);
   const [e] = readInbox(join(r.pdir, "inbox.jsonl"));
   assert.equal(e.target, "t-t1#a1", "a click targets its ask");
-  assert.deepEqual(e.choice, { task: "t1", ask: 1, option: "B console", askText: "Which design?" });
+  assert.deepEqual(e.choice, { task: "t1", ask: "a1", option: "B console", askText: "Which design?" });
+  assert.equal(e.stale, undefined, "a valid click is not stale");
   await until(() => r.world.sent.length === 1, 1500);
-  assert.match(r.world.sent[0], /- \[t-t1#a1 · "Pick one"\] \(c-[^)]+\) picked option "B console" for ask 1 \("Which design\?"\)/);
-  assert.match(r.world.sent[0], /Apply with: bin\/fleet answer t1 1, then act on it\.$/);
+  assert.match(r.world.sent[0], /- \[t-t1#a1 · "Pick one"\] \(c-[^)]+\) picked option "B console" for ask a1 \("Which design\?"\)/);
+  assert.match(r.world.sent[0], /Option picks are applied automatically when you reply; use --keep-open <task>#<askId> to keep an ask open\.$/);
+  assert.ok(!/Apply with/.test(r.world.sent[0]), "the relay no longer tells the first mate to run bin/fleet answer");
   const g = liveHtml(r.live);
   assert.ok(g.indexOf("With the first mate") > 0 && !/Needs you/.test(g));
+  r.deck.stop();
+});
+
+/** The HTML of one ask block (from its id to the next block or the end of its card). */
+const askBlock = (html: string, task: string, ask: string): string => {
+  const i = html.indexOf(`id="a-${task}-${ask}"`);
+  if (i < 0) return "";
+  const rest = html.slice(i + 10);
+  const j = rest.search(/class="askbox"|<\/article>/);
+  return j < 0 ? rest : rest.slice(0, j);
+};
+const THREE = (asks: object[]) => ({ tasks: [{ id: "pick", intent: "x", title: "Pick stack", status: "needs-captain", project: "demo", asks }] });
+const ASKS3 = [
+  { id: "a1", text: "Postgres or SQLite?", since: "2026-10-21T09:00:00Z", options: ["Postgres", "SQLite"] },
+  { id: "a2", text: "Which CI provider?", since: "2026-10-21T09:00:00Z", options: ["Buildkite", "Actions"] },
+  { id: "a3", text: "Fly or Render?", since: "2026-10-21T09:00:00Z", options: ["Fly", "Render"] },
+];
+const click = (task: string, ask: string, option: string) => ({ prompt: `Picked: ${option}\n\nContext data:\n${JSON.stringify({ kind: "ask-choice", task, ask, option }, null, 2)}`, selector: `article#t-${task}` });
+
+test("C1: answering ask 1 does not move a click on ask 2 onto another question", async () => {
+  const r = rig(THREE(ASKS3));
+  await r.deck.configure();
+  await r.deck.render("demo");
+  r.deck.ingest("demo", [click("pick", "a2", "Buildkite")]);
+  await until(() => /You picked/.test(liveHtml(r.live)), 1000);
+  assert.match(askBlock(liveHtml(r.live), "pick", "a2"), /You picked <b>Buildkite<\/b>/);
+  // the first mate answers ask 1 first: ask 2 becomes the first element of the array
+  writeFileSync(join(r.root, "state", "fleet.json"), JSON.stringify(THREE(ASKS3.slice(1))));
+  await r.deck.render("demo");
+  const html = liveHtml(r.live);
+  assert.match(askBlock(html, "pick", "a2"), /You picked <b>Buildkite<\/b>/, "the pick still sits under 'Which CI provider?'");
+  assert.match(askBlock(html, "pick", "a2"), /Which CI provider\?/);
+  const a3 = askBlock(html, "pick", "a3");
+  assert.ok(!/You picked/.test(a3) && /Your call:/.test(a3) && /data-opt="Fly"/.test(a3), "'Fly or Render?' is still an open question with live buttons");
+  assert.ok(!/id="a-pick-a1"/.test(html), "the answered ask is gone");
+  const s = (await r.deck.summary()).projects[0];
+  assert.deepEqual(s.needsYou.map((n) => [n.askId, n.text]), [["a3", "Fly or Render?"]]);
+  assert.equal(readInbox(join(r.pdir, "inbox.jsonl"))[0].target, "t-pick#a2");
+  r.deck.stop();
+});
+
+test("C1: a click on an ask that is no longer open is recorded as stale, relayed as ignored, and shown nowhere as a pick", async () => {
+  const r = rig(THREE(ASKS3.slice(1))); // a1 is already answered
+  await r.deck.configure();
+  await r.deck.render("demo");
+  r.deck.ingest("demo", [click("pick", "a1", "Postgres"), click("pick", "a2", "Bogus option"), click("pick", "a2", "Actions")]);
+  const [gone, bogus, good] = readInbox(join(r.pdir, "inbox.jsonl"));
+  assert.equal(gone.stale, true, "the ask id is gone");
+  assert.equal(bogus.stale, true, "the option is not one of the ask's options");
+  assert.equal(good.stale, undefined);
+  await until(() => r.world.sent.length === 1, 1500);
+  const msg = r.world.sent[0];
+  assert.match(msg, /\(c-[^)]+\) option click on an ask that is no longer open, ignored: option "Postgres" for ask a1/);
+  assert.match(msg, /option click on an ask that is no longer open, ignored: option "Bogus option" for ask a2/);
+  assert.match(msg, /picked option "Actions" for ask a2/);
+  await until(() => /You picked/.test(liveHtml(r.live)), 1000);
+  const html = liveHtml(r.live);
+  assert.match(askBlock(html, "pick", "a2"), /You picked <b>Actions<\/b>/, "only the valid click is shown as a pick");
+  assert.ok(!/You picked <b>(Postgres|Bogus)/.test(html));
+  assert.match(html, /that question was already closed|clicked <b>/, "the stale click stays visible on the card, marked as not applied");
+  r.deck.stop();
+});
+
+test("C1: a stale-only message does not tell the first mate that picks are applied", async () => {
+  const r = rig(THREE(ASKS3.slice(1)));
+  await r.deck.configure();
+  r.deck.ingest("demo", [click("pick", "a1", "Postgres")]);
+  await until(() => r.world.sent.length === 1, 1500);
+  assert.ok(!/applied automatically/.test(r.world.sent[0]));
+  r.deck.stop();
+});
+
+test("C1: asks without ids (written before ids existed) fall back to their index", async () => {
+  const r = rig(THREE([{ text: "Old one?", since: "2026-10-21T09:00:00Z", options: ["Yes", "No"] }]));
+  await r.deck.configure();
+  await r.deck.render("demo");
+  assert.match(liveHtml(r.live), /id="a-pick-a1"/);
+  r.deck.ingest("demo", [click("pick", "a1", "Yes")]);
+  assert.equal(readInbox(join(r.pdir, "inbox.jsonl"))[0].stale, undefined);
+  r.deck.stop();
+});
+
+test("C2: a first-mate claim held by a crew agent is ignored (with a log line)", async () => {
+  const logs: string[] = [];
+  const r = rig({ tasks: [{ id: "t1", intent: "x", status: "running", project: "demo", agentId: "ag-1" }] });
+  const deck = new Deck({ exec: async () => "", ports: r.ports, batchMs: 30, log: (m) => logs.push(m), readConfig: async () => ({ root: r.root, firstmateLabel: "firstmate=true" }) });
+  writeFileSync(join(r.root, "state", "firstmate.json"), JSON.stringify({ agentId: "ag-1", claimedAt: "2026-10-21T10:00:00Z" }));
+  await deck.configure();
+  assert.equal((await deck.summary()).firstmateAgentId, "fm-1", "the labelled non-crew agent wins over the crew claim");
+  assert.ok(logs.some((l) => /ignoring the first-mate claim on ag-1: fleet\.json lists it as crew/.test(l)));
+  deck.stop();
+  r.deck.stop();
+});
+
+test("C3: a malformed archive line is skipped with a warning; the page still renders", async () => {
+  const logs: string[] = [];
+  const r = rig({ tasks: [{ id: "t1", intent: "live", status: "running", project: "demo" }] });
+  writeFileSync(join(r.root, "state", "fleet-archive.jsonl"), [
+    JSON.stringify({ id: "old1", intent: "Archived one", status: "done", project: "demo" }),
+    '{"id":"half","project":"demo","stat',
+    JSON.stringify({ id: "old2", intent: "Archived two", status: "failed", project: "demo" }),
+  ].join("\n") + "\n");
+  const deck = new Deck({ exec: async () => "", ports: r.ports, log: (m) => logs.push(m), readConfig: async () => ({ root: r.root, firstmateLabel: "firstmate=true" }) });
+  await deck.configure();
+  await deck.render("demo");
+  const html = liveHtml(r.live);
+  assert.ok(/Archived one/.test(html) && /Archived two/.test(html), "good archive lines still show");
+  assert.ok(logs.some((l) => /skipped 1 malformed line\(s\) in fleet-archive\.jsonl/.test(l)));
+  assert.equal(readPageJson(join(r.pdir, "page.json")).loadError ?? null, null, "a bad archive line is not a load error");
+  deck.stop();
+  r.deck.stop();
+});
+
+test("C3: an empty or malformed fleet.json keeps the last good view, sets loadError and a banner; fixing it clears both", async () => {
+  const r = rig({ tasks: [{ id: "t1", intent: "keep me visible", status: "queued", project: "demo" }] });
+  await r.deck.configure();
+  await r.deck.render("demo");
+  assert.match(liveHtml(r.live), /keep me visible/);
+  const fleet = join(r.root, "state", "fleet.json");
+  writeFileSync(fleet, "");
+  await r.deck.render("demo");
+  assert.match(liveHtml(r.live), /keep me visible/, "an empty fleet.json does not empty the page");
+  assert.equal(readPageJson(join(r.pdir, "page.json")).loadError, "fleet.json: file is empty");
+  assert.match(readFileSync(r.page, "utf8"), /Task state could not be read \(fleet\.json\): showing the last good view/);
+  assert.match((await r.deck.summary()).projects[0].banner ?? "", /Task state could not be read \(fleet\.json\)/);
+  writeFileSync(fleet, '{"tasks":[{"id":"t1","intent":"half');
+  await r.deck.render("demo");
+  assert.match(liveHtml(r.live), /keep me visible/);
+  assert.match(readPageJson(join(r.pdir, "page.json")).loadError ?? "", /^fleet\.json: invalid JSON/);
+  writeFileSync(fleet, JSON.stringify({ tasks: [{ id: "t1", intent: "back to normal", status: "queued", project: "demo" }] }));
+  await r.deck.render("demo");
+  assert.match(liveHtml(r.live), /back to normal/);
+  assert.equal(readPageJson(join(r.pdir, "page.json")).loadError, null);
+  assert.ok(!/Task state could not be read/.test(readFileSync(r.page, "utf8")), "the banner goes away");
+  r.deck.stop();
+});
+
+test("C3: with no last good view (plugin just started) a broken fleet.json renders the banner, not a crash", async () => {
+  const r = rig({ tasks: [] });
+  writeFileSync(join(r.root, "state", "fleet.json"), "{ nope");
+  await r.deck.configure();
+  await r.deck.render("demo");
+  assert.match(readFileSync(r.page, "utf8"), /Task state could not be read \(fleet\.json\)/);
+  assert.match(readPageJson(join(r.pdir, "page.json")).loadError ?? "", /^fleet\.json: invalid JSON/);
+  r.deck.stop();
+});
+
+test("M4: every live payload carries a growing sequence number", async () => {
+  const r = rig(FLEET);
+  await r.deck.configure();
+  const seq = () => Number(/,(\d+)\);\n$/.exec(readFileSync(r.live, "utf8"))?.[1]);
+  await r.deck.render("demo");
+  const a = seq();
+  await r.deck.render("demo");
+  const b = seq();
+  assert.ok(Number.isInteger(a) && b > a, `seq ${a} -> ${b}`);
+  r.deck.stop();
+});
+
+test("failed tasks are counted as failed, not done, in the summary", async () => {
+  const r = rig({ tasks: [
+    { id: "ok1", intent: "fine", status: "done", project: "demo" },
+    { id: "bad1", intent: "broke", status: "failed", project: "demo" },
+  ] });
+  writeFileSync(join(r.root, "state", "fleet-archive.jsonl"), JSON.stringify({ id: "bad0", intent: "old fail", status: "failed", project: "demo" }) + "\n" + JSON.stringify({ id: "ok0", intent: "old fine", status: "done", project: "demo" }) + "\n");
+  await r.deck.configure();
+  const c = (await r.deck.summary()).projects[0].counts;
+  assert.deepEqual([c.done, c.failed], [2, 2]);
+  await r.deck.render("demo");
+  assert.match(liveHtml(r.live), /class="sum c-done">2 done</);
+  assert.match(liveHtml(r.live), /class="sum c-fail">2 failed</);
   r.deck.stop();
 });
 
@@ -265,7 +438,7 @@ test("a comment on the ask itself moves it to 'With the first mate' at once; a c
   r.deck.ingest("demo", [{ prompt: "why so slow?", selector: "article#t-t1 > div.tt" }]);
   await until(() => /why so slow/.test(liveHtml(r.live)), 1000);
   assert.ok(/Needs you/.test(liveHtml(r.live)) && !/With the first mate/.test(liveHtml(r.live)), "a card comment does not move the ask");
-  r.deck.ingest("demo", [{ prompt: "show me both", selector: "article#t-t1 > div#a-t1-1 > div.ask" }]);
+  r.deck.ingest("demo", [{ prompt: "show me both", selector: "article#t-t1 > div#a-t1-a1 > div.ask" }]);
   await until(() => /With the first mate/.test(liveHtml(r.live)), 1000);
   assert.ok(!/Needs you/.test(liveHtml(r.live)));
   const s = (await r.deck.summary()).projects[0];

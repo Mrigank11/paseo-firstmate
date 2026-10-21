@@ -2,15 +2,18 @@
 //   page-tool.ts scaffold <root> <project> [--repo R] [--title T] [--page P]
 //   page-tool.ts page-path <root> <project>
 //   page-tool.ts session <root> <project> <url>
-//   page-tool.ts answered <root> <project>        (prints how many entries were marked)
+//   page-tool.ts answered <root> <project> [ids]  (prints how many entries were marked; ids = comma list, default every delivered one)
+//   page-tool.ts delivered-ids <root> <project>   (comma list of the delivered, unanswered comment ids: what a reply is about to answer)
+//   page-tool.ts choices <root> <project> [ids]   (one line per delivered, unanswered, non-stale option click: "<task> <askId> <commentId>")
 //   page-tool.ts note <root> <project> <section> <text>
 //   page-tool.ts status <root> [project]          (env PAGE_PLUGIN_STATUS names the plugin state)
 //   page-tool.ts claim <root> <agentId>           (writes state/firstmate.json: THE first mate of this checkout)
-//   page-tool.ts stalled <root> <seconds>        (prints the open projects the plugin has not rendered for that long)
+//   page-tool.ts stalled <root> <seconds>        (prints the open projects the plugin has not rendered for that long; not those with a load error)
+//   page-tool.ts load-errors <root>               (prints "<project>: <file>: <why>" for every project whose state files cannot be read)
 //   page-tool.ts lavish-cfg <root> [project]      (prints the plugin's Lavish port/state dir as shell lines, if known)
 import { existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { inboxPath, pageJsonPath, patchPageJson, projectDir, readInbox, readPageJson, updateInbox, writeAtomic } from "./store.ts";
+import { askIdOf, inboxPath, pageJsonPath, patchPageJson, projectDir, readInbox, readPageJson, updateInbox, writeAtomic } from "./store.ts";
 
 const SECTIONS: Record<string, string> = {
   endpoints: "No endpoints or credentials recorded yet.",
@@ -90,21 +93,55 @@ function status(root: string, only?: string): void {
   const names = (only ? [only] : existsSync(base) ? readdirSync(base) : []).filter((n) => existsSync(join(base, n, "project.json")));
   const plugin = process.env.PAGE_PLUGIN_STATUS || "unknown";
   const mine = real(root);
-  const rows = [["PROJECT", "SESSION", "LISTENER", "BANNER", "RENDERED", "PLUGIN ROOT", "UNDELIVERED", "LAST DELIVERY", "PLUGIN", "URL"]];
+  const rows = [["PROJECT", "SESSION", "LISTENER", "BANNER", "RENDERED", "PLUGIN ROOT", "UNDELIVERED", "LAST DELIVERY", "PLUGIN", "URL", "LOAD ERROR"]];
   for (const n of names) {
     const pj = readPageJson(pageJsonPath(root, n));
     const und = readInbox(inboxPath(root, n)).filter((e) => !e.delivered).length;
     const banner = pj.banner ? (pj.banner.length > 48 ? pj.banner.slice(0, 47) + "…" : pj.banner) : "-";
     const pr = pj.pluginRoot ? (real(pj.pluginRoot) === mine ? pj.pluginRoot : `${pj.pluginRoot} (NOT this checkout)`) : "-";
-    rows.push([n, pj.session, pj.listener || "-", banner, ago(pj.lastRender), pr, String(und), pj.lastDelivery ?? "-", plugin, pj.lavishUrl ?? "-"]);
+    rows.push([n, pj.session, pj.listener || "-", banner, ago(pj.lastRender), pr, String(und), pj.lastDelivery ?? "-", plugin, pj.lavishUrl ?? "-", pj.loadError ? `state file problem: ${pj.loadError}` : "-"]);
   }
   if (rows.length === 1) { console.log(only ? `no such project '${only}'` : "no projects"); return; }
   const w = rows[0].map((_, i) => Math.max(...rows.map((r) => r[i].length)));
   for (const r of rows) console.log(r.map((c, i) => c.padEnd(w[i])).join("  ").trimEnd());
+  untaggedWarnings(root, names);
+}
+
+/**
+ * Live tasks with no project never show on a page. Warn (on stderr) about them while project pages exist: by name when
+ * the task's workspace sits inside a project's repo, else as a count.
+ */
+function untaggedWarnings(root: string, projects: string[]): void {
+  let tasks: any[] = [];
+  try { tasks = JSON.parse(readFileSync(join(root, "state", "fleet.json"), "utf8"))?.tasks ?? []; } catch { return; }
+  const repos = new Map<string, string>();
+  const base = join(root, "state", "projects");
+  for (const n of existsSync(base) ? readdirSync(base) : []) {
+    try { const r = JSON.parse(readFileSync(join(base, n, "project.json"), "utf8")).repo; if (typeof r === "string" && r) repos.set(n, r.replace(/\/+$/, "")); } catch {}
+  }
+  if (!repos.size && !projects.length) return;
+  const loose = tasks.filter((t) => t && !t.project && t.status !== "done" && t.status !== "failed");
+  const rest: string[] = [];
+  for (const t of loose) {
+    const ws = typeof t.workspaceId === "string" ? t.workspaceId : "";
+    const hit = ws.startsWith("/") ? [...repos].find(([, r]) => ws === r || ws.startsWith(r + "/") || ws.startsWith(r + "-")) : undefined;
+    if (hit) console.error(`warning: live task ${t.id} has no project, but its workspace is in project ${hit[0]}'s repo (${hit[1]}): bin/fleet set ${t.id} project=${hit[0]}`);
+    else rest.push(t.id);
+  }
+  if (rest.length) console.error(`warning: ${rest.length} live task${rest.length === 1 ? "" : "s"} ha${rest.length === 1 ? "s" : "ve"} no project while project pages exist (${rest.join(", ")}): they are invisible on every page; set project=<slug> if they belong on one`);
+}
+
+function loadErrors(root: string): string[] {
+  const base = join(root, "state", "projects");
+  return (existsSync(base) ? readdirSync(base) : [])
+    .filter((n) => existsSync(join(base, n, "project.json")))
+    .map((n) => [n, readPageJson(pageJsonPath(root, n)).loadError] as const)
+    .filter(([, e]) => !!e)
+    .map(([n, e]) => `${n}: ${e}`);
 }
 
 const [cmd, root, ...rest] = process.argv.slice(2);
-if (!cmd || !root) die("usage: page-tool.ts <scaffold|page-path|session|answered|note|status|claim|lavish-cfg> <root> ...");
+if (!cmd || !root) die("usage: page-tool.ts <scaffold|page-path|session|answered|delivered-ids|choices|note|status|claim|stalled|load-errors|lavish-cfg> <root> ...");
 
 switch (cmd) {
   case "scaffold": {
@@ -125,7 +162,22 @@ switch (cmd) {
   }
   case "answered": {
     const project = slug(rest[0]);
-    console.log(updateInbox(inboxPath(root, project), (e) => { if (e.delivered && !e.answered) e.answered = true; }));
+    const only = rest[1] ? new Set(rest[1].split(",").filter(Boolean)) : null; // a reply answers what was there when it started
+    console.log(updateInbox(inboxPath(root, project), (e) => { if (e.delivered && !e.answered && (!only || only.has(e.id))) e.answered = true; }));
+    break;
+  }
+  case "delivered-ids": {
+    const project = slug(rest[0]);
+    console.log(readInbox(inboxPath(root, project)).filter((e) => e.delivered && !e.answered).map((e) => e.id).join(","));
+    break;
+  }
+  case "choices": {
+    const project = slug(rest[0]);
+    const only = rest[1] ? new Set(rest[1].split(",").filter(Boolean)) : null;
+    for (const e of readInbox(inboxPath(root, project))) {
+      const a = askIdOf(e.choice?.ask);
+      if (e.choice && a && e.delivered && !e.answered && !e.stale && (!only || only.has(e.id))) console.log(`${e.choice.task} ${a} ${e.id}`);
+    }
     break;
   }
   case "note": {
@@ -152,12 +204,16 @@ switch (cmd) {
     const late = (existsSync(base) ? readdirSync(base) : []).filter((n) => {
       if (!existsSync(join(base, n, "project.json"))) return false;
       const pj = readPageJson(pageJsonPath(root, n));
+      if (pj.loadError) return false; // unreadable state is not a stall: reloading the plugin would change nothing
       const t = Date.parse(pj.lastRender ?? "");
       return pj.session === "open" && !isNaN(t) && Date.now() - t > secs * 1000;
     });
     console.log(late.join(" "));
     break;
   }
+  case "load-errors":
+    for (const l of loadErrors(root)) console.log(l);
+    break;
   case "claim": {
     const agentId = rest[0];
     if (!agentId) die("claim needs an agent id");

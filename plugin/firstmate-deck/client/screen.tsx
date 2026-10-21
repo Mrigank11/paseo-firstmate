@@ -49,7 +49,7 @@ function NeedsYouBody({ theme, layout }: PluginScreenProps) {
             {p.banner ? <Text style={{ color: theme.colors.statusWarning, fontSize: 13 }}>{p.banner}</Text> : null}
             {p.needsYou.map((a) => (
               <View
-                key={a.taskId}
+                key={`${a.taskId}#${a.askId ?? ""}`}
                 style={{ gap: 4, paddingLeft: 12, borderLeftWidth: 3, borderLeftColor: theme.colors.accent }}
               >
                 <Text style={{ color: theme.colors.foreground, fontSize: 15, lineHeight: 21 }}>{a.text}</Text>

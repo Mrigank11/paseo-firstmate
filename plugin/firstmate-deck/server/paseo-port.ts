@@ -280,6 +280,8 @@ export function crewAgentIds(root: string): Set<string> {
   return ids;
 }
 
+const warnedCrewClaims = new Set<string>();
+
 /** The agent id `bin/page claim` recorded in state/firstmate.json, if any. */
 export function claimedId(root: string): string | null {
   try {
@@ -292,19 +294,25 @@ export function claimedId(root: string): string | null {
 
 /**
  * The first mate, decided by explicit facts only (no guessing from working directories):
- *   1. the agent `bin/page claim` recorded in state/firstmate.json, if it still exists and is not archived;
+ *   1. the agent `bin/page claim` recorded in state/firstmate.json, if it still exists, is not archived and is not
+ *      listed as crew (a claim held by a crew agent is ignored, with a log line);
  *   2. else the newest live agent carrying the first-mate label, EXCLUDING every agent id fleet.json or the
  *      archive lists as crew;
  *   3. else null.
  * Never writes a label. Re-resolved on every use.
  */
-export async function resolveFirstMate(port: PaseoPort, label: string, root?: string): Promise<FirstMate | null> {
-  const claim = root ? claimedId(root) : null;
+export async function resolveFirstMate(port: PaseoPort, label: string, root?: string, log?: (msg: string) => void): Promise<FirstMate | null> {
+  let claim = root ? claimedId(root) : null;
+  const crew = root ? crewAgentIds(root) : new Set<string>();
+  if (claim && crew.has(claim)) {
+    // A claim held by an agent that fleet.json (or the archive) lists as crew is wrong: crew never become the first mate.
+    if (!warnedCrewClaims.has(claim)) { warnedCrewClaims.add(claim); log?.(`ignoring the first-mate claim on ${claim}: fleet.json lists it as crew`); }
+    claim = null;
+  }
   if (claim) {
     const hit = (await port.listAgents()).find((a) => a.id === claim && !a.archived); // archived agents are not live
     if (hit) return { id: hit.id, status: hit.status };
   }
-  const crew = root ? crewAgentIds(root) : new Set<string>();
   const list = (await port.listAgents({ label })).filter((a) => !crew.has(a.id));
   if (!list.length) return null;
   // A closed agent is a worse target than a live one, whatever its age.
@@ -318,7 +326,7 @@ export async function resolveFirstMate(port: PaseoPort, label: string, root?: st
  * `early` is a first-mate lookup started a moment ago (while the batch window was open); if sending to it
  * fails, the first mate is resolved afresh and the send retried once.
  */
-export async function sendToFirstMate(ports: PortSelector, label: string, message: string, early?: Promise<FirstMate | null>, root?: string): Promise<string> {
+export async function sendToFirstMate(ports: PortSelector, label: string, message: string, early?: Promise<FirstMate | null>, root?: string, log?: (msg: string) => void): Promise<string> {
   let fm: FirstMate | null = null;
   if (early) { try { fm = await early; } catch {} }
   if (fm) {
@@ -327,7 +335,7 @@ export async function sendToFirstMate(ports: PortSelector, label: string, messag
       return fm.id;
     } catch {}
   }
-  fm = await resolveFirstMate(ports.current(), label, root);
+  fm = await resolveFirstMate(ports.current(), label, root, log);
   if (!fm) throw new NoFirstMateError();
   await ports.send(fm.id, message);
   return fm.id;

@@ -1,11 +1,13 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
+import { spawn } from "node:child_process";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { existsSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { PagePoller, BACKOFF_MS, LISTENER_RETRY_MS, OWN_LISTENER_RETRY_MS, pollWrapperPath, hasLivePoll, killStalePoll, scanNpxCache, spawnPoll, killAllPolls, type PollRun } from "../server/lavish.ts";
+import { POLL_WRAPPER_MARKER, POLL_WRAPPER_SOURCE } from "../server/poll-wrapper-source.ts";
+import { PagePoller, BACKOFF_MS, LISTENER_RETRY_MS, OWN_LISTENER_RETRY_MS, hasLivePoll, killStalePoll, scanNpxCache, spawnPoll, killAllPolls, type PollRun } from "../server/lavish.ts";
 import { decodePoll } from "../server/toon.ts";
 
 const fx = (n: string) => readFileSync(join(dirname(fileURLToPath(import.meta.url)), "fixtures", n), "utf8");
@@ -232,5 +234,31 @@ test("wrapper exits with the child's exit code", async () => {
   const r = await spawnPoll(bin, "/x/page.html", process.env).result;
   assert.equal(r.code, 3);
   assert.match(r.stdout, /error: nope/);
-  assert.match(pollWrapperPath(), /firstmate-deck-poll-wrapper-[0-9a-f]{12}\.mjs$/);
+});
+
+test("wrapper: runs from `node -e` with a marker argument, never from a file in a shared directory", async () => {
+  const f = hangingLavish();
+  const page = "/x/proj/marker.html";
+  const sp = spawnPoll(f.bin, page, process.env);
+  await sp.result;
+  const argv = readFileSync(`/proc/${sp.child.pid}/cmdline`, "utf8").split("\0");
+  assert.equal(argv[1], "-e", "the source is passed inline");
+  assert.equal(argv[2], POLL_WRAPPER_SOURCE);
+  assert.deepEqual(argv.slice(3, 5), ["--", POLL_WRAPPER_MARKER], "marker argument follows the separator");
+  assert.ok(argv.includes(page) && argv.includes("poll"));
+  assert.ok(!argv.some((a) => /poll-wrapper.*\.mjs$/.test(a)), "no wrapper file on the command line");
+  assert.ok(!/tmpdir|pollWrapperPath/.test(readFileSync(join(dirname(fileURLToPath(import.meta.url)), "..", "server", "lavish.ts"), "utf8")), "lavish.ts no longer writes a wrapper file");
+  killAllPolls();
+});
+
+test("killStalePoll ignores a process that merely mentions poll and the page (no marker, not lavish-axi)", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "deck-stale-"));
+  const page = "/x/proj/innocent.html";
+  const c = spawn(process.execPath, ["-e", "setTimeout(()=>{},30000)", "--", "poll", page], { stdio: "ignore" });
+  const pidFile = join(dir, ".poll.pid");
+  writeFileSync(pidFile, String(c.pid));
+  await new Promise((r) => setTimeout(r, 100));
+  assert.equal(killStalePoll(pidFile, page), false);
+  assert.ok(alive(c.pid!), "an unrelated process is left alone");
+  c.kill("SIGKILL");
 });

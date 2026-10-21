@@ -44,7 +44,7 @@ function ProjectView({ p, props }: { p: ProjectSummary; props: PluginWorkspacePa
           <Text style={{ color: theme.colors.foregroundMuted, fontSize: 12, fontWeight: "700", letterSpacing: 0.8 }}>NEEDS YOU</Text>
           {p.needsYou.map((a) => (
             <View
-              key={a.taskId}
+              key={`${a.taskId}#${a.askId ?? ""}`}
               style={{
                 gap: 6,
                 padding: 14,
