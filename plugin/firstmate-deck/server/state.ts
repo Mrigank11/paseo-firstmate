@@ -120,6 +120,12 @@ export function loadProject(root: string, project: string): ProjectModel {
   const fleet: any = fleetText.trim() ? parseJson(fleetText, fleetPath) : { tasks: [] };
   const live: any[] = Array.isArray(fleet?.tasks) ? fleet.tasks : [];
   const tasks = live.filter((t) => t && t.project === project).map((t) => toTask(t, root, fleetPath, inbox));
+  // A replied ask is "with the first mate" only while something in the project is in progress. Once no task is
+  // dispatched or running, the follow-up is over (or never started), so the ask is the captain's again, even
+  // if the first mate forgot `bin/fleet reask`.
+  if (!tasks.some((t) => t.status === "dispatched" || t.status === "running")) {
+    for (const t of tasks) for (const a of t.asks) { delete a.repliedAt; delete a.replyText; }
+  }
 
   const archPath = join(state, "fleet-archive.jsonl");
   const archive: Task[] = [];
