@@ -1,0 +1,7 @@
+session:
+  file: /tmp/lv/p.html
+  status: feedback
+prompts[1]{uid,prompt,selector,tag,text}:
+  "","Picked: B live console\n\nContext data:\n{\n  \"kind\": \"ask-choice\",\n  \"task\": \"pick-db\",\n  \"ask\": 1,\n  \"option\": \"B live console\"\n}",article#t-pick-db,choice,"Choose the database: B live console"
+next_step: Apply the requested changes.
+dom_snapshot: ""

@@ -8,18 +8,47 @@
 #
 #   bin/fleet get <id>                print one task entry (compact JSON)
 #   bin/fleet by-agent <agentId>      print the entry holding an agentId
-#   bin/fleet active                  live entries: id, status, agentId
+#   bin/fleet active [--project <p>]  live entries: id, status, agentId (dispatched/running/needs-captain only)
+#   bin/fleet project <p>             every LIVE task of project <p>, any status (compact JSON, one per line)
+#   bin/fleet project <p> --archive [N]   last N (default 30) archive lines for project <p>
 #   bin/fleet asks                    every open ask across live tasks
 #   bin/fleet add <id> k=v ...        create a task (needs intent, shape, status)
 #   bin/fleet set <id> k=v ...        update scalar fields
-#   bin/fleet ask <id> "<text>"       append {text, since} to asks
-#   bin/fleet answer <id> <n>         resolve ask by 1-based index
+#   bin/fleet ask <id> "<text>" [--context-file <path>] [--options "A|B|C"]
+#                                     append {id, text, since} to asks. The id ("a1", "a2", ...) is stable: assigned
+#                                     here, never reused for that task, kept by reask/pending/answer. The file is copied
+#                                     to tasks/<id>/asks/<n>.md and linked as "context". --options
+#                                     (2-6 choices, each <=60 chars, "|" separated) stores
+#                                     options:[..]; the page shows them as buttons
+#   bin/fleet reask <id> <ask> ["<new text>"] [--context-file <path>] [--options "A|B|C"]
+#                                     reset ask n's "since" to now (back to Needs you on the page after
+#                                     the captain's follow-up was answered); optionally replace its text
+#                                     (<=200 chars), context file and options, the way ask does
+#                                     (options are kept when --options is absent)
+#   bin/fleet pending <id> <ask>      mark the ask as waiting on the first mate's follow-up (sets pendingSince):
+#                                     the page keeps it under "With the first mate" instead of Needs you.
+#                                     reask and answer clear it. `bin/page reply ... --followup <id>:<ask>` calls this
+#   bin/fleet depend <id> <dep-id>... append to depends_on (de-duplicated; deps may be archived ids)
+#   bin/fleet undepend <id> <dep-id>  remove one id from depends_on
+#   bin/fleet answer <id> <ask>       resolve (remove) the ask, by stable id (a2) or by 1-based index
 #   bin/fleet preview <id> <port> <pid>   record a crew preview server
 #   bin/fleet clear-preview <id>      drop the preview record (after killing it)
 #   bin/fleet log <id> "<text>"       append a timestamped line to tasks/<id>/log.md
 #   bin/fleet archive <id>            move a done/failed ask-free task to the archive
+#   bin/fleet finish <id> [--failed] [--card -|--card-file <f>] [--branch <b>] [--base main]
+#                                     a crew member is done: status=done (failed with --failed); writes tasks/<id>/card.md from
+#                                     the given card (stdin with -), else from notes + branch/PR when there is no card yet; for
+#                                     a project task whose branch is known and whose project.json has a repo, appends
+#                                     `git log --oneline <base>..<branch>` to projects/<p>/sections/code.md (dated, no duplicates)
+#
+# Statuses: queued, parked, dispatched, running, needs-captain, done, failed.
+# Optional fields (add/set): project (kebab slug, empty = none), title (<=80 chars). add also takes
+# depends_on=a,b; a task added without project= inherits it from the first dependency that has one
+# (so does a later `depend`, when the task still has none).
 #
 # FLEET_FILE env overrides the path; default is state/fleet.json at repo root.
+# Every command that writes fleet.json holds a lock on <fleet>.lock for its whole read-modify-write (flock, or an
+# mkdir lock where flock is missing), so parallel calls cannot lose each other's update.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -28,10 +57,29 @@ STATE_DIR="$(dirname "$FLEET")"
 ARCHIVE="$STATE_DIR/fleet-archive.jsonl"
 TASKS="$STATE_DIR/tasks"
 
-STATUSES='["dispatched","running","needs-captain","done","failed"]'
+STATUSES='["queued","parked","dispatched","running","needs-captain","done","failed"]'
 SHAPES='["scout","ship"]'
 MAXLEN=200
-SETTABLE="intent shape provider agentId workspaceId status branch pr lastEvent notes"
+TITLEMAX=80
+SLUG_RE='^[a-z0-9][a-z0-9-]*$'
+SETTABLE="intent shape provider agentId workspaceId status branch pr lastEvent notes project title"
+
+# jq: give every ask of a task a stable id ("a1", "a2", ...) and keep .askSeq (the highest number ever handed out) ahead
+# of all of them, so an id is never reused after its ask is answered. An existing ask without an id (written before ids
+# existed) gets "a<its 1-based index>" at its first touch, or the next free number if that one is taken.
+ENSURE_IDS='
+def ensure_ids:
+  (.asks // []) as $a
+  | ([$a[] | (.id? // "") | select(type == "string") | capture("^a(?<n>[0-9]+)$")? | .n | tonumber] | max // 0) as $mx
+  | reduce range(0; $a | length) as $i ({asks: [], seq: ([(.askSeq // 0), $mx] | max), taken: [$a[] | (.id? // "") | select(. != "")]};
+      if ($a[$i].id // "") != "" then .asks += [$a[$i]]
+      else ("a" + (($i + 1) | tostring)) as $c
+        | if (.taken | index($c)) == null
+          then .asks += [$a[$i] + {id: $c}] | .taken += [$c] | .seq = ([.seq, ($i + 1)] | max)
+          else (.seq + 1) as $s | ("a" + ($s | tostring)) as $d | .asks += [$a[$i] + {id: $d}] | .taken += [$d] | .seq = $s end
+      end) as $r
+  | . + {asks: $r.asks, askSeq: $r.seq};
+'
 
 die() { echo "fleet: $*" >&2; exit 1; }
 need_jq() { command -v jq >/dev/null || die "jq is required"; }
@@ -51,33 +99,57 @@ atomic_jq() { # jq-args... — run jq filter, validate result, rename over fleet
 
 check_entry() { # id — validate enum + length invariants on one entry
   local id="$1"
-  jq -e --arg id "$1" --argjson st "$STATUSES" --argjson sh "$SHAPES" --argjson max "$MAXLEN" '
+  jq -e --arg id "$1" --argjson st "$STATUSES" --argjson sh "$SHAPES" --argjson max "$MAXLEN" \
+    --argjson tmax "$TITLEMAX" --arg re "$SLUG_RE" '
     (.tasks | map(select(.id == $id))[0]) as $t
     | (((($t.status) as $s | $st | index($s)) != null)
+      and ((($t.project // "") | length == 0) or (($t.project | type) == "string" and ($t.project | test($re))))
+      and ((($t.title // "") | length) <= $tmax)
       and ((($t.shape // "scout") as $h | $sh | index($h)) != null)
       and ((($t.notes // "") | length) <= $max)
       and (([$t.asks[]? .text | length] | all(. <= $max))))
-  ' "$FLEET" >/dev/null || die "entry $id violates schema (status/shape enum or 200-char cap)";
+  ' "$FLEET" >/dev/null || die "entry $id violates schema (status/shape enum, project slug, title or 200-char cap)";
 }
 
 # validate a fresh k=v object (from add/set) BEFORE touching the file
 check_obj() { # obj-json
-  jq -e --argjson st "$STATUSES" --argjson sh "$SHAPES" --argjson max "$MAXLEN" -n --argjson o "$1" '
+  jq -e --argjson st "$STATUSES" --argjson sh "$SHAPES" --argjson max "$MAXLEN" \
+    --argjson tmax "$TITLEMAX" --arg re "$SLUG_RE" -n --argjson o "$1" '
     (((($o.status // null) as $s | if $s == null then true else ($st | index($s)) != null end))
+      and ((($o.project // "") | length == 0) or ($o.project | test($re)))
+      and ((($o.title // "") | length) <= $tmax)
       and ((($o.shape // null) as $h | if $h == null then true else ($sh | index($h)) != null end))
       and ((($o.notes // "") | length) <= $max))
-  ' >/dev/null || die "refused: bad status/shape enum or notes over $MAXLEN chars";
+  ' >/dev/null || die "refused: bad status/shape enum, project slug, title over $TITLEMAX chars, or notes over $MAXLEN chars";
 }
 
 cmd_get() { jq -c --arg id "$1" '.tasks | map(select(.id == $id))[0] // empty' "$FLEET"; }
 cmd_by_agent() { jq -c --arg a "$1" '.tasks | map(select(.agentId == $a))[0] // empty' "$FLEET"; }
 cmd_active() {
-  jq -c '[.tasks[] | select(.status == "dispatched" or .status == "running" or .status == "needs-captain")
+  local proj=""
+  if [[ $# -gt 0 ]]; then
+    [[ "$1" == "--project" && $# -eq 2 ]] || die "usage: fleet active [--project <p>]"
+    proj="$2"
+  fi
+  jq -c --arg p "$proj" '[.tasks[] | select(.status == "dispatched" or .status == "running" or .status == "needs-captain")
+    | select($p == "" or .project == $p)
     | {id, status, agentId}]' "$FLEET";
+}
+cmd_project() {
+  local p="$1"; shift
+  [[ "$p" =~ $SLUG_RE ]] || die "bad project slug '$p'"
+  if [[ $# -eq 0 ]]; then
+    jq -c --arg p "$p" '.tasks[] | select(.project == $p)' "$FLEET"; return
+  fi
+  [[ "$1" == "--archive" ]] || die "usage: fleet project <p> [--archive [N]]"
+  local n="${2:-30}"
+  [[ "$n" =~ ^[0-9]+$ ]] || die "archive count must be a number, got '$n'"
+  [[ -f "$ARCHIVE" ]] || return 0
+  jq -c --arg p "$p" 'select(.project == $p)' "$ARCHIVE" | tail -n "$n";
 }
 cmd_asks() {
   jq -r '.tasks[] | select((.asks // []) | length > 0)
-    | .id as $id | .asks | to_entries[] | "\($id) [\(.key + 1)]: \(.value.text) (since \(.value.since))"' "$FLEET";
+    | .id as $id | .asks | to_entries[] | "\($id) [\(.value.id // ("a" + (.key + 1 | tostring)))]: \(.value.text) (since \(.value.since))"' "$FLEET";
 }
 
 # parse k=v pairs into a jq object; refuse unknown keys and overlong notes
@@ -90,18 +162,48 @@ build_obj() { # out: OBJ json with $keys validated; sets global OBJ
     [[ " $allow " == *" $k "* ]] || die "unknown key '$k' (allowed: $allow)"
     obj="$(jq --arg k "$k" --arg v "$v" '. + {($k): $v}' <<<"$obj")"
   done
-  printf '%s' "$obj";
+  # empty project means "none"
+  jq -c 'if (.project? // null) == "" then .project = null else . end' <<<"$obj";
+}
+
+# the project of the first of the given task ids that has one, looking in the live tasks and then the archive
+project_of_deps() { # dep-id...
+  local d p
+  for d in "$@"; do
+    p="$(jq -r --arg d "$d" '.tasks | map(select(.id == $d))[0].project // empty' "$FLEET")"
+    if [[ -z "$p" && -f "$ARCHIVE" ]]; then
+      p="$(jq -R -r --arg d "$d" 'fromjson? | select(.id == $d) | .project // empty' "$ARCHIVE" | tail -n 1)"
+    fi
+    [[ -z "$p" ]] || { printf '%s' "$p"; return; }
+  done
 }
 
 cmd_add() {
   local id="$1"; shift
   [[ "$id" =~ ^[a-z0-9][a-z0-9-]*$ ]] || die "id must be a kebab slug, got '$id'"
   entry_exists "$id" && die "task $id already exists"
-  local obj; obj="$(build_obj "$SETTABLE" "$@")"
+  local obj; obj="$(build_obj "$SETTABLE depends_on" "$@")"
   for req in intent shape status; do
     jq -e --arg k "$req" '.[$k] // empty | length > 0' <<<"$obj" >/dev/null \
       || die "add needs $req=... (got: $*)";
   done
+  # depends_on=a,b -> an array of slugs; project is inherited from the first dependency that has one
+  local deps=() d
+  if jq -e 'has("depends_on")' <<<"$obj" >/dev/null; then
+    IFS=',' read -r -a deps <<<"$(jq -r '.depends_on' <<<"$obj")"
+    for d in "${deps[@]}"; do
+      [[ "$d" =~ $SLUG_RE ]] || die "bad dep id '$d' in depends_on"
+      [[ "$d" != "$id" ]] || die "task $id cannot depend on itself"
+    done
+    obj="$(jq -c --argjson d "$(printf '%s\n' "${deps[@]}" | jq -R . | jq -sc 'unique_by(.) | .')" '.depends_on = $d' <<<"$obj")"
+  fi
+  if ((${#deps[@]})) && ! jq -e '(.project // "") != ""' <<<"$obj" >/dev/null; then
+    local inh; inh="$(project_of_deps "${deps[@]}")"
+    if [[ -n "$inh" ]]; then
+      obj="$(jq -c --arg p "$inh" '.project = $p' <<<"$obj")"
+      echo "fleet: $id inherits project=$inh from its dependencies" >&2
+    fi
+  fi
   check_obj "$obj"
   local ts; ts="$(now)"
   atomic_jq --arg id "$id" --argjson o "$obj" --arg ts "$ts" \
@@ -124,23 +226,138 @@ cmd_set() {
   check_entry "$id";
 }
 
+# Write ids onto the asks of a task that has some without (a no-op when all have one).
+ensure_ask_ids() { # task-id
+  jq -e --arg id "$1" '.tasks | map(select(.id == $id))[0] | (.asks // []) | all(.[]; (.id // "") != "")' "$FLEET" >/dev/null && return 0
+  atomic_jq --arg id "$1" "$ENSURE_IDS"' .tasks |= map(if .id == $id then ensure_ids else . end)'
+}
+
+# <ask> argument (a stable id like a2, or a plain 1-based number) -> the ask's id on stdout. Writes ids first.
+resolve_ask() { # task-id ref
+  local id="$1" ref="$2" aid
+  ensure_ask_ids "$id"
+  if [[ "$ref" =~ ^a[0-9]+$ ]]; then
+    jq -e --arg id "$id" --arg a "$ref" '.tasks | map(select(.id == $id))[0] | (.asks // []) | any(.[]; .id == $a)' "$FLEET" >/dev/null \
+      || die "task $id has no open ask $ref (see 'fleet asks')"
+    printf '%s' "$ref"; return
+  fi
+  [[ "$ref" =~ ^[0-9]+$ ]] && ((ref >= 1)) || die "expected an ask id like a2 or a 1-based index, got '$ref' (see 'fleet asks')"
+  aid="$(jq -r --arg id "$id" --argjson n "$ref" '.tasks | map(select(.id == $id))[0] | (.asks // []) | .[$n - 1].id // empty' "$FLEET")"
+  [[ -n "$aid" ]] || die "task $id has only $(jq --arg id "$id" '.tasks | map(select(.id == $id))[0] | (.asks // []) | length' "$FLEET") open ask(s)"
+  printf '%s' "$aid"
+}
+
+# the number the next ask of a task takes (ids are never reused)
+next_ask_n() { # task-id
+  jq -r --arg id "$1" "$ENSURE_IDS"' .tasks | map(select(.id == $id))[0] | ensure_ids | .askSeq + 1' "$FLEET"
+}
+
+# options "A|B|C" -> JSON array on stdout; refuses <2 or >6 options, empty or >60-char ones
+parse_options() {
+  local raw="$1" arr
+  arr="$(jq -Rc 'split("|") | map(gsub("^\\s+|\\s+$"; ""))' <<<"$raw")"
+  jq -e 'length >= 2 and length <= 6 and all(.[]; length > 0 and length <= 60)' <<<"$arr" >/dev/null \
+    || die "--options needs 2-6 non-empty choices of at most 60 chars each, separated by |"
+  printf '%s' "$arr"
+}
+
 cmd_ask() {
-  local id="$1" text="$2"
+  local id="$1" text="$2" ctx="${3:-}" optraw="${4:-}"
   entry_exists "$id" || die "no task $id"
   ((${#text} > 0)) || die "ask text is empty"
   ((${#text} <= MAXLEN)) || die "ask over $MAXLEN chars"
-  atomic_jq --arg id "$id" --arg t "$text" --arg s "$(now)" \
-    '.tasks |= map(if .id == $id then .asks = ((.asks // []) + [{text: $t, since: $s}]) else . end)';
+  local opts="null"
+  [[ -z "$optraw" ]] || opts="$(parse_options "$optraw")"
+  local n; n="$(next_ask_n "$id")"
+  # an earlier answer can free a number while its context file lingers; never clobber it
+  while [[ -e "$TASKS/$id/asks/$n.md" ]]; do n=$((n + 1)); done
+  local rel=""
+  if [[ -n "$ctx" ]]; then
+    [[ -f "$ctx" ]] || die "context file '$ctx' not found"
+    rel="tasks/$id/asks/$n.md"
+    mkdir -p "$TASKS/$id/asks"
+    cp "$ctx" "$STATE_DIR/$rel"
+  fi
+  if ! ( atomic_jq --arg id "$id" --arg t "$text" --arg s "$(now)" --arg c "$rel" --argjson n "$n" --argjson o "$opts" "$ENSURE_IDS"'
+    .tasks |= map(if .id == $id then ensure_ids | .askSeq = $n
+      | .asks += [{id: ("a" + ($n | tostring)), text: $t, since: $s}
+          + (if $c == "" then {} else {context: $c} end) + (if $o == null then {} else {options: $o} end)]
+      else . end)' ); then
+    [[ -z "$rel" ]] || rm -f "$STATE_DIR/$rel"; exit 1
+  fi
+  echo "a$n"
+}
+
+cmd_reask() {
+  local id="$1" ref="$2" settext="$3" text="$4" ctx="$5" optraw="${6:-}"
+  local opts="null"
+  [[ -z "$optraw" ]] || opts="$(parse_options "$optraw")"
+  entry_exists "$id" || die "no task $id"
+  local aid; aid="$(resolve_ask "$id" "$ref")"
+  if ((settext)); then
+    ((${#text} > 0)) || die "ask text is empty"
+    ((${#text} <= MAXLEN)) || die "ask over $MAXLEN chars"
+  fi
+  local rel="" k
+  if [[ -n "$ctx" ]]; then
+    [[ -f "$ctx" ]] || die "context file '$ctx' not found"
+    k="$(next_ask_n "$id")"
+    while [[ -e "$TASKS/$id/asks/$k.md" ]]; do k=$((k + 1)); done
+    rel="tasks/$id/asks/$k.md"
+    mkdir -p "$TASKS/$id/asks"
+    cp "$ctx" "$STATE_DIR/$rel"
+  fi
+  if ! ( atomic_jq --arg id "$id" --arg aid "$aid" --argjson st "$settext" --arg t "$text" --arg c "$rel" --arg s "$(now)" --argjson o "$opts" '
+    .tasks |= map(if .id == $id then .asks |= map(if .id == $aid then (.since = $s
+      | (if $st == 1 then .text = $t else . end)
+      | (if $o != null then .options = $o else . end)
+      | (if $c != "" then .context = $c else . end)
+      | del(.pendingSince)) else . end) else . end)' ); then
+    [[ -z "$rel" ]] || rm -f "$STATE_DIR/$rel"; exit 1
+  fi
+}
+
+cmd_pending() {
+  local id="$1" ref="$2"
+  entry_exists "$id" || die "no task $id"
+  local aid; aid="$(resolve_ask "$id" "$ref")"
+  atomic_jq --arg id "$id" --arg aid "$aid" --arg s "$(now)" \
+    '.tasks |= map(if .id == $id then .asks |= map(if .id == $aid then .pendingSince = $s else . end) else . end)'
+}
+
+cmd_depend() {
+  local id="$1"; shift
+  entry_exists "$id" || die "no task $id"
+  for d in "$@"; do
+    [[ "$d" =~ $SLUG_RE ]] || die "bad dep id '$d'"
+    [[ "$d" != "$id" ]] || die "task $id cannot depend on itself"
+  done
+  local deps; deps="$(printf '%s\n' "$@" | jq -R . | jq -sc .)"
+  atomic_jq --arg id "$id" --argjson d "$deps" \
+    '.tasks |= map(if .id == $id then .depends_on = (reduce ((.depends_on // []) + $d)[] as $x ([]; if any(.[]; . == $x) then . else . + [$x] end)) else . end)'
+  # a task with no project picks one up from the first of the new dependencies that has one
+  if ! jq -e --arg id "$id" '.tasks | map(select(.id == $id))[0] | (.project // "") != ""' "$FLEET" >/dev/null; then
+    local inh; inh="$(project_of_deps "$@")"
+    if [[ -n "$inh" ]]; then
+      atomic_jq --arg id "$id" --arg p "$inh" '.tasks |= map(if .id == $id then .project = $p else . end)'
+      echo "fleet: $id inherits project=$inh from its dependencies" >&2
+    fi
+  fi
+}
+
+cmd_undepend() {
+  local id="$1" dep="$2"
+  entry_exists "$id" || die "no task $id"
+  atomic_jq --arg id "$id" --arg d "$dep" \
+    '.tasks |= map(if .id == $id then .depends_on = ((.depends_on // []) | map(select(. != $d))) else . end)'
 }
 
 cmd_answer() {
-  local id="$1" n="$2"
+  local id="$1" ref="$2"
   entry_exists "$id" || die "no task $id"
-  [[ "$n" =~ ^[0-9]+$ ]] && ((n >= 1)) || die "answer needs a 1-based ask index (see 'fleet asks')"
-  local count; count="$(jq --arg id "$id" '.tasks | map(select(.id == $id))[0] | (.asks // []) | length' "$FLEET")"
-  ((n <= count)) || die "task $id has only $count open ask(s)"
-  atomic_jq --arg id "$id" --argjson n "$n" \
-    '.tasks |= map(if .id == $id then .asks = ((.asks // []) | del(.[$n - 1])) else . end)';
+  local aid; aid="$(resolve_ask "$id" "$ref")"
+  atomic_jq --arg id "$id" --arg aid "$aid" \
+    '.tasks |= map(if .id == $id then .asks = ((.asks // []) | map(select(.id != $aid))) else . end)';
 }
 
 cmd_preview() {
@@ -176,24 +393,149 @@ cmd_archive() {
   atomic_jq --arg id "$id" '.tasks |= map(select(.id != $id))';
 }
 
+CODE_PLACEHOLDER="No local code changes recorded yet."
+
+# finish <id> [--failed] [--card -|--card-file f] [--branch b] [--base main]
+cmd_finish() {
+  local id="" failed=0 cardsrc="" cardfile="" branch="" base="main"
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --failed) failed=1; shift;;
+      --card) [[ "${2:-}" == "-" ]] || die "--card takes '-' (read the card from stdin); use --card-file <f> for a file"; cardsrc=stdin; shift 2;;
+      --card-file) [[ $# -ge 2 ]] || die "--card-file needs a path"; cardfile="$2"; [[ -f "$cardfile" ]] || die "card file '$cardfile' not found"; shift 2;;
+      --branch) [[ $# -ge 2 ]] || die "--branch needs a value"; branch="$2"; shift 2;;
+      --base) [[ $# -ge 2 ]] || die "--base needs a value"; base="$2"; shift 2;;
+      -*) die "unknown option '$1'";;
+      *) [[ -z "$id" ]] || die "usage: fleet finish <id> [--failed] [--card -|--card-file <f>] [--branch <b>] [--base main]"; id="$1"; shift;;
+    esac
+  done
+  [[ -n "$id" ]] || die "usage: fleet finish <id> [--failed] [--card -|--card-file <f>] [--branch <b>] [--base main]"
+  entry_exists "$id" || die "no task $id"
+  [[ "$id" =~ ^[a-z0-9][a-z0-9-]*$ ]] || die "bad id '$id'"
+  local card=""
+  [[ "$cardsrc" != stdin ]] || card="$(cat)"
+  [[ -z "$cardfile" ]] || card="$(cat "$cardfile")"
+
+  local status=done; ((failed)) && status=failed
+  local objargs=(status="$status")
+  [[ -z "$branch" ]] || objargs+=(branch="$branch")
+  cmd_set "$id" "${objargs[@]}"
+
+  local task; task="$(cmd_get "$id")"
+  [[ -n "$branch" ]] || branch="$(jq -r '.branch // empty' <<<"$task")"
+  local pr project; pr="$(jq -r '.pr // empty' <<<"$task")"; project="$(jq -r '.project // empty' <<<"$task")"
+
+  # card.md: the given card, else (only when there is none yet) the notes plus branch/PR
+  local cfile="$TASKS/$id/card.md"
+  if [[ -n "$card" ]]; then
+    mkdir -p "$TASKS/$id"; printf '%s\n' "$card" >"$cfile.tmp.$$" && mv "$cfile.tmp.$$" "$cfile"
+  elif [[ ! -s "$cfile" ]]; then
+    local notes intent; notes="$(jq -r '.notes // empty' <<<"$task")"; intent="$(jq -r '.intent // empty' <<<"$task")"
+    local body="${notes:-$intent}" refs=""
+    [[ -z "$branch" ]] || refs="Branch: \`$branch\`"
+    [[ -z "$pr" ]] || refs+="${refs:+ · }PR: $pr"
+    mkdir -p "$TASKS/$id"
+    {
+      printf '%s\n' "$body"
+      [[ -z "$refs" ]] || printf '\n%s\n' "$refs"
+    } >"$cfile.tmp.$$" && mv "$cfile.tmp.$$" "$cfile"
+  fi
+
+  # commits of the task's branch -> the project's "Local code changes" section
+  [[ -n "$project" && -n "$branch" ]] || return 0
+  local pcfg="$STATE_DIR/projects/$project/project.json" repo=""
+  [[ -f "$pcfg" ]] && repo="$(jq -r '.repo // empty' "$pcfg" 2>/dev/null || true)"
+  if [[ -z "$repo" ]]; then echo "fleet: $project has no repo in project.json; skipped the code section" >&2; return 0; fi
+  local log
+  if ! log="$(git -C "$repo" log --oneline "$base..$branch" 2>&1)"; then
+    echo "fleet: could not read commits $base..$branch in $repo ($(head -c 200 <<<"$log")); skipped the code section" >&2; return 0
+  fi
+  [[ -n "$log" ]] || return 0
+  local f="$STATE_DIR/projects/$project/sections/code.md" cur="" line hash stamp added=0 out
+  mkdir -p "$(dirname "$f")"
+  [[ ! -f "$f" ]] || cur="$(grep -vxF -- "$CODE_PLACEHOLDER" "$f" || true)"
+  stamp="$(date '+%Y-%m-%d %H:%M')"
+  out="$cur"
+  while IFS= read -r line; do
+    hash="${line%% *}"
+    grep -qF -- " $hash " <<<"$cur " && continue  # already recorded
+    out+="${out:+$'\n'}- $stamp $line"; added=$((added + 1))
+  done < <(sed -n '1!G;h;$p' <<<"$log")  # oldest commit first
+  if ((added)); then printf '%s\n' "$out" >"$f.tmp.$$" && mv "$f.tmp.$$" "$f"; fi
+}
+
 usage() {
   sed -n '2,/^set -euo/p' "$0" | sed 's/^# \?//';
+}
+
+# ask/reask argument parsing: positionals plus --context-file / --options in any order
+parse_ask_args() {
+  local pos=() ctx="" opts=""
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --context-file) [[ $# -ge 2 ]] || die "--context-file needs a path"; ctx="$2"; shift 2;;
+      --options) [[ $# -ge 2 ]] || die "--options needs a value"; opts="$2"; shift 2;;
+      *) pos+=("$1"); shift;;
+    esac
+  done
+  [[ ${#pos[@]} -eq 2 ]] || die "usage: fleet ask <id> \"<text>\" [--context-file <path>] [--options \"A|B|C\"]"
+  cmd_ask "${pos[0]}" "${pos[1]}" "$ctx" "$opts"
+}
+parse_reask_args() {
+  local pos=() ctx="" opts=""
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --context-file) [[ $# -ge 2 ]] || die "--context-file needs a path"; ctx="$2"; shift 2;;
+      --options) [[ $# -ge 2 ]] || die "--options needs a value"; opts="$2"; shift 2;;
+      *) pos+=("$1"); shift;;
+    esac
+  done
+  [[ ${#pos[@]} -eq 2 || ${#pos[@]} -eq 3 ]] || die "usage: fleet reask <id> <ask> [\"<new text>\"] [--context-file <path>] [--options \"A|B|C\"]"
+  if [[ ${#pos[@]} -eq 3 ]]; then cmd_reask "${pos[0]}" "${pos[1]}" 1 "${pos[2]}" "$ctx" "$opts"
+  else cmd_reask "${pos[0]}" "${pos[1]}" 0 "" "$ctx" "$opts"; fi
+}
+
+# Serialize writers: hold an exclusive lock for the whole command (released when the process exits). The lock file is
+# separate from fleet.json, which is replaced by rename. Without flock(1) (macOS) an mkdir lock does the same job.
+lock() {
+  mkdir -p "$STATE_DIR"
+  if command -v flock >/dev/null; then
+    exec 9>"$FLEET.lock"
+    flock -w 30 9 || die "could not lock $FLEET.lock within 30 s"
+    return 0
+  fi
+  local d="$FLEET.lockd" i
+  for ((i = 0; i < 300; i++)); do
+    if mkdir "$d" 2>/dev/null; then trap 'rmdir "'"$d"'" 2>/dev/null || true' EXIT; return 0; fi
+    # a lock older than 60 s belongs to a crashed writer
+    if [[ -n "$(find "$d" -maxdepth 0 -mmin +1 2>/dev/null)" ]]; then rmdir "$d" 2>/dev/null || true; fi
+    sleep 0.1
+  done
+  die "could not lock $FLEET within 30 s"
 }
 
 need_jq
 cmd="${1:-}"; shift || true
 case "$cmd" in
+  add|set|ask|reask|pending|depend|undepend|answer|preview|clear-preview|archive|finish) lock;; esac
+case "$cmd" in
   get)           [[ $# -eq 1 ]] || die "usage: fleet get <id>"; cmd_get "$1";;
   by-agent)      [[ $# -eq 1 ]] || die "usage: fleet by-agent <agentId>"; cmd_by_agent "$1";;
-  active)        cmd_active;;
+  active)        cmd_active "$@";;
+  project)       [[ $# -ge 1 && $# -le 3 ]] || die "usage: fleet project <p> [--archive [N]]"; cmd_project "$@";;
   asks)          cmd_asks;;
   add)           [[ $# -ge 1 ]] || die "usage: fleet add <id> k=v ..."; cmd_add "$@";;
   set)           [[ $# -ge 1 ]] || die "usage: fleet set <id> k=v ..."; cmd_set "$@";;
-  ask)           [[ $# -eq 2 ]] || die "usage: fleet ask <id> \"<text>\""; cmd_ask "$1" "$2";;
-  answer)        [[ $# -eq 2 ]] || die "usage: fleet answer <id> <n>"; cmd_answer "$1" "$2";;
+  ask)           parse_ask_args "$@";;
+  reask)         parse_reask_args "$@";;
+  pending)       [[ $# -eq 2 ]] || die "usage: fleet pending <id> <ask>"; cmd_pending "$1" "$2";;
+  depend)        [[ $# -ge 2 ]] || die "usage: fleet depend <id> <dep-id>..."; cmd_depend "$@";;
+  undepend)      [[ $# -eq 2 ]] || die "usage: fleet undepend <id> <dep-id>"; cmd_undepend "$@";;
+  answer)        [[ $# -eq 2 ]] || die "usage: fleet answer <id> <ask>"; cmd_answer "$1" "$2";;
   preview)       [[ $# -eq 3 ]] || die "usage: fleet preview <id> <port> <pid>"; cmd_preview "$@";;
   clear-preview) [[ $# -eq 1 ]] || die "usage: fleet clear-preview <id>"; cmd_clear_preview "$1";;
   log)           [[ $# -eq 2 ]] || die "usage: fleet log <id> \"<text>\""; cmd_log "$1" "$2";;
   archive)       [[ $# -eq 1 ]] || die "usage: fleet archive <id>"; cmd_archive "$1";;
+  finish)        cmd_finish "$@";;
   *) usage; [[ -n "$cmd" ]] && exit 1; exit 0;;
 esac

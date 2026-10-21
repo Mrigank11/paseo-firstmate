@@ -5,3 +5,11 @@ state/decisions.md
 state/secondmates.md
 state/afk-log.md
 state/tasks/
+state/projects/
+node_modules/
+plugin/spike/
+state/page.env
+# local sandbox/demo tooling, not shipped
+dev/
+state/firstmate.json
+state/fleet.json.lock

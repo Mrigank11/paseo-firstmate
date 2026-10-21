@@ -1,0 +1,376 @@
+#!/usr/bin/env bash
+# bin/page — the first mate's handle on a project's Lavish page (the captain <-> first mate channel).
+#
+#   bin/page install [--dev]          one-time setup: check node/jq/paseo, install the plugin's RUNTIME dependencies only
+#                                     (npm ci --omit=dev, or npm install --omit=dev without a lockfile; --dev installs the
+#                                     dev dependencies too, for typechecking), write its settings (firstmateRoot = this
+#                                     checkout), install or reload it in Paseo
+#   bin/page claim                    record the CALLING agent ($PASEO_AGENT_ID) as THE first mate of this checkout
+#                                     (state/firstmate.json); the plugin delivers page comments to it. Run it from
+#                                     the first mate's own session. Refused for a crew agent (one fleet.json or its archive
+#                                     lists). Also labels the agent and demotes older labels
+#   bin/page start <project> [--repo <path>] [--title "<t>"] [--page <abs path>] [--reopen]
+#                                     claim (only when no live agent holds the claim: it warns and does NOT steal it from
+#                                     another live first mate; use bin/page claim for that), scaffold (if new), render once, open in Lavish, record the URL, then
+#                                     VERIFY the plugin is polling this page (exit 3 with the reason if not).
+#                                     Idempotent. Prints {"project","page","url"}. Exit 2 when the captain ended the
+#                                     session and --reopen was not given
+#   bin/page reply <project> "<text>"|- [--followup <task>:<askId>]... [--keep-open <task>#<askId>]...
+#                                     answer the captain's comments on the page (- reads stdin). First applies every delivered
+#                                     option pick (bin/fleet answer <task> <askId>) unless it is named by --keep-open or
+#                                     --followup; then marks the delivered comments (those present when the reply started)
+#                                     answered. --followup marks the ask as pending (bin/fleet pending) so it stays under
+#                                     "With the first mate"
+#   bin/page note <project> <section> "<text>"   append a dated line to sections/<section>.md
+#   bin/page status [<project>]       per page: session, listener, banner, last render, the plugin's root,
+#                                     undelivered comments, plugin state, state-file problems; warns (stderr) about live
+#                                     tasks that have no project
+#   bin/page heal                     reload the firstmate-deck plugin if it has failed or stopped rendering. A state file the
+#                                     plugin cannot read (loadError) is reported, not "healed" by a reload
+#   bin/page render <project> [--out <file>]   render the page file once, no Lavish
+#
+# Roots: FIRSTMATE_ROOT (default: this checkout). state/page.env, if present, is sourced first; it carries
+# LAVISH_AXI_PORT / LAVISH_AXI_STATE_DIR. Once the plugin has polled a page, the port and state dir it wrote into
+# page.json win, so bin/page always talks to the same Lavish as the plugin.
+set -euo pipefail
+
+export NODE_NO_WARNINGS=1  # node warns that the plugin package.json has no "type"; harmless
+REPO="$(cd "$(dirname "$0")/.." && pwd)"
+ROOT="${FIRSTMATE_ROOT:-$REPO}"
+if [[ -f "$ROOT/state/page.env" ]]; then set -a; source "$ROOT/state/page.env"; set +a; fi
+ROOT="${FIRSTMATE_ROOT:-$ROOT}"
+ROOT_REAL="$(cd "$ROOT" 2>/dev/null && pwd -P || echo "$ROOT")"
+TOOL=(node "$REPO/plugin/firstmate-deck/server/page-tool.ts")
+RENDER=(node "$REPO/plugin/firstmate-deck/server/render-cli.ts")
+PLUGIN_DIR="${PAGE_PLUGIN_DIR:-$REPO/plugin/firstmate-deck}"  # PAGE_PLUGIN_DIR: tests only
+PLUGIN_ID="firstmate-deck"
+VERIFY_SECS="${PAGE_VERIFY_SECS:-8}"
+STALL_SECS="${PAGE_STALL_SECS:-120}"
+
+die() { echo "page: $*" >&2; exit 1; }
+
+lavish() { # lavish-axi from PATH if installed, else through npx
+  if command -v lavish-axi >/dev/null 2>&1; then lavish-axi "$@"; else npx -y lavish-axi "$@"; fi
+}
+
+# The plugin's own Lavish port/state dir (from page.json) override env and state/page.env.
+use_plugin_lavish_cfg() { # [project]
+  local lines; lines="$("${TOOL[@]}" lavish-cfg "$ROOT" "${1:-}")" || return 0
+  [[ -z "$lines" ]] || eval "$lines"
+}
+
+paseo_home_args() { [[ -n "${PASEO_HOME:-}" ]] && printf '%s\n' --home "$PASEO_HOME" || true; }
+
+plugin_status() { # running | failed | ... | missing | unknown
+  command -v paseo >/dev/null 2>&1 || { echo unknown; return; }
+  local home=(); mapfile -t home < <(paseo_home_args)
+  local out; out="$(paseo plugin ls --json "${home[@]}" 2>/dev/null)" || { echo unknown; return; }
+  jq -r --arg id "$PLUGIN_ID" '(map(select(.id==$id)) | first // null) | if . == null then "missing" else .status end' <<<"$out" 2>/dev/null || echo unknown
+}
+
+need_project() { [[ -n "${1:-}" ]] || die "missing <project>"; [[ -f "$ROOT/state/projects/$1/project.json" ]] || die "no such project '$1' (bin/page start $1 creates it)"; }
+
+pj_get() { # project jq-filter -> value ("" when absent)
+  jq -r "$2 // empty" "$ROOT/state/projects/$1/page.json" 2>/dev/null || true
+}
+
+real() { (cd "$1" 2>/dev/null && pwd -P) || echo "$1"; }
+
+# ---------- claim ----------
+
+# The task (in fleet.json or the archive) whose agentId is $1, or "" when $1 is not crew.
+crew_task_of() {
+  local id="$1" t=""
+  [[ -f "$ROOT/state/fleet.json" ]] && t="$(jq -r --arg a "$id" '[.tasks[]? | select(.agentId == $a) | .id][0] // empty' "$ROOT/state/fleet.json" 2>/dev/null || true)"
+  if [[ -z "$t" && -f "$ROOT/state/fleet-archive.jsonl" ]]; then
+    t="$(jq -R -r --arg a "$id" 'fromjson? | select(.agentId? == $a) | .id' "$ROOT/state/fleet-archive.jsonl" 2>/dev/null | head -n 1 || true)"
+  fi
+  printf '%s' "$t"
+}
+
+# The agent state/firstmate.json names ("" when none).
+claimed_agent() { jq -r '.agentId // empty' "$ROOT/state/firstmate.json" 2>/dev/null || true; }
+
+# Is $1 an agent that lives on this daemon and is not archived?
+agent_live() {
+  command -v paseo >/dev/null 2>&1 || return 1
+  local meta home=(); mapfile -t home < <(paseo_home_args)
+  meta="$(paseo inspect "$1" --json "${home[@]}" 2>/dev/null)" && [[ -n "$meta" ]] || return 1
+  ! jq -e '(.Archived // .archived // false) == true or ((.ArchivedAt // .archivedAt // "") != "")' <<<"$meta" >/dev/null 2>&1
+}
+
+cmd_claim() {
+  local id="${PASEO_AGENT_ID:-}"
+  [[ -n "$id" ]] || die "PASEO_AGENT_ID is empty: run bin/page claim from inside the first mate's own Paseo session (a plain shell cannot say which agent it is)"
+  # Crew never become the first mate: an agent that fleet.json (or its archive) lists as the agent of a task is crew.
+  local crew_task; crew_task="$(crew_task_of "$id")"
+  [[ -z "$crew_task" ]] || die "agent $id is crew on task $crew_task; only the first mate may claim"
+  # Only an agent that really lives on THIS daemon may claim: a stale or foreign PASEO_AGENT_ID (an agent on another
+  # Paseo daemon, an archived session) would otherwise point comments at nobody and demote the real first mate.
+  command -v paseo >/dev/null 2>&1 || die "paseo CLI not found: cannot verify that agent $id exists on this daemon"
+  local vhome=() meta
+  mapfile -t vhome < <(paseo_home_args)
+  meta="$(paseo inspect "$id" --json "${vhome[@]}" 2>/dev/null)" && [[ -n "$meta" ]] \
+    || die "agent $id is not on this Paseo daemon (${PASEO_HOME:-~/.paseo}): run bin/page claim from the first mate's own session on the daemon the firstmate-deck plugin runs on"
+  if jq -e '(.Archived // .archived // false) == true or ((.ArchivedAt // .archivedAt // "") != "")' <<<"$meta" >/dev/null 2>&1; then
+    die "agent $id is archived: run bin/page claim from a live first-mate session"
+  fi
+  mkdir -p "$ROOT/state"
+  "${TOOL[@]}" claim "$ROOT" "$id"
+  echo "claimed: agent $id is the first mate of $ROOT_REAL"
+  # Best effort: label it, and demote every other agent still carrying the label. The CLI can add or set a label but
+  # not delete one, so a demoted agent gets <key>=superseded; the plugin never relies on the label while a claim exists.
+  command -v paseo >/dev/null 2>&1 || { echo "claim: paseo not found; skipped labelling (the claim itself is enough)"; return 0; }
+  local label="${FIRSTMATE_LABEL:-firstmate=true}" home=() others o
+  mapfile -t home < <(paseo_home_args)
+  paseo agent update "$id" --label "$label" "${home[@]}" >/dev/null 2>&1 \
+    && echo "claim: labelled $id $label" || echo "claim: could not label $id (best effort; the claim stands)"
+  others="$(paseo ls -g --label "$label" --json "${home[@]}" 2>/dev/null | jq -r --arg me "$id" '.[]?.id | select(. != $me)' 2>/dev/null || true)"
+  for o in $others; do
+    paseo agent update "$o" --label "${label%%=*}=superseded" "${home[@]}" >/dev/null 2>&1 \
+      && echo "claim: demoted $o (${label%%=*}=superseded)" || echo "claim: could not demote $o (best effort)"
+  done
+}
+
+# ---------- install ----------
+
+node_ok() { # node >= 22.18, or 23.6+/24+ (runs .ts files without a flag)
+  node -e 'const [a,b]=process.versions.node.split(".").map(Number); process.exit(a>=24||(a===23&&b>=6)||(a===22&&b>=18)?0:1)' 2>/dev/null
+}
+
+plugins_disabled_msg() { echo "paseo plugins are disabled on this daemon: enable plugins in Paseo Settings → Plugins, then rerun bin/page install"; }
+
+cmd_install() {
+  local dev=0
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --dev) dev=1; shift ;;
+      *) die "unknown option '$1' (usage: bin/page install [--dev])" ;;
+    esac
+  done
+  command -v node >/dev/null 2>&1 && node_ok || die "Node 22.18+ (or 23.6+) is required: bin/page runs TypeScript files directly (found: $(node --version 2>/dev/null || echo none))"
+  command -v jq >/dev/null 2>&1 || die "jq is required"
+  command -v paseo >/dev/null 2>&1 || die "paseo is not on PATH"
+  command -v npm >/dev/null 2>&1 || die "npm is required to install the plugin's dependencies"
+  [[ -f "$PLUGIN_DIR/paseo-plugin.json" ]] || die "plugin not found at $PLUGIN_DIR"
+  [[ -d "$ROOT/state" ]] || mkdir -p "$ROOT/state"
+  local home=(); mapfile -t home < <(paseo_home_args)
+
+  # The plugin needs only @toon-format/toon at runtime (Paseo provides @getpaseo/plugin and zod); the dev dependencies
+  # (react-native, typescript, ...) are hundreds of MB and only for typechecking, hence --dev.
+  local npmcmd=(npm ci --omit=dev)
+  [[ -f "$PLUGIN_DIR/package-lock.json" ]] || npmcmd=(npm install --omit=dev)
+  if ((dev)); then npmcmd=(npm install); fi
+  echo "install: ${npmcmd[*]} in $PLUGIN_DIR"
+  ( cd "$PLUGIN_DIR" && "${npmcmd[@]}" --no-audit --no-fund >/dev/null ) || die "${npmcmd[*]} failed in $PLUGIN_DIR"
+
+  local settings="${PASEO_HOME:-$HOME/.paseo}/plugin-settings/$PLUGIN_ID/deck.json" cur="{}"
+  mkdir -p "$(dirname "$settings")"
+  if [[ -s "$settings" ]]; then jq -e 'type == "object"' "$settings" >/dev/null 2>&1 || die "$settings is not a JSON object; fix or remove it"; cur="$(cat "$settings")"; fi
+  local tmp; tmp="$(mktemp "$settings.XXXXXX")"
+  jq --arg root "$ROOT_REAL" '.version = (.version // 1) | .values = ((.values // {}) + {firstmateRoot: $root})' <<<"$cur" >"$tmp" || { rm -f "$tmp"; die "could not write settings"; }
+  chmod 600 "$tmp"; mv "$tmp" "$settings"
+  echo "install: settings $settings (firstmateRoot=$ROOT_REAL)"
+
+  local ls_out
+  if ! ls_out="$(paseo plugin ls --json "${home[@]}" 2>&1)"; then
+    if grep -qiE 'disabled|not enabled' <<<"$ls_out"; then die "$(plugins_disabled_msg)"; fi
+    die "could not list plugins: $(head -c 300 <<<"$ls_out")"
+  fi
+  local out
+  if jq -e --arg id "$PLUGIN_ID" 'any(.[]?; .id == $id)' <<<"$ls_out" >/dev/null 2>&1; then
+    echo "install: $PLUGIN_ID is already installed; reloading it"
+    out="$(paseo plugin reload "$PLUGIN_ID" "${home[@]}" 2>&1)" || { grep -qiE 'disabled|not enabled' <<<"$out" && die "$(plugins_disabled_msg)"; die "paseo plugin reload failed: $(head -c 300 <<<"$out")"; }
+  else
+    echo "install: installing $PLUGIN_DIR"
+    out="$(paseo plugin install "$PLUGIN_DIR" "${home[@]}" 2>&1)" || { grep -qiE 'disabled|not enabled' <<<"$out" && die "$(plugins_disabled_msg)"; die "paseo plugin install failed: $(head -c 300 <<<"$out")"; }
+  fi
+  local i st=""
+  for ((i = 0; i < ${PAGE_INSTALL_WAIT:-60}; i++)); do
+    st="$(plugin_status)"; [[ "$st" == running ]] && break; sleep 0.5
+  done
+  [[ "$st" == running ]] || die "$PLUGIN_ID did not reach 'running' (status: $st); see: paseo plugin logs $PLUGIN_ID"
+  cat <<EOM
+install: $PLUGIN_ID is running.
+Next:
+  1. In the first mate's own session:  bin/page claim
+  2. Per project:                      bin/page start <project> --repo <path> --title "<title>"
+  3. Check at any time:                bin/page status
+EOM
+}
+
+# ---------- start ----------
+
+# Wait until the plugin is polling THIS page of THIS checkout; explain precisely why not.
+verify_polling() { # project used-port used-statedir
+  local project="$1" port="${2:-}" sdir="${3:-}" i listener="" proot="" detail="" pport="" psdir="" havecfg=""
+  for ((i = 0; i < VERIFY_SECS * 4; i++)); do
+    listener="$(pj_get "$project" .listener)"; proot="$(pj_get "$project" .pluginRoot)"
+    if [[ "$listener" == ok && -n "$proot" && "$(real "$proot")" == "$ROOT_REAL" ]]; then
+      havecfg="$(jq -r 'has("lavishPort")' "$ROOT/state/projects/$project/page.json")"
+      pport="$(pj_get "$project" .lavishPort)"; psdir="$(pj_get "$project" .lavishStateDir)"
+      if [[ "$havecfg" == true && ( "${pport:-4387}" != "${port:-4387}" || "$psdir" != "$sdir" ) ]]; then
+        echo "page: Lavish config mismatch: the plugin polls port '${pport:-4387}' (state dir '${psdir:-default}') but this open used port '${port:-4387}' (state dir '${sdir:-default}'). The plugin's settings are now in page.json: run bin/page start $project again, and it will use them." >&2
+        return 3
+      fi
+      return 0
+    fi
+    sleep 0.25
+  done
+  detail="$(pj_get "$project" .listenerDetail)"
+  local st; st="$(plugin_status)"
+  {
+    case "$st" in
+      missing) echo "page: the firstmate-deck plugin is not installed on this Paseo daemon: run bin/page install" ;;
+      unknown) echo "page: could not read the plugin status (is the Paseo daemon up, and are plugins enabled in Paseo Settings → Plugins?)" ;;
+      running)
+        if [[ -n "$proot" && "$(real "$proot")" != "$ROOT_REAL" ]]; then
+          echo "page: root mismatch: the plugin is configured for $proot but this checkout is $ROOT_REAL: run bin/page install here to point it at this checkout"
+        elif [[ "$listener" == error || "$listener" == active-elsewhere ]]; then
+          echo "page: the plugin's Lavish listener is '$listener'${detail:+ ($detail)}: another process may hold this page's listener, or lavish-axi cannot be found by the Paseo daemon"
+        else
+          echo "page: the plugin is running but has not picked this page up (listener='${listener:-none}', pluginRoot='${proot:-unset}'): check 'paseo plugin logs $PLUGIN_ID' and that its firstmateRoot is $ROOT_REAL (bin/page install sets it)"
+        fi ;;
+      *) echo "page: the firstmate-deck plugin is '$st', not running: run bin/page heal (or bin/page install)" ;;
+    esac
+    echo "page: the page is open, but comments from it will NOT reach the first mate until this is fixed. Not reporting success."
+  } >&2
+  return 3
+}
+
+cmd_start() {
+  local project="${1:-}"; shift || true
+  [[ -n "$project" ]] || die "usage: bin/page start <project> [--repo <path>] [--title <t>] [--page <abs path>] [--reopen]"
+  local reopen=() scaf=()
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --repo|--title|--page) [[ $# -ge 2 ]] || die "$1 needs a value"; scaf+=("$1" "$2"); shift 2 ;;
+      --reopen) reopen=(--reopen); shift ;;
+      *) die "unknown option '$1'" ;;
+    esac
+  done
+  if [[ ${#reopen[@]} -eq 0 && "$(pj_get "$project" .session)" == ended ]]; then
+    echo "page: the captain ended this page's session; pass --reopen only if the captain asked" >&2
+    exit 2
+  fi
+  # Claim only when nobody live holds the claim: a second session running `start` must not steal it from the real first mate.
+  local held; held="$(claimed_agent)"
+  if [[ -n "$held" && "$held" == "${PASEO_AGENT_ID:-}" ]]; then
+    :  # already ours
+  elif [[ -n "$held" ]] && agent_live "$held"; then
+    echo "page: warning: agent $held is the live first mate of this checkout; start did NOT take over the claim (run bin/page claim from the right session if that is what you want)" >&2
+  else
+    cmd_claim >&2  # stdout stays the one JSON line
+  fi
+  "${TOOL[@]}" scaffold "$ROOT" "$project" "${scaf[@]}"
+  local page; page="$("${TOOL[@]}" page-path "$ROOT" "$project")"
+  "${RENDER[@]}" "$ROOT" "$project" --out "$page" >/dev/null
+  use_plugin_lavish_cfg "$project"
+  local out; out="$(lavish "$page" "${reopen[@]}")" || die "lavish-axi could not open $page"
+  local url; url="$(sed -n 's/^[[:space:]]*url:[[:space:]]*"\{0,1\}\([^"]*\)"\{0,1\}[[:space:]]*$/\1/p' <<<"$out" | head -1)"
+  [[ -n "$url" ]] || die "lavish-axi did not print a session url:"$'\n'"$out"
+  "${TOOL[@]}" session "$ROOT" "$project" "$url"
+  verify_polling "$project" "${LAVISH_AXI_PORT:-}" "${LAVISH_AXI_STATE_DIR:-}" || exit 3
+  jq -cn --arg project "$project" --arg page "$page" --arg url "$url" '{project:$project,page:$page,url:$url}'
+}
+
+# ---------- reply ----------
+
+cmd_reply() {
+  local project="" text="" have_text=0 follow=() keep=() a
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --followup) [[ $# -ge 2 ]] || die "--followup needs <task>:<askId>"; follow+=("$2"); shift 2 ;;
+      --keep-open) [[ $# -ge 2 ]] || die "--keep-open needs <task>#<askId>"; keep+=("$2"); shift 2 ;;
+      *) if [[ -z "$project" ]]; then project="$1"; elif (( ! have_text )); then text="$1"; have_text=1; else die "unexpected argument '$1'"; fi; shift ;;
+    esac
+  done
+  need_project "$project"
+  [[ -n "$text" ]] || die "usage: bin/page reply <project> \"<text>\"|- [--followup <task>:<askId>]... [--keep-open <task>#<askId>]..."
+  for a in "${follow[@]}"; do [[ "$a" =~ ^[a-z0-9][a-z0-9-]*:a?[0-9]+$ ]] || die "bad --followup '$a' (want <task>:<askId>, e.g. pick-db:a2; a plain 1-based index also works)"; done
+  for a in "${keep[@]}"; do [[ "$a" =~ ^[a-z0-9][a-z0-9-]*#a[0-9]+$ ]] || die "bad --keep-open '$a' (want <task>#<askId>, e.g. pick-db#a2)"; done
+  local page; page="$("${TOOL[@]}" page-path "$ROOT" "$project")"
+  # What this reply answers: the delivered comments present now. One that arrives while the reply is going out stays unanswered.
+  local ids; ids="$("${TOOL[@]}" delivered-ids "$ROOT" "$project")"
+  # Mark the asks pending BEFORE the comments are marked answered, so the page never flickers back to Needs you.
+  for a in "${follow[@]}"; do
+    FLEET_FILE="$ROOT/state/fleet.json" "$REPO/bin/fleet" pending "${a%%:*}" "${a##*:}" || die "could not mark $a pending"
+  done
+  # Option picks ARE the answer: apply each (once per ask) unless the first mate keeps that ask open.
+  local applied=() line task ask cid seen=" "
+  if [[ -n "$ids" ]]; then
+    while read -r task ask cid; do
+      [[ -n "$task" ]] || continue
+      [[ "$seen" != *" $task#$ask "* ]] || continue
+      seen+="$task#$ask "
+      if [[ " ${keep[*]:-} " == *" $task#$ask "* ]] || [[ " ${follow[*]:-} " == *" $task:$ask "* ]] || [[ " ${follow[*]:-} " == *" $task:${ask#a} "* ]]; then
+        continue
+      fi
+      if FLEET_FILE="$ROOT/state/fleet.json" "$REPO/bin/fleet" answer "$task" "$ask" 2>/dev/null; then applied+=("$task#$ask")
+      else echo "page: note: ask $task#$ask is already closed; nothing to apply" >&2; fi
+    done < <("${TOOL[@]}" choices "$ROOT" "$project" "$ids")
+  fi
+  use_plugin_lavish_cfg "$project"
+  if [[ "$text" == "-" ]]; then lavish reply "$page" --agent-reply-file - || die "reply failed"
+  else printf '%s' "$text" | lavish reply "$page" --agent-reply-file - || die "reply failed"; fi
+  local n=0
+  [[ -z "$ids" ]] || n="$("${TOOL[@]}" answered "$ROOT" "$project" "$ids")"
+  echo "replied; $n comment(s) marked answered${applied[*]:+; applied option picks: ${applied[*]}}${follow[*]:+; pending: ${follow[*]}}"
+}
+
+cmd_note() {
+  local project="${1:-}" section="${2:-}" text="${3:-}"
+  need_project "$project"
+  [[ -n "$section" && -n "$text" ]] || die "usage: bin/page note <project> <section> \"<text>\""
+  "${TOOL[@]}" note "$ROOT" "$project" "$section" "$text"
+}
+
+cmd_status() {
+  PAGE_PLUGIN_STATUS="$(plugin_status)" "${TOOL[@]}" status "$ROOT" "${1:-}"
+}
+
+cmd_heal() {
+  local st home=() lerr
+  st="$(plugin_status)"
+  mapfile -t home < <(paseo_home_args)
+  lerr="$("${TOOL[@]}" load-errors "$ROOT")"
+  case "$st" in
+    running)
+      local stalled; stalled="$("${TOOL[@]}" stalled "$ROOT" "$STALL_SECS")"
+      if [[ -n "$stalled" ]]; then
+        paseo plugin reload "$PLUGIN_ID" "${home[@]}" || die "heal: could not reload $PLUGIN_ID"
+        echo "heal: $PLUGIN_ID was running but had not rendered for over ${STALL_SECS}s ($stalled); reloaded it"
+      elif [[ -n "$lerr" ]]; then
+        # The plugin is fine; its input is not. A reload would change nothing, so do not do one.
+        echo "heal: state file problem: $lerr"
+        echo "heal: not reloading $PLUGIN_ID (it is running and rendering the last good view); fix the file, then the page recovers by itself"
+      else
+        echo "heal: $PLUGIN_ID is running; nothing to do"
+      fi ;;
+    failed)
+      [[ -z "$lerr" ]] || echo "heal: state file problem: $lerr"
+      paseo plugin reload "$PLUGIN_ID" "${home[@]}" || die "heal: could not reload $PLUGIN_ID"
+      echo "heal: $PLUGIN_ID was failed; reloaded it" ;;
+    missing) echo "heal: $PLUGIN_ID is not installed on this daemon; run bin/page install" ;;
+    unknown) echo "heal: could not read the plugin status (is the paseo daemon up?)" ;;
+    *) echo "heal: $PLUGIN_ID is $st; nothing to do" ;;
+  esac
+}
+
+cmd_render() {
+  local project="${1:-}"; shift || true
+  need_project "$project"
+  "${RENDER[@]}" "$ROOT" "$project" "$@"
+}
+
+case "${1:-}" in
+  install) shift; cmd_install "$@" ;;
+  claim) shift; cmd_claim ;;
+  start) shift; cmd_start "$@" ;;
+  reply) shift; cmd_reply "$@" ;;
+  note) shift; cmd_note "$@" ;;
+  status) shift; cmd_status "$@" ;;
+  heal) shift; cmd_heal ;;
+  render) shift; cmd_render "$@" ;;
+  *) sed -n '2,/^set -euo/p' "$0" | sed '$d'; exit 1 ;;
+esac
