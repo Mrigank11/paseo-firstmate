@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import { cut } from "./humanize.ts";
 import { cardHash } from "./marks.ts";
 import { markdown } from "./markdown.ts";
+import { ICON, svg } from "./icons.ts";
 import { navScript } from "./nav-script.ts";
 import { pageScript } from "./page-script.ts";
 import { CSS } from "./style.ts";
@@ -55,8 +56,10 @@ const GROUPS = [
 ] as const;
 type GroupKey = (typeof GROUPS)[number][0];
 
-/** The navigator's short badge label per stage. A Record over GroupKey, so a new stage cannot ship without one. */
-const STAGE_ABBR: Record<GroupKey, string> = { you: "You", fm: "FM", running: "Run", blocked: "Block", next: "Next", parked: "Park", done: "Done" };
+/** Each stage's navigator icon. A Record over GroupKey, so a new stage cannot ship without one. */
+const STAGE_ICON: Record<GroupKey, string> = {
+  you: ICON.you, fm: ICON.fm, running: ICON.running, blocked: ICON.blocked, next: ICON.next, parked: ICON.parked, done: ICON.done,
+};
 /** A navigator stage longer than this shows its first NAV_SHOW titles and an "N more" button. */
 const NAV_CAP = 7;
 const NAV_SHOW = 5;
@@ -309,9 +312,9 @@ export function navHtml(buckets: Record<GroupKey, { t: Task }[]>): string {
       const fail = t.status === "failed" ? ` class="fail"` : "";
       return `<li${fail}><a class="tn-a" href="#t-${esc(t.id)}" data-t="t-${esc(t.id)}" title="${name}">${name}</a></li>`;
     }).join("");
-    const more = cap ? `<button class="tn-more" type="button" aria-expanded="false" data-more="${items.length - NAV_SHOW} more">${items.length - NAV_SHOW} more</button>` : "";
-    return `<div class="tn-st t-${k}" data-k="${k}" data-n="${items.length}" data-ab="${esc(STAGE_ABBR[k])}" data-label="${esc(label)}"${cap ? " data-cap" : ""}>` +
-      `<div class="tn-h"><span>${esc(label)}</span><span class="tn-c">${items.length}</span></div><ul>${lis}</ul>${more}</div>`;
+    const more = cap ? `<button class="tn-more" type="button" aria-expanded="false" data-more="${items.length - NAV_SHOW} more">${svg(ICON.more)}<span>${items.length - NAV_SHOW} more</span></button>` : "";
+    return `<div class="tn-st t-${k}" data-k="${k}" data-n="${items.length}" data-label="${esc(label)}"${cap ? " data-cap" : ""}>` +
+      `<div class="tn-h">${svg(STAGE_ICON[k])}<span class="tn-l">${esc(label)}</span><span class="tn-c">${items.length}</span></div><ul>${lis}</ul>${more}</div>`;
   }).join("");
 }
 
@@ -444,7 +447,7 @@ ${CSS}
 </style>
 </head><body>
 <!-- the task navigator: data-lavish-action keeps its clicks working in Lavish's annotate mode -->
-<aside class="tn" id="tn" aria-label="Tasks by stage" data-lavish-action hidden><div class="tn-spine"><button class="tn-tg" id="tn-open" type="button" aria-expanded="false" aria-controls="tn-full" title="Show task titles">Tasks</button><div class="tn-bds" id="tn-bds"></div></div><div class="tn-full" id="tn-full"><div class="tn-top"><b>Tasks</b><button class="tn-tg" id="tn-close" type="button" aria-expanded="true" aria-controls="tn-full">Fold</button></div><div class="tn-fl" id="tn-fl"></div></div></aside>
+<aside class="tn" id="tn" aria-label="Tasks by stage" data-lavish-action hidden><div class="tn-spine"><button class="tn-tg" id="tn-open" type="button" aria-expanded="false" aria-controls="tn-full" aria-label="Show task titles" title="Show task titles">${svg(ICON.panelOpen)}</button><div class="tn-bds" id="tn-bds"></div></div><div class="tn-full" id="tn-full"><div class="tn-top"><button class="tn-tg" id="tn-close" type="button" aria-expanded="true" aria-controls="tn-full" aria-label="Fold the task list" title="Fold the task list">${svg(ICON.panelClose)}</button><b>Tasks</b></div><div class="tn-fl" id="tn-fl"></div></div></aside>
 <div class="tn-fly" id="tn-fly" role="region" aria-label="Stage titles" data-lavish-action hidden></div>
 <div class="tn-back" id="tn-back" data-lavish-action hidden></div>
 <div class="tn-sheet" id="tn-sheet" role="dialog" aria-modal="true" aria-label="Tasks by stage" data-lavish-action hidden><div class="tn-sb" id="tn-sl"></div><button class="tn-sx" id="tn-sx" type="button">Close</button></div>

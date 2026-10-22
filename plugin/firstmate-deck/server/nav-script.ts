@@ -8,6 +8,8 @@
 // The page script calls window.__tn() after every swap and every read-mark change. The fold choice ("tn-exp", 1 or 0) is
 // kept in the page script's state (window.__fdPref), which survives a page reload inside Lavish's sandboxed iframe
 // (localStorage is blocked there) and syncs through the marks endpoint like the open/closed sections.
+import { ICON, svg } from "./icons.ts";
+
 export function navScript(): string {
   return `(function(){
   var d=document,body=d.body,$=function(i){return d.getElementById(i)};
@@ -27,10 +29,10 @@ export function navScript(): string {
   // ---- build from the template
   function stages(){return q(fl,".tn-st")}
   function applyMore(root){q(root,".tn-st[data-cap]").forEach(function(s){var on=!!more[s.getAttribute("data-k")],b=s.querySelector(".tn-more");
-    s.classList.toggle("all",on);if(b){b.setAttribute("aria-expanded",on?"true":"false");b.textContent=on?"Show fewer":b.getAttribute("data-more")}})}
+    s.classList.toggle("all",on);if(b){b.setAttribute("aria-expanded",on?"true":"false");var t=b.querySelector("span");if(t)t.textContent=on?"Show fewer":b.getAttribute("data-more")}})}
   function el(tag,cls,text){var e=d.createElement(tag);if(cls)e.className=cls;if(text!==undefined)e.textContent=text;return e}
   function badge(s,tagName){var k=s.getAttribute("data-k"),n=s.getAttribute("data-n"),b=el(tagName,(tagName==="button"?"tn-bd":"tn-chip")+" t-"+k);
-    b.appendChild(el("span","",n));b.appendChild(el("small","",s.getAttribute("data-ab")));
+    var ic=s.querySelector(".tn-h svg");if(ic)b.appendChild(ic.cloneNode(true));b.appendChild(el("span","tn-n",n));
     if(tagName==="button"){b.type="button";b.setAttribute("data-k",k);b.setAttribute("aria-controls","tn-fly");b.setAttribute("aria-expanded",flyKey===k?"true":"false");
       b.setAttribute("aria-label",s.getAttribute("data-label")+", "+n+(n==="1"?" task":" tasks"));b.title=s.getAttribute("data-label")+" ("+n+")"}
     return b}
@@ -39,7 +41,7 @@ export function navScript(): string {
     bds.textContent="";bar.textContent="";
     ss.forEach(function(s){bds.appendChild(badge(s,"button"));bar.appendChild(badge(s,"span"))});
     var you=fl.querySelector('.tn-st[data-k="you"] .tn-a'),t=el("span","tn-bt"+(you?"":" none"),you?you.textContent:"Nothing needs you");
-    bar.appendChild(t);var c=el("span","tn-caret","\\u25be");c.setAttribute("aria-hidden","true");bar.appendChild(c);
+    bar.appendChild(t);var c=el("span","tn-caret");c.innerHTML=${JSON.stringify(svg(ICON.down))};bar.appendChild(c);
     bar.setAttribute("aria-label","Tasks by stage"+(you?": "+ss[0].getAttribute("data-n")+" need you":""));
     if(flyKey){if(fl.querySelector('.tn-st[data-k="'+flyKey+'"]'))renderFly();else closeFly(true)}
     if(!on&&!sheet.hidden)closeSheet(false)}

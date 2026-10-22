@@ -16,13 +16,13 @@ const opts = { now: new Date("2026-10-21T10:15:30Z"), paseoAgentUrl: (id: string
 const model = loadProject(join(here, "fixtures", "root"), "deck-demo");
 const r = renderProject(model, agents, opts);
 const tpl = r.live.slice(r.live.indexOf("<div hidden data-tn>"));
-const stages = [...tpl.matchAll(/<div class="tn-st t-(\w+)" data-k="\1" data-n="(\d+)" data-ab="([^"]+)"/g)].map((m) => [m[1], +m[2], m[3]]);
+const stages = [...tpl.matchAll(/<div class="tn-st t-(\w+)" data-k="\1" data-n="(\d+)" data-label="([^"]+)"/g)].map((m) => [m[1], +m[2], m[3]]);
 
-test("the template lists every non-empty stage in page order, with its count and badge label", () => {
+test("the template lists every non-empty stage in page order, with its count and label", () => {
   assert.deepEqual(stages.map((s) => s[0]), ["you", "fm", "running", "blocked", "next", "parked", "done"]);
   const groups = [...r.live.matchAll(/class="grp" id="g-(\w+)"/g)].map((m) => m[1]).filter((k) => k !== "doneu");
   assert.deepEqual(stages.map((s) => s[0]), groups, "same stages, same order as the card groups");
-  assert.deepEqual(stages.find((s) => s[0] === "blocked"), ["blocked", 1, "Block"]);
+  assert.deepEqual(stages.find((s) => s[0] === "blocked"), ["blocked", 1, "Blocked"]);
 });
 
 test("each task appears in the navigator once, linking to its own card", () => {
@@ -45,7 +45,7 @@ test("a long stage is capped: data-cap and an 'N more' button; a short one is no
   const done = t.slice(t.indexOf('<div class="tn-st t-done"'));
   assert.match(done, /^<div class="tn-st t-done" data-k="done" data-n="(\d+)"[^>]* data-cap>/);
   const n = +done.match(/data-n="(\d+)"/)![1];
-  assert.ok(done.includes(`data-more="${n - 5} more">${n - 5} more</button>`));
+  assert.match(done, new RegExp(`data-more="${n - 5} more"><svg[^>]*>.*?</svg><span>${n - 5} more</span></button>`));
   assert.ok(!tpl.slice(tpl.indexOf('<div class="tn-st t-you"'), tpl.indexOf('<div class="tn-st t-fm"')).includes("data-cap"));
 });
 
@@ -77,4 +77,13 @@ test("the navigator stays clickable in Lavish's annotate mode: every part of it 
   for (const id of ["tn", "tn-fly", "tn-sheet", "tn-back", "tn-bar"]) {
     assert.match(r.page, new RegExp(`id="${id}"[^>]* data-lavish-action[ >]`), id);
   }
+});
+
+test("every stage heading carries its own drawn icon, and the fold buttons are labelled icons, not text", () => {
+  const heads = [...tpl.matchAll(/<div class="tn-h">(<svg class="tn-ic"[^>]*>.*?<\/svg>)<span class="tn-l">/g)].map((m) => m[1]);
+  assert.equal(heads.length, stages.length);
+  assert.equal(new Set(heads).size, heads.length, "no two stages share an icon");
+  assert.match(r.page, /id="tn-open"[^>]*aria-label="Show task titles"[^>]*><svg class="tn-ic"/);
+  assert.match(r.page, /id="tn-close"[^>]*aria-label="Fold the task list"[^>]*><svg class="tn-ic"/);
+  assert.ok(!r.page.includes(">Fold</button>") && !r.page.includes("\\u25be"));
 });
