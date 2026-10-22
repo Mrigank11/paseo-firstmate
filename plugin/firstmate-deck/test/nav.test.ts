@@ -56,7 +56,7 @@ test("a failed task is flagged in the navigator", () => {
 test("no tasks: an empty template, and the shell stays hidden", () => {
   const empty = renderProject({ ...model, tasks: [], archive: [] }, {}, opts);
   assert.ok(empty.live.includes("<div hidden data-tn></div>"));
-  assert.match(empty.page, /<aside class="tn" id="tn" aria-label="Tasks by stage" hidden>/);
+  assert.match(empty.page, /<aside class="tn" id="tn" aria-label="Tasks by stage" data-lavish-action hidden>/);
 });
 
 test("the page shell sits outside the live block and the nav script runs before the page script", () => {
@@ -69,6 +69,12 @@ test("the page shell sits outside the live block and the nav script runs before 
 
 test("the nav script bails out quietly on a page without the shell", () => {
   const ctx = vm.createContext({ document: { body: {}, getElementById: () => null }, window: {}, location: { hash: "" } });
-  assert.doesNotThrow(() => vm.runInContext(navScript("p"), ctx));
+  assert.doesNotThrow(() => vm.runInContext(navScript(), ctx));
   assert.equal((ctx as any).window.__tn, undefined);
+});
+
+test("the navigator stays clickable in Lavish's annotate mode: every part of it is inside a data-lavish-action element", () => {
+  for (const id of ["tn", "tn-fly", "tn-sheet", "tn-back", "tn-bar"]) {
+    assert.match(r.page, new RegExp(`id="${id}"[^>]* data-lavish-action[ >]`), id);
+  }
 });

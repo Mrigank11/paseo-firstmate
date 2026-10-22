@@ -13,6 +13,8 @@ export function pageScript(project: string, liveFile: string, tickSeconds: numbe
   function save(){var s=JSON.stringify(S);try{if(ls)ls.setItem(K,s)}catch(e){}
     try{if(!window.name||window.name.indexOf(P)===0)window.name=P+s}catch(e){}}
   var R=(S._r&&typeof S._r==="object")?S._r:{};S._r=R;
+  // small per-page preferences other scripts keep in this state (the task navigator's fold): saved like the rest, synced
+  window.__fdPref=function(k,v){if(arguments.length<2)return S[k];S[k]=v;save();push()};
   function live(){return document.getElementById("live")}
   function snapshot(){var el=live();if(!el)return;el.querySelectorAll("details[id]").forEach(function(d){S[d.id]=d.open?1:0});save()}
   function restore(root){root.querySelectorAll("details[id]").forEach(function(d){if(d.id in S)d.open=!!S[d.id]})}
@@ -41,7 +43,7 @@ export function pageScript(project: string, liveFile: string, tickSeconds: numbe
   function pull(){if(!MU)return;try{fetch(MU).then(function(r){return r.json()}).then(function(j){var ch=false,rr=(j&&j.r)||{},oo=(j&&j.o)||{};
     Object.keys(rr).forEach(function(k){if(R[k]!==rr[k]){R[k]=rr[k];ch=true}});
     Object.keys(oo).forEach(function(k){if(!(k in S)){S[k]=oo[k];ch=true}});
-    if(ch){save();restore(document);arrange()}}).catch(function(){})}catch(e){}}
+    if(ch){save();restore(document);arrange();tn()}}).catch(function(){})}catch(e){}}
   document.addEventListener("click",function(e){var b=e.target.closest&&e.target.closest("button.mr,button.mra");if(!b)return;
     if(b.classList.contains("mr")){var t=b.closest(".task"),h=t&&t.getAttribute("data-h");if(h)R[t.id]=h}
     else [].slice.call(document.querySelectorAll("#g-doneu .task")).forEach(function(t){var h=t.getAttribute("data-h");if(h)R[t.id]=h});

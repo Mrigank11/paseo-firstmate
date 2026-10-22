@@ -150,10 +150,11 @@ pre{overflow-x:auto;background:#fff;border:1px solid var(--line);border-radius:8
 @media (max-width:560px){.open{margin-left:0}main{padding:18px 14px 60px}nav{margin:12px -14px 0;padding:8px 14px}h1{font-size:20px}.tt{flex-direction:column;gap:4px}.s-you{padding:12px}.tw table{min-width:480px}}
 </style>
 </head><body>
-<aside class="tn" id="tn" aria-label="Tasks by stage" hidden><div class="tn-spine"><button class="tn-tg" id="tn-open" type="button" aria-expanded="false" aria-controls="tn-full" title="Show task titles">Tasks</button><div class="tn-bds" id="tn-bds"></div></div><div class="tn-full" id="tn-full"><div class="tn-top"><b>Tasks</b><button class="tn-tg" id="tn-close" type="button" aria-expanded="true" aria-controls="tn-full">Fold</button></div><div class="tn-fl" id="tn-fl"></div></div></aside>
-<div class="tn-fly" id="tn-fly" role="region" aria-label="Stage titles" hidden></div>
-<div class="tn-back" id="tn-back" hidden></div>
-<div class="tn-sheet" id="tn-sheet" role="dialog" aria-modal="true" aria-label="Tasks by stage" hidden><div class="tn-sb" id="tn-sl"></div><button class="tn-sx" id="tn-sx" type="button">Close</button></div>
+<!-- the task navigator: data-lavish-action keeps its clicks working in Lavish's annotate mode -->
+<aside class="tn" id="tn" aria-label="Tasks by stage" data-lavish-action hidden><div class="tn-spine"><button class="tn-tg" id="tn-open" type="button" aria-expanded="false" aria-controls="tn-full" title="Show task titles">Tasks</button><div class="tn-bds" id="tn-bds"></div></div><div class="tn-full" id="tn-full"><div class="tn-top"><b>Tasks</b><button class="tn-tg" id="tn-close" type="button" aria-expanded="true" aria-controls="tn-full">Fold</button></div><div class="tn-fl" id="tn-fl"></div></div></aside>
+<div class="tn-fly" id="tn-fly" role="region" aria-label="Stage titles" data-lavish-action hidden></div>
+<div class="tn-back" id="tn-back" data-lavish-action hidden></div>
+<div class="tn-sheet" id="tn-sheet" role="dialog" aria-modal="true" aria-label="Tasks by stage" data-lavish-action hidden><div class="tn-sb" id="tn-sl"></div><button class="tn-sx" id="tn-sx" type="button">Close</button></div>
 <main>
 <h1>Deck demo project</h1>
 <div class="sub">Kept current by the firstmate-deck plugin · last update <b>2026-10-21 10:15 UTC</b></div>
@@ -162,7 +163,7 @@ pre{overflow-x:auto;background:#fff;border:1px solid var(--line);border-radius:8
 <div class="banner b-bad" id="fd-stale" role="status" hidden>This page stopped updating. Your comments may not reach the first mate until it&#x27;s fixed (the first mate can run bin/page heal).</div>
 
 <nav><a href="#tasks">Tasks</a><a href="#endpoints">Endpoints &amp; creds</a><a href="#decisions">Decisions</a><a href="#how">How it runs</a><a href="#flags">Feature flags</a><a href="#extra-notes">Extra Notes</a></nav>
-<button class="tn-bar" id="tn-bar" type="button" aria-haspopup="dialog" aria-expanded="false" aria-controls="tn-sheet" hidden></button>
+<button class="tn-bar" id="tn-bar" type="button" data-lavish-action aria-haspopup="dialog" aria-expanded="false" aria-controls="tn-sheet" hidden></button>
 
 <h2 id="tasks">Tasks</h2>
 <div class="m">Each task once: its state, its crew agent live, and what it depends on. Titles and “Open in Paseo” go to the agent in the Paseo web UI.</div>
@@ -215,17 +216,20 @@ pre{overflow-x:auto;background:#fff;border:1px solid var(--line);border-radius:8
 </section>
 <script>
 (function(){
-  var KEY="fd:deck-demo:tn",d=document,body=d.body,$=function(i){return d.getElementById(i)};
+  var d=document,body=d.body,$=function(i){return d.getElementById(i)};
   var aside=$("tn"),bds=$("tn-bds"),fl=$("tn-fl"),fly=$("tn-fly"),sheet=$("tn-sheet"),sl=$("tn-sl"),back=$("tn-back"),bar=$("tn-bar"),
     openB=$("tn-open"),closeB=$("tn-close"),sx=$("tn-sx");
   if(!aside||!bar||!sheet)return;
   var mq=function(q){return window.matchMedia?window.matchMedia(q).matches:false};
   var phone=function(){return mq("(max-width:639px)")},wide=function(){return mq("(min-width:1200px)")};
-  var pref=null;try{pref=localStorage.getItem(KEY)}catch(e){}
-  var exp=wide()&&pref!=="0",tpl="",cur=null,flyKey=null,flyPin=false,hideT=null,more={},io=null,vis={},lastFocus=null;
+  var PK="tn-exp",pref=function(){return window.__fdPref?window.__fdPref(PK):undefined},applied=null;
+  var exp=false,tpl="",cur=null,flyKey=null,flyPin=false,hideT=null,more={},io=null,vis={},lastFocus=null;
   function q(root,sel){return [].slice.call(root.querySelectorAll(sel))}
   function setExp(v,save){exp=v;body.classList.toggle("tn-exp",v);openB.setAttribute("aria-expanded",v?"true":"false");closeFly(true);
-    if(save)try{localStorage.setItem(KEY,v?"1":"0")}catch(e){}}
+    if(save){applied=v?1:0;if(window.__fdPref)window.__fdPref(PK,applied)}}
+  // apply the stored choice on load, and again when it changes (the marks endpoint can bring it in after load); only at
+  // 1200 px and up, where the unfolded rail pushes the page instead of covering it. No choice yet: unfolded.
+  function adopt(){var p=pref();if(p===undefined)p=1;if(p===applied)return;applied=p;if(wide())setExp(p===1,false)}
   // ---- build from the template
   function stages(){return q(fl,".tn-st")}
   function applyMore(root){q(root,".tn-st[data-cap]").forEach(function(s){var on=!!more[s.getAttribute("data-k")],b=s.querySelector(".tn-more");
@@ -249,7 +253,7 @@ pre{overflow-x:auto;background:#fff;border:1px solid var(--line);border-radius:8
     [fl,sl,fly].forEach(function(r){q(r,".tn-a").forEach(function(a){a.parentNode.classList.toggle("un",!!ids[a.getAttribute("data-t")])})})}
   window.__tn=function(){var live=$("live"),src=live&&live.querySelector("[data-tn]"),html=src?src.innerHTML:"";
     if(html!==tpl){tpl=html;var y=fl.scrollTop;build(html);fl.scrollTop=y}
-    unread();observe();mark()};
+    adopt();unread();observe();mark()};
   // ---- flyout beside the spine
   function renderFly(){var s=fl.querySelector('.tn-st[data-k="'+flyKey+'"]');if(!s)return;
     fly.innerHTML="";fly.appendChild(s.cloneNode(true));applyMore(fly);unread();mark();fly.hidden=false;
@@ -313,7 +317,7 @@ pre{overflow-x:auto;background:#fff;border:1px solid var(--line);border-radius:8
       if(best)setCur(best)},{rootMargin:"-60px 0px -55% 0px"});
     var live=$("live");if(live)q(live,"article.task[id]").forEach(function(t){io.observe(t)})}
   function measure(){var n=d.querySelector("main > nav");if(n)d.documentElement.style.setProperty("--navh",n.offsetHeight+"px")}
-  window.addEventListener("resize",function(){measure();if(!phone())closeSheet(false);if(exp&&!wide())setExp(false,false);if(flyKey)renderFly()});
+  window.addEventListener("resize",function(){measure();if(!phone())closeSheet(false);if(exp&&!wide())setExp(false,false);else if(!exp&&wide()&&applied!==0)setExp(true,false);if(flyKey)renderFly()});
   measure();setExp(exp,false);
 })();
 (function(){
@@ -323,6 +327,8 @@ pre{overflow-x:auto;background:#fff;border:1px solid var(--line);border-radius:8
   function save(){var s=JSON.stringify(S);try{if(ls)ls.setItem(K,s)}catch(e){}
     try{if(!window.name||window.name.indexOf(P)===0)window.name=P+s}catch(e){}}
   var R=(S._r&&typeof S._r==="object")?S._r:{};S._r=R;
+  // small per-page preferences other scripts keep in this state (the task navigator's fold): saved like the rest, synced
+  window.__fdPref=function(k,v){if(arguments.length<2)return S[k];S[k]=v;save();push()};
   function live(){return document.getElementById("live")}
   function snapshot(){var el=live();if(!el)return;el.querySelectorAll("details[id]").forEach(function(d){S[d.id]=d.open?1:0});save()}
   function restore(root){root.querySelectorAll("details[id]").forEach(function(d){if(d.id in S)d.open=!!S[d.id]})}
@@ -351,7 +357,7 @@ pre{overflow-x:auto;background:#fff;border:1px solid var(--line);border-radius:8
   function pull(){if(!MU)return;try{fetch(MU).then(function(r){return r.json()}).then(function(j){var ch=false,rr=(j&&j.r)||{},oo=(j&&j.o)||{};
     Object.keys(rr).forEach(function(k){if(R[k]!==rr[k]){R[k]=rr[k];ch=true}});
     Object.keys(oo).forEach(function(k){if(!(k in S)){S[k]=oo[k];ch=true}});
-    if(ch){save();restore(document);arrange()}}).catch(function(){})}catch(e){}}
+    if(ch){save();restore(document);arrange();tn()}}).catch(function(){})}catch(e){}}
   document.addEventListener("click",function(e){var b=e.target.closest&&e.target.closest("button.mr,button.mra");if(!b)return;
     if(b.classList.contains("mr")){var t=b.closest(".task"),h=t&&t.getAttribute("data-h");if(h)R[t.id]=h}
     else [].slice.call(document.querySelectorAll("#g-doneu .task")).forEach(function(t){var h=t.getAttribute("data-h");if(h)R[t.id]=h});

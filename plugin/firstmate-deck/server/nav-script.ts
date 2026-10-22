@@ -5,22 +5,25 @@
 //     out beside it); unfolded it lists every stage's titles (it pushes the page at 1200 px and up, overlays it below).
 //   - under 640 px: a bar under the sticky nav with the stage counts and the first title that needs the captain;
 //     tapping it drops down a sheet with the full list.
-// The page script calls window.__tn() after every swap and every read-mark change. The fold state is per browser
-// (localStorage when the iframe allows it, else memory) and is never sent to the marks endpoint.
-export function navScript(project: string): string {
-  const j = (v: unknown) => JSON.stringify(v).replace(/</g, "\\u003c");
+// The page script calls window.__tn() after every swap and every read-mark change. The fold choice ("tn-exp", 1 or 0) is
+// kept in the page script's state (window.__fdPref), which survives a page reload inside Lavish's sandboxed iframe
+// (localStorage is blocked there) and syncs through the marks endpoint like the open/closed sections.
+export function navScript(): string {
   return `(function(){
-  var KEY=${j("fd:" + project + ":tn")},d=document,body=d.body,$=function(i){return d.getElementById(i)};
+  var d=document,body=d.body,$=function(i){return d.getElementById(i)};
   var aside=$("tn"),bds=$("tn-bds"),fl=$("tn-fl"),fly=$("tn-fly"),sheet=$("tn-sheet"),sl=$("tn-sl"),back=$("tn-back"),bar=$("tn-bar"),
     openB=$("tn-open"),closeB=$("tn-close"),sx=$("tn-sx");
   if(!aside||!bar||!sheet)return;
   var mq=function(q){return window.matchMedia?window.matchMedia(q).matches:false};
   var phone=function(){return mq("(max-width:639px)")},wide=function(){return mq("(min-width:1200px)")};
-  var pref=null;try{pref=localStorage.getItem(KEY)}catch(e){}
-  var exp=wide()&&pref!=="0",tpl="",cur=null,flyKey=null,flyPin=false,hideT=null,more={},io=null,vis={},lastFocus=null;
+  var PK="tn-exp",pref=function(){return window.__fdPref?window.__fdPref(PK):undefined},applied=null;
+  var exp=false,tpl="",cur=null,flyKey=null,flyPin=false,hideT=null,more={},io=null,vis={},lastFocus=null;
   function q(root,sel){return [].slice.call(root.querySelectorAll(sel))}
   function setExp(v,save){exp=v;body.classList.toggle("tn-exp",v);openB.setAttribute("aria-expanded",v?"true":"false");closeFly(true);
-    if(save)try{localStorage.setItem(KEY,v?"1":"0")}catch(e){}}
+    if(save){applied=v?1:0;if(window.__fdPref)window.__fdPref(PK,applied)}}
+  // apply the stored choice on load, and again when it changes (the marks endpoint can bring it in after load); only at
+  // 1200 px and up, where the unfolded rail pushes the page instead of covering it. No choice yet: unfolded.
+  function adopt(){var p=pref();if(p===undefined)p=1;if(p===applied)return;applied=p;if(wide())setExp(p===1,false)}
   // ---- build from the template
   function stages(){return q(fl,".tn-st")}
   function applyMore(root){q(root,".tn-st[data-cap]").forEach(function(s){var on=!!more[s.getAttribute("data-k")],b=s.querySelector(".tn-more");
@@ -44,7 +47,7 @@ export function navScript(project: string): string {
     [fl,sl,fly].forEach(function(r){q(r,".tn-a").forEach(function(a){a.parentNode.classList.toggle("un",!!ids[a.getAttribute("data-t")])})})}
   window.__tn=function(){var live=$("live"),src=live&&live.querySelector("[data-tn]"),html=src?src.innerHTML:"";
     if(html!==tpl){tpl=html;var y=fl.scrollTop;build(html);fl.scrollTop=y}
-    unread();observe();mark()};
+    adopt();unread();observe();mark()};
   // ---- flyout beside the spine
   function renderFly(){var s=fl.querySelector('.tn-st[data-k="'+flyKey+'"]');if(!s)return;
     fly.innerHTML="";fly.appendChild(s.cloneNode(true));applyMore(fly);unread();mark();fly.hidden=false;
@@ -108,7 +111,7 @@ export function navScript(project: string): string {
       if(best)setCur(best)},{rootMargin:"-60px 0px -55% 0px"});
     var live=$("live");if(live)q(live,"article.task[id]").forEach(function(t){io.observe(t)})}
   function measure(){var n=d.querySelector("main > nav");if(n)d.documentElement.style.setProperty("--navh",n.offsetHeight+"px")}
-  window.addEventListener("resize",function(){measure();if(!phone())closeSheet(false);if(exp&&!wide())setExp(false,false);if(flyKey)renderFly()});
+  window.addEventListener("resize",function(){measure();if(!phone())closeSheet(false);if(exp&&!wide())setExp(false,false);else if(!exp&&wide()&&applied!==0)setExp(true,false);if(flyKey)renderFly()});
   measure();setExp(exp,false);
 })();`;
 }

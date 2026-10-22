@@ -148,3 +148,17 @@ test("every live swap asks the task navigator to rebuild", () => {
   b.win.__tn = () => { throw new Error("boom"); };
   assert.doesNotThrow(() => b.win.__fdLive("<p>c</p>", "2026-10-21T10:00:02.000Z", 3), "a navigator error never breaks the live swap");
 });
+
+test("a page preference (the navigator's fold) is kept in the page state and survives a reload without localStorage", () => {
+  const run = (name: string) => {
+    const win: any = { name, scrollY: 0, scrollTo() {} };
+    const doc: any = { addEventListener() {}, getElementById: () => null, querySelectorAll: () => [], createElement: () => ({ remove() {} }), head: { appendChild() {} } };
+    vm.runInContext(pageScript("p", "page.live.js", 1), vm.createContext({ document: doc, window: win, location: { hash: "" }, localStorage: undefined, Date, JSON, Object, Math, Array, setInterval: () => 0 }));
+    return win;
+  };
+  const a = run("");
+  assert.equal(a.__fdPref("tn-exp"), undefined);
+  a.__fdPref("tn-exp", 0);
+  const b = run(a.name); // Lavish reloads the iframe: same browsing context, same window.name
+  assert.equal(b.__fdPref("tn-exp"), 0);
+});

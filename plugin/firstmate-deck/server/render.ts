@@ -443,10 +443,11 @@ export function renderProject(model: ProjectModel, agents: Record<string, AgentV
 ${CSS}
 </style>
 </head><body>
-<aside class="tn" id="tn" aria-label="Tasks by stage" hidden><div class="tn-spine"><button class="tn-tg" id="tn-open" type="button" aria-expanded="false" aria-controls="tn-full" title="Show task titles">Tasks</button><div class="tn-bds" id="tn-bds"></div></div><div class="tn-full" id="tn-full"><div class="tn-top"><b>Tasks</b><button class="tn-tg" id="tn-close" type="button" aria-expanded="true" aria-controls="tn-full">Fold</button></div><div class="tn-fl" id="tn-fl"></div></div></aside>
-<div class="tn-fly" id="tn-fly" role="region" aria-label="Stage titles" hidden></div>
-<div class="tn-back" id="tn-back" hidden></div>
-<div class="tn-sheet" id="tn-sheet" role="dialog" aria-modal="true" aria-label="Tasks by stage" hidden><div class="tn-sb" id="tn-sl"></div><button class="tn-sx" id="tn-sx" type="button">Close</button></div>
+<!-- the task navigator: data-lavish-action keeps its clicks working in Lavish's annotate mode -->
+<aside class="tn" id="tn" aria-label="Tasks by stage" data-lavish-action hidden><div class="tn-spine"><button class="tn-tg" id="tn-open" type="button" aria-expanded="false" aria-controls="tn-full" title="Show task titles">Tasks</button><div class="tn-bds" id="tn-bds"></div></div><div class="tn-full" id="tn-full"><div class="tn-top"><b>Tasks</b><button class="tn-tg" id="tn-close" type="button" aria-expanded="true" aria-controls="tn-full">Fold</button></div><div class="tn-fl" id="tn-fl"></div></div></aside>
+<div class="tn-fly" id="tn-fly" role="region" aria-label="Stage titles" data-lavish-action hidden></div>
+<div class="tn-back" id="tn-back" data-lavish-action hidden></div>
+<div class="tn-sheet" id="tn-sheet" role="dialog" aria-modal="true" aria-label="Tasks by stage" data-lavish-action hidden><div class="tn-sb" id="tn-sl"></div><button class="tn-sx" id="tn-sx" type="button">Close</button></div>
 <main>
 <h1>${esc(model.title)}</h1>
 <div class="sub">Kept current by the firstmate-deck plugin · last update <b>${esc(stampLong(opts.now))}</b></div>
@@ -455,14 +456,14 @@ ${CSS}
 <div class="banner b-bad" id="fd-stale" role="status" hidden>${esc(STALE_TEXT)}</div>
 ${banner}
 <nav>${nav}</nav>
-<button class="tn-bar" id="tn-bar" type="button" aria-haspopup="dialog" aria-expanded="false" aria-controls="tn-sheet" hidden></button>
+<button class="tn-bar" id="tn-bar" type="button" data-lavish-action aria-haspopup="dialog" aria-expanded="false" aria-controls="tn-sheet" hidden></button>
 
 <h2 id="tasks">Tasks</h2>
 <div class="m">Each task once: its state, its crew agent live, and what it depends on. Titles and “Open in Paseo” go to the agent in the Paseo web UI.</div>
 <div id="live"><!--LIVE-START-->${stamped}<!--LIVE-END--></div>
 ${names.map((n) => renderSection(model, n)).join("\n")}
 <script>
-${navScript(model.project)}
+${navScript()}
 ${pageScript(model.project, liveFile, opts.tickSeconds, opts.marksUrl)}
 </script>
 </main></body></html>
