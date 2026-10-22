@@ -43,6 +43,8 @@ export type Task = {
   order?: number;
   /** The id this task had on a hand-run page it was imported from. */
   legacyId?: string;
+  /** What a `blocked` task waits on (bin/fleet set blocked_on=...): an outside dependency, not the captain or the crew. */
+  blocked_on?: string;
   status: string;
   agentId?: string;
   depends_on: string[];
@@ -229,6 +231,7 @@ function toTask(raw: any, root: string, label: string, inbox: Comment[] = []): T
     provider: typeof raw.provider === "string" && raw.provider ? raw.provider : undefined,
     order: orderOf(raw.order),
     legacyId: typeof raw.legacyId === "string" && raw.legacyId ? raw.legacyId : undefined,
+    blocked_on: typeof raw.blocked_on === "string" && raw.blocked_on ? raw.blocked_on : undefined,
     status: String(raw.status ?? "queued"),
     agentId: raw.agentId || undefined,
     depends_on: Array.isArray(raw.depends_on) ? raw.depends_on.map(String) : [],

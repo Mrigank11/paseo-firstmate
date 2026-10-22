@@ -46,7 +46,9 @@
 #                                     a project task whose branch is known and whose project.json has a repo, appends
 #                                     `git log --oneline <base>..<branch>` to projects/<p>/sections/code.md (dated, no duplicates)
 #
-# Statuses: queued, parked, dispatched, running, needs-captain, done, failed.
+# Statuses: queued, parked, blocked, dispatched, running, needs-captain, done, failed.
+# parked = the captain paused it; blocked = waiting on an outside dependency (not the captain, not crew) and REQUIRES
+# blocked_on="<what/who>" (<=200 chars). blocked_on is dropped when the status moves off blocked.
 # Optional fields (add/set): project (kebab slug, empty = none), title (<=160 chars), order (integer: position on the
 # page within a group, lowest first; tasks without one keep file order), legacyId (kebab slug: the id the task had on a
 # hand-run page it was imported from). add also takes
@@ -64,12 +66,12 @@ STATE_DIR="$(dirname "$FLEET")"
 ARCHIVE="$STATE_DIR/fleet-archive.jsonl"
 TASKS="$STATE_DIR/tasks"
 
-STATUSES='["queued","parked","dispatched","running","needs-captain","done","failed"]'
+STATUSES='["queued","parked","blocked","dispatched","running","needs-captain","done","failed"]'
 SHAPES='["scout","ship"]'
 MAXLEN=200
 TITLEMAX=160
 SLUG_RE='^[a-z0-9][a-z0-9-]*$'
-SETTABLE="intent shape provider agentId workspaceId status branch pr lastEvent notes project title order legacyId"
+SETTABLE="intent shape provider agentId workspaceId status branch pr lastEvent notes project title order legacyId blocked_on"
 
 # jq: give every ask of a task a stable id ("a1", "a2", ...) and keep .askSeq (the highest number ever handed out) ahead
 # of all of them, so an id is never reused after its ask is answered. An existing ask without an id (written before ids
@@ -114,6 +116,8 @@ check_entry() { # id — validate enum + length invariants on one entry
       and ((($t.title // "") | length) <= $tmax)
       and ((($t.shape // "scout") as $h | $sh | index($h)) != null)
       and ((($t.notes // "") | length) <= $max)
+      and ((($t.blocked_on // "") | length) <= $max)
+      and (($t.status != "blocked") or (($t.blocked_on // "") | length > 0))
       and (([$t.asks[]? .text | length] | all(. <= $max))))
   ' "$FLEET" >/dev/null || die "entry $id violates schema (status/shape enum, project slug, title or 200-char cap)";
 }
@@ -128,8 +132,18 @@ check_obj() { # obj-json
       and ((($o.shape // null) as $h | if $h == null then true else ($sh | index($h)) != null end))
       and ((($o.order // 0) | type) == "number" and (($o.order // 0) >= 0) and ((($o.order // 0) | floor) == ($o.order // 0)))
       and ((($o.legacyId // "") | length == 0) or (($o.legacyId | type) == "string" and ($o.legacyId | test($re))))
-      and ((($o.notes // "") | length) <= $max))
-  ' >/dev/null || die "refused: bad status/shape enum, project slug, title over $TITLEMAX chars, notes over $MAXLEN chars, order that is not a whole number, or legacyId that is not a kebab slug";
+      and ((($o.notes // "") | length) <= $max)
+      and ((($o.blocked_on // "") | length) <= $max))
+  ' >/dev/null || die "refused: bad status/shape enum, project slug, title over $TITLEMAX chars, notes or blocked_on over $MAXLEN chars, order that is not a whole number, or legacyId that is not a kebab slug";
+}
+
+# blocked <=> blocked_on: a blocked task must say what it waits on, and blocked_on on any other status is refused
+check_blocked() { # obj status blocked_on
+  if [[ "$2" == "blocked" ]]; then
+    [[ -n "$3" ]] || die "refused: status=blocked needs blocked_on=\"<what or who it waits on>\""
+  elif [[ -n "$3" ]]; then
+    die "refused: blocked_on only goes with status=blocked (status is '$2')"
+  fi
 }
 
 cmd_get() { jq -c --arg id "$1" '.tasks | map(select(.id == $id))[0] // empty' "$FLEET"; }
@@ -216,6 +230,7 @@ cmd_add() {
     fi
   fi
   check_obj "$obj"
+  check_blocked "$obj" "$(jq -r '.status' <<<"$obj")" "$(jq -r '.blocked_on // ""' <<<"$obj")"
   local ts; ts="$(now)"
   atomic_jq --arg id "$id" --argjson o "$obj" --arg ts "$ts" \
     '.tasks += [($o + {id: $id, asks: [], lastEvent: ($o.lastEvent // $ts)})]';
@@ -227,13 +242,22 @@ cmd_set() {
   [[ $# -gt 0 ]] || die "set needs at least one key=value"
   local obj; obj="$(build_obj "$SETTABLE" "$@")"
   check_obj "$obj"  # validate BEFORE touching the file: a refusal changes nothing
+  # blocked_on follows the status: required while blocked, dropped when the status moves off blocked
+  local cur_st cur_bo new_st new_bo
+  cur_st="$(jq -r --arg id "$id" '.tasks | map(select(.id == $id))[0].status' "$FLEET")"
+  cur_bo="$(jq -r --arg id "$id" '.tasks | map(select(.id == $id))[0].blocked_on // ""' "$FLEET")"
+  new_st="$(jq -r --arg d "$cur_st" '.status // $d' <<<"$obj")"
+  if jq -e 'has("blocked_on")' <<<"$obj" >/dev/null; then new_bo="$(jq -r '.blocked_on' <<<"$obj")"
+  elif [[ "$new_st" == "blocked" ]]; then new_bo="$cur_bo"
+  else new_bo=""; fi
+  check_blocked "$obj" "$new_st" "$new_bo"
   # asks/preview change only through ask/answer/preview, never set.
   local stamp="null"
   if jq -e 'has("status")' <<<"$obj" >/dev/null && ! jq -e 'has("lastEvent")' <<<"$obj" >/dev/null; then
     stamp="\"$(now)\"";
   fi
   atomic_jq --arg id "$id" --argjson o "$obj" --argjson stamp "$stamp" \
-    '.tasks |= map(if .id == $id then . + $o + (if $stamp == null then {} else {lastEvent: $stamp} end) else . end)';
+    '.tasks |= map(if .id == $id then (. + $o + (if $stamp == null then {} else {lastEvent: $stamp} end)) | if .status != "blocked" then del(.blocked_on) else . end else . end)';
   check_entry "$id";
 }
 

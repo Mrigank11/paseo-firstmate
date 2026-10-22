@@ -19,7 +19,7 @@ export type Summary = {
   project: string; title: string; repo: string | null; pageUrl: string | null; session: "open" | "ended" | "stopped" | "unknown";
   needsYou: { taskId: string; askId: string | null; taskTitle: string; text: string; since: string }[];
   running: { taskId: string; taskTitle: string; agentId: string | null; agentStatus: string; current: string; startedAt: string | null }[];
-  counts: { needsYou: number; withFirstMate: number; running: number; next: number; parked: number; done: number; failed: number };
+  counts: { needsYou: number; withFirstMate: number; running: number; blocked: number; next: number; parked: number; done: number; failed: number };
   undelivered: number;
   banner: string | null;
 };
@@ -777,7 +777,7 @@ export class Deck {
       try { repo = JSON.parse(readFileSync(join(projectDir(this.cfg.root, p), "project.json"), "utf8")).repo ?? null; } catch {}
       const pj = readPageJson(pageJsonPath(this.cfg.root, p));
       const archived = model.archive.filter((a) => !model.tasks.some((t) => t.id === a.id));
-      const counts = { needsYou: 0, withFirstMate: 0, running: 0, next: 0, parked: 0, done: archived.filter((a) => a.status !== "failed").length, failed: archived.filter((a) => a.status === "failed").length };
+      const counts = { needsYou: 0, withFirstMate: 0, running: 0, blocked: 0, next: 0, parked: 0, done: archived.filter((a) => a.status !== "failed").length, failed: archived.filter((a) => a.status === "failed").length };
       const needsYou: Summary["needsYou"] = [];
       const running: Summary["running"] = [];
       for (const t of model.tasks) {
@@ -798,6 +798,7 @@ export class Deck {
           });
         } else if (g === "done") { if (t.status === "failed") counts.failed++; else counts.done++; }
         else if (g === "parked") counts.parked++;
+        else if (g === "blocked") counts.blocked++;
         else counts.next++;
       }
       const banner = this.bannerFor(p, pj.session);
