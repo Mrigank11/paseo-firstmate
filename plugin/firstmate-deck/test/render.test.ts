@@ -162,3 +162,11 @@ test("a context file with no answer record (answered before records existed) sti
   assert.match(live, /Old context body/);
   assert.match(live, /Extra notes kept/);
 });
+
+test("blocked task: its own Blocked group between Running and Next up, with what it waits on", () => {
+  const g = r.live.slice(r.live.indexOf('id="g-blocked"'), r.live.indexOf('id="g-next"'));
+  assert.ok(r.live.indexOf('id="g-running"') < r.live.indexOf('id="g-blocked"'));
+  assert.ok(g.includes('id="t-await-key"') && g.includes("Blocked on:</b> Nemath: Trigger Prod API key"));
+  assert.ok(r.live.includes('href="#g-blocked" class="sum c-blocked">1 blocked'));
+  assert.ok(!r.live.slice(r.live.indexOf('id="g-parked"')).includes("await-key"));
+});

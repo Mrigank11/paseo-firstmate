@@ -47,6 +47,7 @@ const GROUPS = [
   ["you", "Needs you"],
   ["fm", "With the first mate"],
   ["running", "Running"],
+  ["blocked", "Blocked"],
   ["next", "Next up"],
   ["parked", "Parked"],
   ["done", "Done"],
@@ -92,6 +93,7 @@ export function groupOf(t: Task, live: boolean): GroupKey {
   if (t.status === "dispatched" || t.status === "running") return "running";
   if (t.status === "done" || t.status === "failed") return "done";
   if (t.status === "parked") return "parked";
+  if (t.status === "blocked") return "blocked";
   return "next"; // queued and anything unrecognised
 }
 
@@ -265,6 +267,7 @@ function row(t: Task, group: GroupKey, ctx: Ctx, idx = 0): string {
     if (ans || detail) out.push(`<div class="askbox answered" id="a-${esc(t.id)}-${esc(a.id)}"><div class="ask-tag">Answered</div>${ans}${detail}</div>`);
   }
   if (t.agentId) out.push(agentBlock(t, group, ctx.agents[t.agentId], ctx.o));
+  if (group === "blocked") out.push(`<div class="bo"><b>Blocked on:</b> ${esc(t.blocked_on || "an outside dependency")}</div>`);
   const body = t.card.trim() ? cardHtml(t) : esc(t.notes);
   if (body) out.push(`<div class="nt">${body}</div>`);
   // a done card with a card.md keeps its notes in the same place; a report on disk is pointed at, not inlined
@@ -302,7 +305,7 @@ function renderLive(model: ProjectModel, agents: Record<string, AgentView>, o: R
   for (const t of all) for (const d of t.depends_on) unblocks.set(d, [...(unblocks.get(d) ?? []), t.id]);
   const ctx: Ctx = { byId, unblocks, agents, o, comments: model.comments };
 
-  const buckets: Record<GroupKey, { t: Task; g: GroupKey }[]> = { you: [], fm: [], running: [], next: [], parked: [], done: [] };
+  const buckets: Record<GroupKey, { t: Task; g: GroupKey }[]> = { you: [], fm: [], running: [], blocked: [], next: [], parked: [], done: [] };
   for (const t of model.tasks) buckets[groupOf(t, true)].push({ t, g: groupOf(t, true) });
   for (const t of archive) buckets.done.push({ t, g: "done" });
   // Done: most recently updated (lastEvent) first, live and archived together. An explicit `order` still pins a task ahead of the rest in any group.

@@ -45,7 +45,8 @@ One object, `{ "tasks": [...] }`. Each task:
   "project": "kebab-slug   (optional; groups tasks onto a project page)",
   "title": "≤160 chars plain text (optional; display name)",
   "depends_on": ["other-task-id"],
-  "status": "queued | parked | dispatched | running | needs-captain | done | failed",
+  "blocked_on": "≤200 chars: what an outside party owes us (required while status=blocked, otherwise absent)",
+  "status": "queued | parked | blocked | dispatched | running | needs-captain | done | failed",
   "branch": "feature/x   (ship only, once known)",
   "pr": "https://…        (ship only, once opened)",
   "lastEvent": "2026-09-18T12:00:00Z finished",
@@ -60,7 +61,8 @@ Rules:
 
 - `id` is a stable kebab slug you assign at dispatch; it names the `tasks/<id>/` dir.
 - `status` is *your* view of truth, updated on every wake. It is not Paseo's status — reconcile them when they disagree, trusting a fresh `get_agent_status` over a stale field.
-- `queued` = planned, not yet dispatched; `parked` = deliberately on hold. Neither counts as active: `bin/fleet active` lists only `dispatched`, `running`, `needs-captain`.
+- `queued` = planned, not yet dispatched; `parked` = the captain deliberately paused it; `blocked` = waiting on an outside dependency (a person, vendor or system that is neither the captain nor the crew, e.g. "Nemath: Trigger Prod API key"). None of the three counts as active: `bin/fleet active` lists only `dispatched`, `running`, `needs-captain`.
+- `blocked` requires `blocked_on="<what/who>"` (≤200 chars) in the same `add`/`set`; `blocked_on` is refused on any other status and dropped automatically when the status moves off `blocked`. Status meanings in short: `needs-captain` = the captain's decision, `parked` = the captain paused it, `blocked` = an outside dependency, `running` = crew working.
 - `project` is a kebab slug (`^[a-z0-9][a-z0-9-]*$`; empty/null = none) and `title` is plain text up to 160 chars; both are set via `add`/`set` and survive into the archive. `bin/fleet project <p>` prints every live task of a project (any status); `bin/fleet project <p> --archive [N]` prints the last N (default 30) archived lines; `bin/fleet active --project <p>` filters the active list.
 - `depends_on` holds task ids, changed only with `bin/fleet depend <id> <dep-id>...` (appends, de-duplicates) and `bin/fleet undepend <id> <dep-id>`. Ids may refer to archived tasks, so they are not checked against the live index.
 - Every ask has a **stable id** (`a1`, `a2`, ...), assigned by `bin/fleet ask` from the task's `askSeq` counter and never reused for that task, even after the ask is answered. `reask`, `pending` and `answer` take that id (`bin/fleet answer <id> a2`); a plain 1-based number still works but means "the ask at that position right now", so use ids whenever more than one ask is open. An ask written before ids existed gets `a<its index>` at the first `bin/fleet` write that touches its task. The project page, its comment targets (`t-<task>#a2`) and option clicks all use the id, so answering one ask never re-targets another.

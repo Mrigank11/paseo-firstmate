@@ -61,6 +61,7 @@ export function countsLine(p: ProjectSummary): string {
   if (p.counts.needsYou > 0) parts.push(`${p.counts.needsYou} needs you`);
   if (p.counts.withFirstMate) parts.push(`${p.counts.withFirstMate} with the first mate`);
   parts.push(`${p.counts.running} running`);
+  if (p.counts.blocked) parts.push(`${p.counts.blocked} blocked`);
   parts.push(`${p.counts.done} done`);
   if (p.counts.failed) parts.push(`${p.counts.failed} failed`);
   return parts.join(" · ");

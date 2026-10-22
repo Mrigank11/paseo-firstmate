@@ -183,6 +183,7 @@ test("summary follows the contract shape", async () => {
     { id: "c", intent: "later", status: "queued", project: "demo" },
     { id: "d", intent: "hold", status: "parked", project: "demo" },
     { id: "e", intent: "fin", status: "done", project: "demo" },
+    { id: "g", intent: "wait", status: "blocked", blocked_on: "Nemath: Trigger Prod API key", project: "demo" },
   ] });
   writeFileSync(join(r.pdir, "inbox.jsonl"), JSON.stringify({ id: "c1", at: "2026-10-21T09:05:00Z", project: "demo", target: "t-f#a1", text: "more detail" }) + "\n");
   await r.deck.configure();
@@ -190,7 +191,7 @@ test("summary follows the contract shape", async () => {
   const s = await r.deck.summary();
   assert.equal(s.firstmateAgentId, "fm-1");
   const p = s.projects[0];
-  assert.deepEqual(p.counts, { needsYou: 1, withFirstMate: 1, running: 1, next: 1, parked: 1, done: 1, failed: 0 });
+  assert.deepEqual(p.counts, { needsYou: 1, withFirstMate: 1, running: 1, blocked: 1, next: 1, parked: 1, done: 1, failed: 0 });
   assert.deepEqual(p.needsYou, [{ taskId: "a", askId: "a1", taskTitle: "ask", text: "Which?", since: "2026-10-20" }]);
   assert.equal(p.running[0].agentStatus, "running");
   assert.equal(p.session, "unknown");

@@ -34,6 +34,24 @@ for s in queued parked dispatched running needs-captain done failed; do
   $F set b status=$s >/dev/null 2>&1 || bad "status $s accepted"
 done; ok "all enum statuses accepted"
 
+# blocked: waiting on an outside dependency, needs blocked_on, never active
+refused "blocked without blocked_on (set)" $F set b status=blocked
+refused "blocked without blocked_on (add)" $F add bl0 intent=x shape=ship status=blocked
+refused "blocked_on without blocked status" $F set b blocked_on="Nemath key"
+refused "empty blocked_on while blocked" $F set b status=blocked blocked_on=
+refused "blocked_on over 200" $F set b status=blocked blocked_on="$(printf 'x%.0s' $(seq 201))"
+$F set b status=blocked blocked_on="Nemath: Trigger Prod API key" >/dev/null; check "set blocked + blocked_on" $?
+eq "$($F get b | jq -r '.status+"|"+.blocked_on')" "blocked|Nemath: Trigger Prod API key"; check "blocked_on stored" $?
+$F set b notes="still waiting" >/dev/null
+eq "$($F get b | jq -r .blocked_on)" "Nemath: Trigger Prod API key"; check "blocked_on kept across an unrelated set" $?
+$F set b blocked_on="Nemath: staging key" >/dev/null
+eq "$($F get b | jq -r .blocked_on)" "Nemath: staging key"; check "blocked_on updated while blocked" $?
+$F set b status=running >/dev/null
+eq "$($F get b | jq -c 'has("blocked_on")')" false; check "blocked_on dropped when status leaves blocked" $?
+$F add bl1 intent=x shape=ship status=blocked blocked_on="legal sign-off" >/dev/null; check "add blocked with blocked_on" $?
+eq "$($F active | jq -r 'map(.id)|join(",")' | grep -c bl1)" 0; check "blocked is not active" $?
+$F set b status=parked >/dev/null; $F set bl1 status=queued >/dev/null
+
 refused "bad project slug" $F set a project=Bad_Slug
 refused "bad project slug on add" $F add c intent=x shape=ship status=queued project=-x
 refused "title over 160" $F set a title="$(printf 'x%.0s' $(seq 161))"

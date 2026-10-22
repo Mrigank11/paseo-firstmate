@@ -5,7 +5,7 @@ description: Use when the captain wants a live page for a project, when a "## Pa
 
 # Project page
 
-A project page is a Lavish HTML page per project: Needs you, Running, Next up, Parked and Done, plus hand-written sections (endpoints, flags, code changes, decisions, how it runs). The `firstmate-deck` Paseo plugin renders it from `state/fleet.json`, the archive and `state/projects/<project>/sections/`, owns its Lavish comment poll, and forwards comments to you. You never edit the page HTML and never poll it.
+A project page is a Lavish HTML page per project: Needs you, Running, Blocked, Next up, Parked and Done, plus hand-written sections (endpoints, flags, code changes, decisions, how it runs). The `firstmate-deck` Paseo plugin renders it from `state/fleet.json`, the archive and `state/projects/<project>/sections/`, owns its Lavish comment poll, and forwards comments to you. You never edit the page HTML and never poll it.
 
 ## Starting a page
 
@@ -23,6 +23,7 @@ If it exits 2, the captain ended this page's session. Don't reopen it; run `bin/
 |---|---|
 | Dispatching a task for the project | `bin/fleet add <id> ... project=<project> title="<short title>"`. A task added with `depends_on=a,b` and no `project=` inherits the project of its first dependency that has one (and `bin/fleet depend` does the same for a task that has none), but say `project=` explicitly anyway |
 | Planned but not dispatched yet | `status=queued`, then `status=parked` when the captain shelves it |
+| A task waits on an outside dependency (not the captain, not crew) | `bin/fleet set <id> status=blocked blocked_on="<what/who>"`: it lands in the Blocked group with a "Blocked on:" line; `status=running` (or any other) clears it. `parked` stays for what the captain paused |
 | A task waits on another | `bin/fleet depend <id> <other-id>` |
 | You need the captain's decision | `bin/fleet ask <id> "<BLUF question, ≤200 chars>" --context-file <md>` |
 | A crew member finishes | `bin/fleet finish <id> [--branch <b>] [--card -]` (`--failed` for a failure). It sets the status, writes `tasks/<id>/card.md` (from the card you pipe in with `--card -`: 3–6 lines of what changed, where to look, what's untested; with no card it makes one from the task's notes plus branch/PR), and for a project task appends the branch's commits (`git log --oneline <base>..<branch>`, `--base` defaults to `main`) to the project's code section, dated and without repeating commits. It needs `repo` in the project's `project.json` (`bin/page start --repo`). Write a card yourself only when you have more to say than the notes |

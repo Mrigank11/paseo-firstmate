@@ -46,7 +46,7 @@ export const projectSummarySchema = z.object({
   session: z.enum(["open", "ended", "stopped", "unknown"]),
   needsYou: z.array(askSchema),
   running: z.array(runningSchema),
-  counts: z.object({ needsYou: z.number(), withFirstMate: z.number().optional(), running: z.number(), next: z.number(), parked: z.number(), done: z.number(), failed: z.number().optional() }), // failed tasks are not counted as done
+  counts: z.object({ needsYou: z.number(), withFirstMate: z.number().optional(), running: z.number(), blocked: z.number().optional(), next: z.number(), parked: z.number(), done: z.number(), failed: z.number().optional() }), // failed tasks are not counted as done
   undelivered: z.number(), // comments not yet delivered to the first mate
   banner: z.string().nullable(), // e.g. "first mate unreachable, 2 comments queued"
 });
