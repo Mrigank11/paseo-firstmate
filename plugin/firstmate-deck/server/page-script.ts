@@ -13,6 +13,9 @@ export function pageScript(project: string, liveFile: string, tickSeconds: numbe
   function save(){var s=JSON.stringify(S);try{if(ls)ls.setItem(K,s)}catch(e){}
     try{if(!window.name||window.name.indexOf(P)===0)window.name=P+s}catch(e){}}
   var R=(S._r&&typeof S._r==="object")?S._r:{};S._r=R;
+  // small per-page preferences other scripts keep in this state (the task navigator's fold): saved like the rest, synced
+  window.__fdPref=function(k,v){if(arguments.length<2)return S[k];S[k]=v;save();push()};
+  window.__fdPrefKeys=function(p){return Object.keys(S).filter(function(k){return k.indexOf(p)===0&&S[k]===1})};
   function live(){return document.getElementById("live")}
   function snapshot(){var el=live();if(!el)return;el.querySelectorAll("details[id]").forEach(function(d){S[d.id]=d.open?1:0});save()}
   function restore(root){root.querySelectorAll("details[id]").forEach(function(d){if(d.id in S)d.open=!!S[d.id]})}
@@ -32,14 +35,16 @@ export function pageScript(project: string, liveFile: string, tickSeconds: numbe
     place(ur,ul);place(dr,dl);
     u.querySelector(".cn").textContent=ul.length;d.querySelector(".cn").textContent=dl.length;u.hidden=!ul.length;d.hidden=!dl.length;
     [].slice.call(document.querySelectorAll(".sum[data-k]")).forEach(function(a){var un=a.getAttribute("data-k")==="u",n=un?cu:cd;
-      a.hidden=!n;a.textContent=n+(un?" done, unread":" done")})}
+      a.hidden=!n;a.textContent=n+(un?" done, unread":" done")});tn()}
+  // the task navigator (nav-script.ts) rebuilds from the live block's data-tn template and re-reads the unread marks
+  function tn(){if(window.__tn)try{window.__tn()}catch(e){}}
   var pt=null;
   function push(){if(!MU)return;clearTimeout(pt);pt=setTimeout(function(){try{var o={};Object.keys(S).forEach(function(k){if(k!=="_r")o[k]=S[k]});
     fetch(MU,{method:"POST",headers:{"Content-Type":"text/plain"},body:JSON.stringify({o:o,r:R})}).catch(function(){})}catch(e){}},400)}
   function pull(){if(!MU)return;try{fetch(MU).then(function(r){return r.json()}).then(function(j){var ch=false,rr=(j&&j.r)||{},oo=(j&&j.o)||{};
     Object.keys(rr).forEach(function(k){if(R[k]!==rr[k]){R[k]=rr[k];ch=true}});
     Object.keys(oo).forEach(function(k){if(!(k in S)){S[k]=oo[k];ch=true}});
-    if(ch){save();restore(document);arrange()}}).catch(function(){})}catch(e){}}
+    if(ch){save();restore(document);arrange();tn()}}).catch(function(){})}catch(e){}}
   document.addEventListener("click",function(e){var b=e.target.closest&&e.target.closest("button.mr,button.mra");if(!b)return;
     if(b.classList.contains("mr")){var t=b.closest(".task"),h=t&&t.getAttribute("data-h");if(h)R[t.id]=h}
     else [].slice.call(document.querySelectorAll("#g-doneu .task")).forEach(function(t){var h=t.getAttribute("data-h");if(h)R[t.id]=h});
@@ -49,7 +54,7 @@ export function pageScript(project: string, liveFile: string, tickSeconds: numbe
   document.addEventListener("click",function(e){var a=e.target.closest&&e.target.closest('a[href^="#"]');if(a)reveal(a.getAttribute("href").slice(1))});
   function fill(){var el=live();if(!el)return;document.querySelectorAll("[data-trail-slot]").forEach(function(s){
     var k=s.getAttribute("data-trail-slot"),src=null;el.querySelectorAll("[data-trail-for]").forEach(function(x){if(x.getAttribute("data-trail-for")===k)src=x});
-    s.innerHTML=src?src.innerHTML:""})}
+    s.innerHTML=src?src.innerHTML:""});tn()}
   var Q={};
   function mark(box,opt,msg){box.querySelectorAll("button.opt").forEach(function(b){var on=b.getAttribute("data-opt")===opt;
       b.classList.toggle("on",on);b.setAttribute("aria-pressed",on?"true":"false");

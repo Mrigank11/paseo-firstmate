@@ -168,5 +168,5 @@ test("blocked task: its own Blocked group between Running and Next up, with what
   assert.ok(r.live.indexOf('id="g-running"') < r.live.indexOf('id="g-blocked"'));
   assert.ok(g.includes('id="t-await-key"') && g.includes("Blocked on:</b> Nemath: Trigger Prod API key"));
   assert.ok(r.live.includes('href="#g-blocked" class="sum c-blocked">1 blocked'));
-  assert.ok(!r.live.slice(r.live.indexOf('id="g-parked"')).includes("await-key"));
+  assert.ok(!r.live.slice(r.live.indexOf('id="g-parked"'), r.live.indexOf("<div hidden data-tn>")).includes("await-key"));
 });

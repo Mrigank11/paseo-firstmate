@@ -136,3 +136,29 @@ test("accessibility: 44 px touch targets, a pressed style at full contrast, park
   for (const bg of ["#f7f6f2", "#f1efe8", "#ffffff"]) assert.ok(ratio(park, bg) >= 4.5, `${park} on ${bg} = ${ratio(park, bg).toFixed(2)}`);
   assert.ok(ratio("#ffffff", "#b4410c") >= 4.5, "the pressed option: white on the accent");
 });
+
+test("every live swap asks the task navigator to rebuild", () => {
+  const b = boot();
+  let n = 0;
+  b.win.__tn = () => { n++; };
+  b.win.__fdLive("<p>a</p>", "2026-10-21T10:00:00.000Z", 1);
+  assert.equal(n, 1);
+  b.win.__fdLive("<p>b</p>", "2026-10-21T10:00:01.000Z", 2);
+  assert.equal(n, 2);
+  b.win.__tn = () => { throw new Error("boom"); };
+  assert.doesNotThrow(() => b.win.__fdLive("<p>c</p>", "2026-10-21T10:00:02.000Z", 3), "a navigator error never breaks the live swap");
+});
+
+test("a page preference (the navigator's fold) is kept in the page state and survives a reload without localStorage", () => {
+  const run = (name: string) => {
+    const win: any = { name, scrollY: 0, scrollTo() {} };
+    const doc: any = { addEventListener() {}, getElementById: () => null, querySelectorAll: () => [], createElement: () => ({ remove() {} }), head: { appendChild() {} } };
+    vm.runInContext(pageScript("p", "page.live.js", 1), vm.createContext({ document: doc, window: win, location: { hash: "" }, localStorage: undefined, Date, JSON, Object, Math, Array, setInterval: () => 0 }));
+    return win;
+  };
+  const a = run("");
+  assert.equal(a.__fdPref("tn-exp"), undefined);
+  a.__fdPref("tn-exp", 0);
+  const b = run(a.name); // Lavish reloads the iframe: same browsing context, same window.name
+  assert.equal(b.__fdPref("tn-exp"), 0);
+});
