@@ -88,4 +88,60 @@ details.sec>summary{padding:2px 0}
 pre{overflow-x:auto;background:#fff;border:1px solid var(--line);border-radius:8px;padding:8px 12px;font:12.5px/1.5 ui-monospace,monospace}pre code{background:none;padding:0;overflow-wrap:normal}
 [data-section]{scroll-margin-top:48px}
 .tt{flex-wrap:wrap}.ttl{min-width:0;overflow-wrap:anywhere}.nt,.ask,.actx,.cur{overflow-wrap:anywhere}
+/* task navigator (nav-script.ts): a fixed rail that folds to a spine; a bar and a drop-down sheet on phones */
+.tn,.tn-bar,.tn-fly,.tn-sheet,.tn-back{display:none}
+.tn-st{margin:0 0 14px}.tn-st ul{list-style:none;margin:0;padding:0}.tn-st li{margin:0}
+.tn-h{display:flex;justify-content:space-between;gap:8px;font-size:11.5px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:var(--mut);margin:0 0 3px;padding:0 6px}
+.tn-c{font-variant-numeric:tabular-nums;letter-spacing:0}
+.tn-a{display:block;padding:3px 6px;border-radius:6px;color:#3d3a34;text-decoration:none;font-size:13px;line-height:1.4;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.tn-a:hover{background:var(--soft);color:var(--fg)}
+.tn-a[aria-current=true]{background:var(--soft);color:var(--fg);font-weight:600}
+.t-you>.tn-h,.t-you .tn-a{color:var(--you)}.t-you .tn-a[aria-current=true]{background:var(--youbg)}
+.t-you .tn-a::before,.un .tn-a::before{content:"";display:inline-block;width:6px;height:6px;border-radius:50%;background:var(--you);vertical-align:middle;margin:0 7px 2px 0}
+.un .tn-a{font-weight:600;color:var(--fg)}.un .tn-a::before{background:var(--ok)}
+.fail .tn-a{color:#b91c1c}
+.tn-st[data-cap]:not(.all) li:nth-child(n+6){display:none}
+.tn-more{font:inherit;font-size:12.5px;color:var(--run);background:none;border:0;padding:3px 6px;cursor:pointer;text-decoration:underline;text-underline-offset:2px;border-radius:6px}
+.tn-bd,.tn-chip{--bgc:var(--soft);--fgc:var(--fg)}
+.tn-bd.t-you,.tn-chip.t-you{--bgc:var(--you);--fgc:#fff}
+.tn-bd.t-fm,.tn-bd.t-running,.tn-chip.t-fm,.tn-chip.t-running{--bgc:#dbeafe;--fgc:var(--run)}
+.tn-bd.t-done,.tn-chip.t-done{--bgc:#dcfce7;--fgc:var(--ok)}
+.tn-bd.t-parked,.tn-bd.t-blocked,.tn-chip.t-parked,.tn-chip.t-blocked{--fgc:var(--park)}
+.tn-bd{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px;width:40px;min-height:44px;padding:2px 0;border:1px solid transparent;border-radius:8px;background:var(--bgc);color:var(--fgc);font:600 15px/1 ui-sans-serif,system-ui,sans-serif;font-variant-numeric:tabular-nums;cursor:pointer}
+.tn-bd small,.tn-chip small{font:600 9px/1 ui-sans-serif,system-ui,sans-serif;letter-spacing:.04em;text-transform:uppercase;opacity:.85}
+.tn-bd[aria-current=true]{box-shadow:0 0 0 2px var(--bg),0 0 0 3.5px var(--fg)}
+.tn-bd[aria-expanded=true]{border-color:var(--fg)}
+.tn-tg{display:flex;align-items:center;justify-content:center;min-width:40px;min-height:40px;padding:0 6px;border:1px solid var(--line);border-radius:8px;background:#fff;color:var(--fg);font:600 11px/1 ui-sans-serif,system-ui,sans-serif;cursor:pointer}
+.tn-tg:hover{background:var(--soft)}
+@media (min-width:640px){
+  body.tn-on{padding-left:48px}
+  .tn{display:flex;flex-direction:column;position:fixed;left:0;top:0;bottom:0;width:48px;z-index:20;background:var(--bg);border-right:1px solid var(--line)}
+  .tn[hidden]{display:none}
+  .tn-spine{display:flex;flex-direction:column;align-items:center;gap:8px;padding:8px 0;overflow-y:auto;scrollbar-width:none;flex:1}
+  .tn-bds{display:contents}
+  .tn-full{display:none;flex-direction:column;min-height:0;flex:1}
+  .tn-top{display:flex;align-items:center;justify-content:space-between;padding:8px 8px 8px 14px;flex:none}.tn-top b{font-size:13px}
+  .tn-top .tn-tg{padding:0 12px;min-height:36px}
+  .tn-fl{overflow-y:auto;overscroll-behavior:contain;padding:4px 6px 20px 8px;flex:1}
+  body.tn-exp .tn{width:260px;box-shadow:4px 0 12px rgba(28,27,25,.08)}
+  body.tn-exp .tn-spine{display:none}body.tn-exp .tn-full{display:flex}
+  .tn-fly{display:block;position:fixed;left:48px;z-index:21;width:300px;max-height:calc(100vh - 16px);overflow-y:auto;overscroll-behavior:contain;background:var(--bg);border:1px solid var(--line);border-radius:12px;padding:10px 8px;box-shadow:0 4px 12px rgba(28,27,25,.1)}
+  .tn-fly[hidden]{display:none}.tn-fly .tn-st{margin:0}
+}
+@media (min-width:1200px){body.tn-on.tn-exp{padding-left:240px}body.tn-exp .tn{width:240px;box-shadow:none}}
+@media (max-width:639px){
+  .tn-bar{display:flex;align-items:center;gap:6px;position:sticky;top:var(--navh,36px);z-index:5;margin:0 -14px;padding:0 14px;min-height:44px;width:calc(100% + 28px);background:var(--bg);border:0;border-bottom:1px solid var(--line);font:inherit;font-size:13px;color:var(--fg);text-align:left;cursor:pointer}
+  .tn-bar[hidden]{display:none}
+  .tn-chip{flex:none;display:inline-flex;align-items:center;gap:4px;height:28px;padding:0 8px;border-radius:14px;background:var(--bgc);color:var(--fgc);font:600 12px/1 ui-sans-serif,system-ui,sans-serif;font-variant-numeric:tabular-nums}
+  .tn-bt{min-width:0;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--you);font-weight:600}.tn-bt.none{color:var(--mut);font-weight:500}
+  .tn-caret{flex:none;color:var(--mut);font-size:12px}
+  .tn-back:not([hidden]){display:block;position:fixed;inset:0;z-index:30;background:rgba(28,27,25,.35)}
+  .tn-sheet:not([hidden]){display:flex;flex-direction:column;position:fixed;left:0;right:0;top:80px;z-index:31;max-height:calc(100vh - 104px);background:var(--bg);border-bottom:1px solid var(--line);border-radius:0 0 12px 12px}
+  .tn-sb{overflow-y:auto;overscroll-behavior:contain;padding:12px 12px 6px}
+  .tn-sheet .tn-a{padding:11px 8px;min-height:44px;font-size:15px;white-space:normal}
+  .tn-sheet .tn-h{font-size:12px;padding:4px 8px}.tn-sheet .tn-more{min-height:44px;padding:0 8px;font-size:14px}
+  .tn-sx{flex:none;min-height:44px;border:0;border-top:1px solid var(--line);background:none;color:var(--run);font:600 14px ui-sans-serif,system-ui,sans-serif;cursor:pointer}
+  body.tn-on .task,body.tn-on .grp,body.tn-on [data-section],body.tn-on h2{scroll-margin-top:96px}
+  body.tn-lock{overflow:hidden}
+}
 @media (max-width:560px){.open{margin-left:0}main{padding:18px 14px 60px}nav{margin:12px -14px 0;padding:8px 14px}h1{font-size:20px}.tt{flex-direction:column;gap:4px}.s-you{padding:12px}.tw table{min-width:480px}}`;

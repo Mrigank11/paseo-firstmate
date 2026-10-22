@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import { cut } from "./humanize.ts";
 import { cardHash } from "./marks.ts";
 import { markdown } from "./markdown.ts";
+import { navScript } from "./nav-script.ts";
 import { pageScript } from "./page-script.ts";
 import { CSS } from "./style.ts";
 import type { ProjectModel, Task, TrailComment } from "./state.ts";
@@ -53,6 +54,12 @@ const GROUPS = [
   ["done", "Done"],
 ] as const;
 type GroupKey = (typeof GROUPS)[number][0];
+
+/** The navigator's short badge label per stage. A Record over GroupKey, so a new stage cannot ship without one. */
+const STAGE_ABBR: Record<GroupKey, string> = { you: "You", fm: "FM", running: "Run", blocked: "Block", next: "Next", parked: "Park", done: "Done" };
+/** A navigator stage longer than this shows its first NAV_SHOW titles and an "N more" button. */
+const NAV_CAP = 7;
+const NAV_SHOW = 5;
 
 const DEFAULT_TITLES: Record<string, string> = {
   endpoints: "Endpoints & creds",
@@ -288,6 +295,26 @@ function row(t: Task, group: GroupKey, ctx: Ctx, idx = 0): string {
   return out.join("") + "</article>";
 }
 
+/**
+ * The task navigator's data: every non-empty stage in GROUPS order, each with its titles linking to the cards. It rides
+ * in the live block as a hidden template; the page script (nav-script.ts) builds the rail, the spine, the flyouts and the
+ * phone bar from it, so the navigator updates with the cards and a new stage in GROUPS needs no client change.
+ */
+export function navHtml(buckets: Record<GroupKey, { t: Task }[]>): string {
+  return GROUPS.filter(([k]) => buckets[k].length).map(([k, label]) => {
+    const items = buckets[k];
+    const cap = items.length > NAV_CAP;
+    const lis = items.map(({ t }) => {
+      const name = esc(t.title || t.intent || t.id);
+      const fail = t.status === "failed" ? ` class="fail"` : "";
+      return `<li${fail}><a class="tn-a" href="#t-${esc(t.id)}" data-t="t-${esc(t.id)}" title="${name}">${name}</a></li>`;
+    }).join("");
+    const more = cap ? `<button class="tn-more" type="button" aria-expanded="false" data-more="${items.length - NAV_SHOW} more">${items.length - NAV_SHOW} more</button>` : "";
+    return `<div class="tn-st t-${k}" data-k="${k}" data-n="${items.length}" data-ab="${esc(STAGE_ABBR[k])}" data-label="${esc(label)}"${cap ? " data-cap" : ""}>` +
+      `<div class="tn-h"><span>${esc(label)}</span><span class="tn-c">${items.length}</span></div><ul>${lis}</ul>${more}</div>`;
+  }).join("");
+}
+
 /** Tasks with an `order` come first, lowest first; the rest keep their incoming order (a stable sort). */
 export function byOrder<T extends { order?: number }>(items: T[]): T[] {
   return items
@@ -358,6 +385,7 @@ function renderLive(model: ProjectModel, agents: Record<string, AgentView>, o: R
     .map((k) => [k, trailHtml(model.comments, k, o.now)] as const).filter(([, h]) => h)
     .map(([k, h]) => `<div data-trail-for="${esc(k)}">${h}</div>`).join("");
   parts.push(`<div hidden data-trails>${slots}</div>`);
+  parts.push(`<div hidden data-tn>${navHtml(buckets)}</div>`);
   return parts.join("\n");
 }
 
@@ -414,7 +442,12 @@ export function renderProject(model: ProjectModel, agents: Record<string, AgentV
 <style>
 ${CSS}
 </style>
-</head><body><main>
+</head><body>
+<aside class="tn" id="tn" aria-label="Tasks by stage" hidden><div class="tn-spine"><button class="tn-tg" id="tn-open" type="button" aria-expanded="false" aria-controls="tn-full" title="Show task titles">Tasks</button><div class="tn-bds" id="tn-bds"></div></div><div class="tn-full" id="tn-full"><div class="tn-top"><b>Tasks</b><button class="tn-tg" id="tn-close" type="button" aria-expanded="true" aria-controls="tn-full">Fold</button></div><div class="tn-fl" id="tn-fl"></div></div></aside>
+<div class="tn-fly" id="tn-fly" role="region" aria-label="Stage titles" hidden></div>
+<div class="tn-back" id="tn-back" hidden></div>
+<div class="tn-sheet" id="tn-sheet" role="dialog" aria-modal="true" aria-label="Tasks by stage" hidden><div class="tn-sb" id="tn-sl"></div><button class="tn-sx" id="tn-sx" type="button">Close</button></div>
+<main>
 <h1>${esc(model.title)}</h1>
 <div class="sub">Kept current by the firstmate-deck plugin · last update <b>${esc(stampLong(opts.now))}</b></div>
 <p class="chan"><b>This page is our channel.</b> Comment on any card or block, then Send; the first mate answers here.</p>
@@ -422,12 +455,14 @@ ${CSS}
 <div class="banner b-bad" id="fd-stale" role="status" hidden>${esc(STALE_TEXT)}</div>
 ${banner}
 <nav>${nav}</nav>
+<button class="tn-bar" id="tn-bar" type="button" aria-haspopup="dialog" aria-expanded="false" aria-controls="tn-sheet" hidden></button>
 
 <h2 id="tasks">Tasks</h2>
 <div class="m">Each task once: its state, its crew agent live, and what it depends on. Titles and “Open in Paseo” go to the agent in the Paseo web UI.</div>
 <div id="live"><!--LIVE-START-->${stamped}<!--LIVE-END--></div>
 ${names.map((n) => renderSection(model, n)).join("\n")}
 <script>
+${navScript(model.project)}
 ${pageScript(model.project, liveFile, opts.tickSeconds, opts.marksUrl)}
 </script>
 </main></body></html>

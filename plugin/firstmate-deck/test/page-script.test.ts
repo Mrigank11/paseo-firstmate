@@ -136,3 +136,15 @@ test("accessibility: 44 px touch targets, a pressed style at full contrast, park
   for (const bg of ["#f7f6f2", "#f1efe8", "#ffffff"]) assert.ok(ratio(park, bg) >= 4.5, `${park} on ${bg} = ${ratio(park, bg).toFixed(2)}`);
   assert.ok(ratio("#ffffff", "#b4410c") >= 4.5, "the pressed option: white on the accent");
 });
+
+test("every live swap asks the task navigator to rebuild", () => {
+  const b = boot();
+  let n = 0;
+  b.win.__tn = () => { n++; };
+  b.win.__fdLive("<p>a</p>", "2026-10-21T10:00:00.000Z", 1);
+  assert.equal(n, 1);
+  b.win.__fdLive("<p>b</p>", "2026-10-21T10:00:01.000Z", 2);
+  assert.equal(n, 2);
+  b.win.__tn = () => { throw new Error("boom"); };
+  assert.doesNotThrow(() => b.win.__fdLive("<p>c</p>", "2026-10-21T10:00:02.000Z", 3), "a navigator error never breaks the live swap");
+});

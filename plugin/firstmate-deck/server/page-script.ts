@@ -32,7 +32,9 @@ export function pageScript(project: string, liveFile: string, tickSeconds: numbe
     place(ur,ul);place(dr,dl);
     u.querySelector(".cn").textContent=ul.length;d.querySelector(".cn").textContent=dl.length;u.hidden=!ul.length;d.hidden=!dl.length;
     [].slice.call(document.querySelectorAll(".sum[data-k]")).forEach(function(a){var un=a.getAttribute("data-k")==="u",n=un?cu:cd;
-      a.hidden=!n;a.textContent=n+(un?" done, unread":" done")})}
+      a.hidden=!n;a.textContent=n+(un?" done, unread":" done")});tn()}
+  // the task navigator (nav-script.ts) rebuilds from the live block's data-tn template and re-reads the unread marks
+  function tn(){if(window.__tn)try{window.__tn()}catch(e){}}
   var pt=null;
   function push(){if(!MU)return;clearTimeout(pt);pt=setTimeout(function(){try{var o={};Object.keys(S).forEach(function(k){if(k!=="_r")o[k]=S[k]});
     fetch(MU,{method:"POST",headers:{"Content-Type":"text/plain"},body:JSON.stringify({o:o,r:R})}).catch(function(){})}catch(e){}},400)}
@@ -49,7 +51,7 @@ export function pageScript(project: string, liveFile: string, tickSeconds: numbe
   document.addEventListener("click",function(e){var a=e.target.closest&&e.target.closest('a[href^="#"]');if(a)reveal(a.getAttribute("href").slice(1))});
   function fill(){var el=live();if(!el)return;document.querySelectorAll("[data-trail-slot]").forEach(function(s){
     var k=s.getAttribute("data-trail-slot"),src=null;el.querySelectorAll("[data-trail-for]").forEach(function(x){if(x.getAttribute("data-trail-for")===k)src=x});
-    s.innerHTML=src?src.innerHTML:""})}
+    s.innerHTML=src?src.innerHTML:""});tn()}
   var Q={};
   function mark(box,opt,msg){box.querySelectorAll("button.opt").forEach(function(b){var on=b.getAttribute("data-opt")===opt;
       b.classList.toggle("on",on);b.setAttribute("aria-pressed",on?"true":"false");

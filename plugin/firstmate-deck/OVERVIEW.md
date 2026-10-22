@@ -23,6 +23,10 @@ Run `bin/page install` in the paseo-firstmate checkout: it checks Node 22.18+, `
 - Paseo's phone layout cannot open plugin workspace panels. The sidebar row and its screen work on phones.
 - The chat card for page comments appears only after the plugin has seen at least one Paseo event since it started. Comment delivery does not depend on this.
 
+## Task navigator
+
+Every project page has a task navigator, reachable from anywhere on the page. On a screen 640 px or wider it is a fixed left rail. Folded, it is a 48 px spine of stage badges (count plus a short label, Needs you solid orange); hovering or tapping a badge flies out that stage's titles. Unfolded, it lists every stage's titles, and it pushes the page at 1200 px and up or overlays it below that. On a phone it is a bar under the sticky nav, with the stage counts and the first title that needs the captain; tapping the bar drops down the full list. A title jumps to its card, opening a collapsed group on the way, and the card in view is marked in the navigator. The stages are the page's own groups, in the same order (`GROUPS` in `server/render.ts`; a new group needs only a badge label in `STAGE_ABBR`). Stages over 7 tasks show 5 and an "N more" button. The fold state is per browser and is never sent to the read-marks endpoint.
+
 ## Read marks, ordering, stop
 
 - The plugin serves a small CORS endpoint (`readMarksPort`, default 4398; `readMarksHost` is the tailnet fallback) for the page's "Done, unread" marks, stored in `state/projects/<p>/ui-state.json`. It never writes `fleet.json`.
