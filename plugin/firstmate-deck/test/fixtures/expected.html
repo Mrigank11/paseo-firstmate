@@ -97,8 +97,14 @@ pre{overflow-x:auto;background:#fff;border:1px solid var(--line);border-radius:8
 .tn-st,.tn-bd,.tn-chip{--sc:var(--mut)}
 .t-you{--sc:var(--you)}.t-fm,.t-running{--sc:var(--run)}.t-blocked{--sc:#b91c1c}.t-next,.t-parked{--sc:var(--park)}.t-done{--sc:var(--ok)}
 .tn-st{margin:0 0 8px;--rh:28px;--ind:32px}.tn-st ul{list-style:none;margin:0;padding:0}.tn-st li{margin:0}
-.tn-h{display:flex;align-items:center;gap:8px;height:var(--rh);padding:0 8px;font-size:13px;font-weight:600;color:var(--fg)}
-.tn-h .tn-ic{color:var(--sc)}.tn-l{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.tn-h{display:flex;align-items:center;gap:8px;width:100%;height:var(--rh);padding:0 8px;border:0;border-radius:6px;background:none;font:inherit;font-size:13px;font-weight:600;color:var(--fg);text-align:left;cursor:pointer}
+.tn-h:hover{background:rgba(28,27,25,.06)}
+.tn-h .tn-ic{color:var(--sc)}
+.tn-h .tn-ic:last-child{width:14px;height:14px;margin-left:-2px;color:var(--mut);opacity:0;transition:transform 140ms cubic-bezier(.16,1,.3,1)}
+.tn-h:hover .tn-ic:last-child,.tn-h:focus-visible .tn-ic:last-child,.shut .tn-h .tn-ic:last-child{opacity:1}
+.shut .tn-h .tn-ic:last-child{transform:rotate(-90deg)}
+.shut ul,.shut .tn-more{display:none}
+.tn-fly .tn-h{cursor:default}.tn-fly .tn-h:hover{background:none}.tn-fly .tn-h .tn-ic:last-child{display:none}.tn-l{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .tn-c{font-size:12px;font-weight:500;color:var(--mut);font-variant-numeric:tabular-nums}
 .tn-a{display:block;position:relative;height:var(--rh);line-height:var(--rh);padding:0 8px 0 var(--ind);border-radius:6px;color:var(--fg);text-decoration:none;font-size:13px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .tn-a:hover{background:rgba(28,27,25,.06);color:var(--fg)}
@@ -123,6 +129,12 @@ pre{overflow-x:auto;background:#fff;border:1px solid var(--line);border-radius:8
 .tn-fl,.tn-fly,.tn-sb{scrollbar-width:thin;scrollbar-color:#cfc9b8 transparent}
 .tn-fl::-webkit-scrollbar,.tn-fly::-webkit-scrollbar,.tn-sb::-webkit-scrollbar{width:8px}
 .tn-fl::-webkit-scrollbar-thumb,.tn-fly::-webkit-scrollbar-thumb,.tn-sb::-webkit-scrollbar-thumb{background:#cfc9b8;border-radius:4px;border:2px solid transparent;background-clip:content-box}
+.tn-top .tn-fx{margin-left:auto}.tn-spine>.tn-fx{margin:-4px 0 6px}
+.tn-fx[aria-pressed=true],.tn-fx[aria-pressed=true]:hover{background:#fff;color:var(--you);box-shadow:0 1px 2px rgba(28,27,25,.1)}
+body.tn-focus #live .task:not(.tn-sel),body.tn-focus #live .grp:not(:has(.tn-sel)),body.tn-focus #live .summary{display:none}
+.tn-fbar{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin:12px 0 4px;padding:8px 12px;background:#fff;border:1px solid var(--line);border-radius:10px;font-size:13.5px;color:var(--mut)}
+.tn-fbar[hidden]{display:none}.tn-fbar .tn-ic{color:var(--you)}.tn-fbar b{color:var(--fg)}
+.tn-fall{margin-left:auto;font:inherit;font-size:13px;font-weight:600;color:var(--run);background:none;border:0;padding:6px 4px;cursor:pointer;text-decoration:underline;text-underline-offset:2px}
 @keyframes tn-in{from{opacity:0}to{opacity:1}}
 @media (min-width:640px){
   body.tn-on{padding-left:48px}
@@ -142,7 +154,7 @@ pre{overflow-x:auto;background:#fff;border:1px solid var(--line);border-radius:8
 }
 @media (min-width:640px) and (max-width:1199px){body.tn-exp .tn{border-right:0;box-shadow:6px 0 24px -6px rgba(28,27,25,.2)}}
 @media (min-width:1200px){body.tn-on.tn-exp{padding-left:240px}}
-@media (prefers-reduced-motion:reduce){.tn-spine,.tn-full,.tn-fly{animation:none}}
+@media (prefers-reduced-motion:reduce){.tn-spine,.tn-full,.tn-fly{animation:none}.tn-h .tn-ic{transition:none}}
 @media (max-width:639px){
   .tn-bar{display:flex;align-items:center;gap:2px;position:sticky;top:var(--navh,36px);z-index:5;margin:0 -14px;padding:0 8px 0 10px;min-height:44px;width:calc(100% + 28px);background:var(--bg);border:0;border-bottom:1px solid var(--line);font:inherit;font-size:13px;color:var(--fg);text-align:left;cursor:pointer}
   .tn-bar[hidden]{display:none}
@@ -161,7 +173,9 @@ pre{overflow-x:auto;background:#fff;border:1px solid var(--line);border-radius:8
   .tn-sheet .tn-a{height:auto;min-height:44px;line-height:1.35;padding:12px 8px 12px var(--ind);font-size:14px;white-space:normal}
   .tn-sheet .tn-a::before{top:22px}
   .tn-sheet .tn-more{height:44px;font-size:14px}
-  .tn-sx{flex:none;min-height:44px;border:0;border-top:1px solid var(--line);background:none;color:var(--fg);font:600 14px ui-sans-serif,system-ui,sans-serif;cursor:pointer}
+  .tn-sf{flex:none;display:flex;border-top:1px solid var(--line)}
+  .tn-sx,.tn-fxl{flex:1;display:flex;align-items:center;justify-content:center;gap:8px;min-height:44px;border:0;background:none;color:var(--fg);font:600 14px ui-sans-serif,system-ui,sans-serif;cursor:pointer}
+  .tn-fxl{border-right:1px solid var(--line);color:var(--mut)}.tn-fxl[aria-pressed=true]{background:none;box-shadow:none;color:var(--you)}
   body.tn-on .task,body.tn-on .grp,body.tn-on [data-section],body.tn-on h2{scroll-margin-top:96px}
   body.tn-lock{overflow:hidden}
 }
@@ -169,10 +183,10 @@ pre{overflow-x:auto;background:#fff;border:1px solid var(--line);border-radius:8
 </style>
 </head><body>
 <!-- the task navigator: data-lavish-action keeps its clicks working in Lavish's annotate mode -->
-<aside class="tn" id="tn" aria-label="Tasks by stage" data-lavish-action hidden><div class="tn-spine"><button class="tn-tg" id="tn-open" type="button" aria-expanded="false" aria-controls="tn-full" aria-label="Show task titles" title="Show task titles"><svg class="tn-ic" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><rect width="18" height="18" x="3" y="3" rx="2"/><path d="M9 3v18"/><path d="m14 9 3 3-3 3"/></svg></button><div class="tn-bds" id="tn-bds"></div></div><div class="tn-full" id="tn-full"><div class="tn-top"><button class="tn-tg" id="tn-close" type="button" aria-expanded="true" aria-controls="tn-full" aria-label="Fold the task list" title="Fold the task list"><svg class="tn-ic" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><rect width="18" height="18" x="3" y="3" rx="2"/><path d="M9 3v18"/><path d="m16 15-3-3 3-3"/></svg></button><b>Tasks</b></div><div class="tn-fl" id="tn-fl"></div></div></aside>
+<aside class="tn" id="tn" aria-label="Tasks by stage" data-lavish-action hidden><div class="tn-spine"><button class="tn-tg" id="tn-open" type="button" aria-expanded="false" aria-controls="tn-full" aria-label="Show task titles" title="Show task titles"><svg class="tn-ic" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><rect width="18" height="18" x="3" y="3" rx="2"/><path d="M9 3v18"/><path d="m14 9 3 3-3 3"/></svg></button><button class="tn-tg tn-fx" type="button" aria-pressed="false" aria-label="Focus view: show only the selected task" title="Focus view: show only the selected task"><svg class="tn-ic" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><circle cx="12" cy="12" r="3"/><path d="M3 7V5a2 2 0 0 1 2-2h2"/><path d="M17 3h2a2 2 0 0 1 2 2v2"/><path d="M21 17v2a2 2 0 0 1-2 2h-2"/><path d="M7 21H5a2 2 0 0 1-2-2v-2"/></svg></button><div class="tn-bds" id="tn-bds"></div></div><div class="tn-full" id="tn-full"><div class="tn-top"><button class="tn-tg" id="tn-close" type="button" aria-expanded="true" aria-controls="tn-full" aria-label="Fold the task list" title="Fold the task list"><svg class="tn-ic" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><rect width="18" height="18" x="3" y="3" rx="2"/><path d="M9 3v18"/><path d="m16 15-3-3 3-3"/></svg></button><b>Tasks</b><button class="tn-tg tn-fx" type="button" aria-pressed="false" aria-label="Focus view: show only the selected task" title="Focus view: show only the selected task"><svg class="tn-ic" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><circle cx="12" cy="12" r="3"/><path d="M3 7V5a2 2 0 0 1 2-2h2"/><path d="M17 3h2a2 2 0 0 1 2 2v2"/><path d="M21 17v2a2 2 0 0 1-2 2h-2"/><path d="M7 21H5a2 2 0 0 1-2-2v-2"/></svg></button></div><div class="tn-fl" id="tn-fl"></div></div></aside>
 <div class="tn-fly" id="tn-fly" role="region" aria-label="Stage titles" data-lavish-action hidden></div>
 <div class="tn-back" id="tn-back" data-lavish-action hidden></div>
-<div class="tn-sheet" id="tn-sheet" role="dialog" aria-modal="true" aria-label="Tasks by stage" data-lavish-action hidden><div class="tn-sb" id="tn-sl"></div><button class="tn-sx" id="tn-sx" type="button">Close</button></div>
+<div class="tn-sheet" id="tn-sheet" role="dialog" aria-modal="true" aria-label="Tasks by stage" data-lavish-action hidden><div class="tn-sb" id="tn-sl"></div><div class="tn-sf"><button class="tn-fx tn-fxl" type="button" aria-pressed="false"><svg class="tn-ic" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><circle cx="12" cy="12" r="3"/><path d="M3 7V5a2 2 0 0 1 2-2h2"/><path d="M17 3h2a2 2 0 0 1 2 2v2"/><path d="M21 17v2a2 2 0 0 1-2 2h-2"/><path d="M7 21H5a2 2 0 0 1-2-2v-2"/></svg><span>Focus view</span></button><button class="tn-sx" id="tn-sx" type="button">Close</button></div></div>
 <main>
 <h1>Deck demo project</h1>
 <div class="sub">Kept current by the firstmate-deck plugin · last update <b>2026-10-21 10:15 UTC</b></div>
@@ -185,6 +199,7 @@ pre{overflow-x:auto;background:#fff;border:1px solid var(--line);border-radius:8
 
 <h2 id="tasks">Tasks</h2>
 <div class="m">Each task once: its state, its crew agent live, and what it depends on. Titles and “Open in Paseo” go to the agent in the Paseo web UI.</div>
+<div class="tn-fbar" id="tn-fbar" role="status" data-lavish-action hidden></div>
 <div id="live"><!--LIVE-START--><div class="summary"><a href="#g-you" class="sum c-you">1 needs you</a><a href="#g-fm" class="sum c-fm">1 with the first mate</a><a href="#g-running" class="sum c-running">1 running</a><a href="#g-blocked" class="sum c-blocked">1 blocked</a><a href="#g-next" class="sum c-next">1 next up</a><a href="#g-parked" class="sum c-parked">1 parked</a><a href="#g-doneu" class="sum c-done" data-k="u">1 done, unread</a><a href="#g-done" class="sum c-done" data-k="d">2 done</a><a href="#g-done" class="sum c-fail">1 failed</a><span class="sum c-running">1 agent working</span><span class="m">live: the page checks every 20 s; the plugin refreshes it on every change and at least every 20 s (last refresh 10:15:30)</span></div>
 <section class="grp" id="g-you"><h3>Needs you <span class="n">(1)</span></h3>
 <article class="task s-you" id="t-pick-db"><div class="tt"><span class="ttl"><a href="http://paseo.test/agent/ag-pick">Choose the &lt;b&gt;database&lt;/b&gt; for the demo</a></span></div><div class="askbox" id="a-pick-db-a1"><div class="ask"><b>Your call:</b> Postgres or SQLite for the demo? &lt;b&gt;BLUF: SQLite&lt;/b&gt; unless you need concurrent writers.</div><details class="actx" id="x-pick-db-a1" open><summary>Context</summary><div><h4>Why this matters</h4>
@@ -210,7 +225,7 @@ pre{overflow-x:auto;background:#fff;border:1px solid var(--line);border-radius:8
 <article class="task s-done" id="t-arch-schema" data-i="1"><div class="tt"><span class="ttl"><a href="http://paseo.test/agent/ag-schema">Draft the schema</a></span></div><div class="askbox answered" id="a-arch-schema-a1"><div class="ask-tag">Answered</div><div class="ask asked">Postgres or SQLite?</div><details class="actx" id="x-arch-schema-a1"><summary>Context</summary><div><p>Postgres <b>wins</b> on concurrent writes; SQLite is simpler.</p></div></details></div><div class="ag"><span class="pill p-done"><span class="dot"></span>done</span><a class="open" href="http://paseo.test/agent/ag-schema">Open in Paseo</a></div><div class="dp">Report: <code>state/tasks/arch-schema/report.md</code></div><div class="dp">after <a href="#t-arch-recon">Recon the repo</a> · then <a href="#t-pick-db">Choose the &lt;b&gt;database&lt;/b&gt; for the demo</a>, <a href="#t-done-live">Wire the schema into the API</a></div></article>
 <article class="task s-done s-failed" id="t-broke-build" data-i="3"><div class="tt"><span class="ttl"><a href="http://paseo.test/agent/ag-broke">Fix the build (gave up)</a></span><span class="chip c-fail">failed</span></div><div class="ag"><span class="pill p-error"><span class="dot"></span>failed</span><a class="open" href="http://paseo.test/agent/ag-broke">Open in Paseo</a></div><div class="nt">The toolchain pin is gone upstream.</div></article></div></details>
 <div hidden data-trails></div>
-<div hidden data-tn><div class="tn-st t-you" data-k="you" data-n="1" data-label="Needs you"><div class="tn-h"><svg class="tn-ic" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><circle cx="12" cy="12" r="10"/><path d="M12 8v4"/><path d="M12 16h.01"/></svg><span class="tn-l">Needs you</span><span class="tn-c">1</span></div><ul><li><a class="tn-a" href="#t-pick-db" data-t="t-pick-db" title="Choose the &lt;b&gt;database&lt;/b&gt; for the demo">Choose the &lt;b&gt;database&lt;/b&gt; for the demo</a></li></ul></div><div class="tn-st t-fm" data-k="fm" data-n="1" data-label="With the first mate"><div class="tn-h"><svg class="tn-ic" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M7.9 20A9 9 0 1 0 4 16.1L2 22Z"/></svg><span class="tn-l">With the first mate</span><span class="tn-c">1</span></div><ul><li><a class="tn-a" href="#t-ask-fm" data-t="t-ask-fm" title="Pick a layout">Pick a layout</a></li></ul></div><div class="tn-st t-running" data-k="running" data-n="1" data-label="Running"><div class="tn-h"><svg class="tn-ic" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><circle cx="12" cy="12" r="10"/><path d="m10 8 6 4-6 4Z"/></svg><span class="tn-l">Running</span><span class="tn-c">1</span></div><ul><li><a class="tn-a" href="#t-ship-api" data-t="t-ship-api" title="Ship the demo API">Ship the demo API</a></li></ul></div><div class="tn-st t-blocked" data-k="blocked" data-n="1" data-label="Blocked"><div class="tn-h"><svg class="tn-ic" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><circle cx="12" cy="12" r="10"/><path d="m4.9 4.9 14.2 14.2"/></svg><span class="tn-l">Blocked</span><span class="tn-c">1</span></div><ul><li><a class="tn-a" href="#t-await-key" data-t="t-await-key" title="Wire the prod key">Wire the prod key</a></li></ul></div><div class="tn-st t-next" data-k="next" data-n="1" data-label="Next up"><div class="tn-h"><svg class="tn-ic" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M10.1 2.182a10 10 0 0 1 3.8 0"/><path d="M13.9 21.818a10 10 0 0 1-3.8 0"/><path d="M17.609 3.721a10 10 0 0 1 2.69 2.7"/><path d="M2.182 13.9a10 10 0 0 1 0-3.8"/><path d="M20.279 17.609a10 10 0 0 1-2.7 2.69"/><path d="M21.818 10.1a10 10 0 0 1 0 3.8"/><path d="M3.721 6.391a10 10 0 0 1 2.7-2.69"/><path d="M6.391 20.279a10 10 0 0 1-2.69-2.7"/></svg><span class="tn-l">Next up</span><span class="tn-c">1</span></div><ul><li><a class="tn-a" href="#t-write-docs" data-t="t-write-docs" title="Write the docs">Write the docs</a></li></ul></div><div class="tn-st t-parked" data-k="parked" data-n="1" data-label="Parked"><div class="tn-h"><svg class="tn-ic" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><circle cx="12" cy="12" r="10"/><path d="M10 15V9"/><path d="M14 15V9"/></svg><span class="tn-l">Parked</span><span class="tn-c">1</span></div><ul><li><a class="tn-a" href="#t-polish-ui" data-t="t-polish-ui" title="Polish the UI">Polish the UI</a></li></ul></div><div class="tn-st t-done" data-k="done" data-n="4" data-label="Done"><div class="tn-h"><svg class="tn-ic" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><circle cx="12" cy="12" r="10"/><path d="m9 12 2 2 4-4"/></svg><span class="tn-l">Done</span><span class="tn-c">4</span></div><ul><li><a class="tn-a" href="#t-arch-recon" data-t="t-arch-recon" title="Recon the repo">Recon the repo</a></li><li><a class="tn-a" href="#t-arch-schema" data-t="t-arch-schema" title="Draft the schema">Draft the schema</a></li><li><a class="tn-a" href="#t-done-live" data-t="t-done-live" title="Wire the schema into the API">Wire the schema into the API</a></li><li class="fail"><a class="tn-a" href="#t-broke-build" data-t="t-broke-build" title="Fix the build (gave up)">Fix the build (gave up)</a></li></ul></div></div><!--LIVE-END--></div>
+<div hidden data-tn><div class="tn-st t-you" data-k="you" data-n="1" data-label="Needs you"><button class="tn-h" type="button" aria-expanded="true"><svg class="tn-ic" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><circle cx="12" cy="12" r="10"/><path d="M12 8v4"/><path d="M12 16h.01"/></svg><span class="tn-l">Needs you</span><span class="tn-c">1</span><svg class="tn-ic" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="m6 9 6 6 6-6"/></svg></button><ul><li><a class="tn-a" href="#t-pick-db" data-t="t-pick-db" title="Choose the &lt;b&gt;database&lt;/b&gt; for the demo">Choose the &lt;b&gt;database&lt;/b&gt; for the demo</a></li></ul></div><div class="tn-st t-fm" data-k="fm" data-n="1" data-label="With the first mate"><button class="tn-h" type="button" aria-expanded="true"><svg class="tn-ic" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M7.9 20A9 9 0 1 0 4 16.1L2 22Z"/></svg><span class="tn-l">With the first mate</span><span class="tn-c">1</span><svg class="tn-ic" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="m6 9 6 6 6-6"/></svg></button><ul><li><a class="tn-a" href="#t-ask-fm" data-t="t-ask-fm" title="Pick a layout">Pick a layout</a></li></ul></div><div class="tn-st t-running" data-k="running" data-n="1" data-label="Running"><button class="tn-h" type="button" aria-expanded="true"><svg class="tn-ic" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><circle cx="12" cy="12" r="10"/><path d="m10 8 6 4-6 4Z"/></svg><span class="tn-l">Running</span><span class="tn-c">1</span><svg class="tn-ic" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="m6 9 6 6 6-6"/></svg></button><ul><li><a class="tn-a" href="#t-ship-api" data-t="t-ship-api" title="Ship the demo API">Ship the demo API</a></li></ul></div><div class="tn-st t-blocked" data-k="blocked" data-n="1" data-label="Blocked"><button class="tn-h" type="button" aria-expanded="true"><svg class="tn-ic" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><circle cx="12" cy="12" r="10"/><path d="m4.9 4.9 14.2 14.2"/></svg><span class="tn-l">Blocked</span><span class="tn-c">1</span><svg class="tn-ic" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="m6 9 6 6 6-6"/></svg></button><ul><li><a class="tn-a" href="#t-await-key" data-t="t-await-key" title="Wire the prod key">Wire the prod key</a></li></ul></div><div class="tn-st t-next" data-k="next" data-n="1" data-label="Next up"><button class="tn-h" type="button" aria-expanded="true"><svg class="tn-ic" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M10.1 2.182a10 10 0 0 1 3.8 0"/><path d="M13.9 21.818a10 10 0 0 1-3.8 0"/><path d="M17.609 3.721a10 10 0 0 1 2.69 2.7"/><path d="M2.182 13.9a10 10 0 0 1 0-3.8"/><path d="M20.279 17.609a10 10 0 0 1-2.7 2.69"/><path d="M21.818 10.1a10 10 0 0 1 0 3.8"/><path d="M3.721 6.391a10 10 0 0 1 2.7-2.69"/><path d="M6.391 20.279a10 10 0 0 1-2.69-2.7"/></svg><span class="tn-l">Next up</span><span class="tn-c">1</span><svg class="tn-ic" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="m6 9 6 6 6-6"/></svg></button><ul><li><a class="tn-a" href="#t-write-docs" data-t="t-write-docs" title="Write the docs">Write the docs</a></li></ul></div><div class="tn-st t-parked" data-k="parked" data-n="1" data-label="Parked"><button class="tn-h" type="button" aria-expanded="true"><svg class="tn-ic" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><circle cx="12" cy="12" r="10"/><path d="M10 15V9"/><path d="M14 15V9"/></svg><span class="tn-l">Parked</span><span class="tn-c">1</span><svg class="tn-ic" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="m6 9 6 6 6-6"/></svg></button><ul><li><a class="tn-a" href="#t-polish-ui" data-t="t-polish-ui" title="Polish the UI">Polish the UI</a></li></ul></div><div class="tn-st t-done" data-k="done" data-n="4" data-label="Done"><button class="tn-h" type="button" aria-expanded="true"><svg class="tn-ic" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><circle cx="12" cy="12" r="10"/><path d="m9 12 2 2 4-4"/></svg><span class="tn-l">Done</span><span class="tn-c">4</span><svg class="tn-ic" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="m6 9 6 6 6-6"/></svg></button><ul><li><a class="tn-a" href="#t-arch-recon" data-t="t-arch-recon" title="Recon the repo">Recon the repo</a></li><li><a class="tn-a" href="#t-arch-schema" data-t="t-arch-schema" title="Draft the schema">Draft the schema</a></li><li><a class="tn-a" href="#t-done-live" data-t="t-done-live" title="Wire the schema into the API">Wire the schema into the API</a></li><li class="fail"><a class="tn-a" href="#t-broke-build" data-t="t-broke-build" title="Fix the build (gave up)">Fix the build (gave up)</a></li></ul></div></div><!--LIVE-END--></div>
 <section id="endpoints" data-section="endpoints"><h2>Endpoints &amp; creds</h2>
 <div class="trail-slot" data-trail-slot="endpoints"></div>
 <div class="tw"><table><thead><tr><th>Name</th><th>URL</th><th>Notes</th></tr></thead><tbody><tr><td>API</td><td><code>http://localhost:4000</code></td><td>demo, no auth</td></tr><tr><td>Admin</td><td><code>http://localhost:4001/admin</code></td><td>uses the <code>ADMIN_TOKEN</code> env var from the long-named secrets file</td></tr></tbody></table></div>
@@ -247,7 +262,29 @@ pre{overflow-x:auto;background:#fff;border:1px solid var(--line);border-radius:8
     if(save){applied=v?1:0;if(window.__fdPref)window.__fdPref(PK,applied)}}
   // apply the stored choice on load, and again when it changes (the marks endpoint can bring it in after load); only at
   // 1200 px and up, where the unfolded rail pushes the page instead of covering it. No choice yet: unfolded.
-  function adopt(){var p=pref();if(p===undefined)p=1;if(p===applied)return;applied=p;if(wide())setExp(p===1,false)}
+  function adopt(){var p=pref();if(p===undefined)p=1;if(p!==applied){applied=p;if(wide())setExp(p===1,false)}[fl,sl].forEach(applyShut);applyFocus()}
+  // ---- focus view: only the selected task's card shows. On/off is "tn-focus"; the selection is the one "tn-sel:<card id>"
+  // set to 1 (the marks endpoint stores only 0/1 flags, so switching sets the old key to 0). Both persist like the fold.
+  var fbar=$("tn-fbar");
+  function fp(k,v){return window.__fdPref?(arguments.length<2?window.__fdPref(k):window.__fdPref(k,v)):undefined}
+  function selected(){var ks=window.__fdPrefKeys?window.__fdPrefKeys("tn-sel:"):[];for(var i=0;i<ks.length;i++){var id=ks[i].slice(7);if($(id))return id}return null}
+  function select(id){if(!window.__fdPrefKeys)return;window.__fdPrefKeys("tn-sel:").forEach(function(k){if(k!=="tn-sel:"+id)fp(k,0)});if(fp("tn-sel:"+id)!==1)fp("tn-sel:"+id,1)}
+  function applyFocus(){var want=fp("tn-focus")===1,id=want?selected():null;
+    if(want&&!id){var a=(cur&&fl.querySelector('.tn-a[data-t="'+cur+'"]'))||fl.querySelector(".tn-a");if(a){id=a.getAttribute("data-t");select(id)}}
+    var on=want&&!!id;body.classList.toggle("tn-focus",on);
+    q(d,".task.tn-sel").forEach(function(t){if(t.id!==id)t.classList.remove("tn-sel")});
+    if(on){var t=$(id);t.classList.add("tn-sel");for(var p=t.parentElement;p;p=p.parentElement)if(p.tagName==="DETAILS"&&!p.open)p.open=true}
+    q(d,".tn-fx").forEach(function(b){b.setAttribute("aria-pressed",on?"true":"false")});
+    if(fbar){fbar.hidden=!on;if(on){var l=fl.querySelector('.tn-a[data-t="'+id+'"]'),name=l?l.textContent:id,key=fbar.getAttribute("data-id")+"|"+name;
+      if(key!==id+"|"+name){fbar.setAttribute("data-id",id);fbar.innerHTML="<svg class=\"tn-ic\" viewBox=\"0 0 24 24\" aria-hidden=\"true\" focusable=\"false\"><circle cx=\"12\" cy=\"12\" r=\"3\"/><path d=\"M3 7V5a2 2 0 0 1 2-2h2\"/><path d=\"M17 3h2a2 2 0 0 1 2 2v2\"/><path d=\"M21 17v2a2 2 0 0 1-2 2h-2\"/><path d=\"M7 21H5a2 2 0 0 1-2-2v-2\"/></svg>"+'<span>Focus view: <b></b></span><button type="button" class="tn-fall">Show all tasks</button>';fbar.querySelector("b").textContent=name}}}}
+  function setFocus(on){fp("tn-focus",on?1:0);applyFocus();if(!sheet.hidden)closeSheet(false);if(on){var id=selected();if(id)go(id,true)}}
+  d.addEventListener("click",function(e){var b=e.target.closest&&e.target.closest(".tn-fx,.tn-fall");if(b){setFocus(b.classList.contains("tn-fall")?false:fp("tn-focus")!==1);return}
+    var a=e.target.closest&&e.target.closest('#live a[href^="#t-"]');if(a&&fp("tn-focus")===1){select(a.getAttribute("href").slice(1));applyFocus()}});
+  // a stage heading in the rail or the phone list collapses its titles; the choice ("tn-c-<stage>", 1 = collapsed) is
+  // stored like the fold, so it holds across reloads and sessions. The flyout always shows its stage open.
+  function shut(k){return window.__fdPref?window.__fdPref("tn-c-"+k)===1:false}
+  function applyShut(root){q(root,".tn-st").forEach(function(s){var on=shut(s.getAttribute("data-k")),h=s.querySelector(".tn-h");
+    s.classList.toggle("shut",on);if(h)h.setAttribute("aria-expanded",on?"false":"true")})}
   // ---- build from the template
   function stages(){return q(fl,".tn-st")}
   function applyMore(root){q(root,".tn-st[data-cap]").forEach(function(s){var on=!!more[s.getAttribute("data-k")],b=s.querySelector(".tn-more");
@@ -258,7 +295,7 @@ pre{overflow-x:auto;background:#fff;border:1px solid var(--line);border-radius:8
     if(tagName==="button"){b.type="button";b.setAttribute("data-k",k);b.setAttribute("aria-controls","tn-fly");b.setAttribute("aria-expanded",flyKey===k?"true":"false");
       b.setAttribute("aria-label",s.getAttribute("data-label")+", "+n+(n==="1"?" task":" tasks"));b.title=s.getAttribute("data-label")+" ("+n+")"}
     return b}
-  function build(html){fl.innerHTML=html;sl.innerHTML=html;applyMore(fl);applyMore(sl);
+  function build(html){fl.innerHTML=html;sl.innerHTML=html;applyMore(fl);applyMore(sl);applyShut(fl);applyShut(sl);
     var ss=stages(),on=ss.length>0;aside.hidden=!on;bar.hidden=!on;body.classList.toggle("tn-on",on);
     bds.textContent="";bar.textContent="";
     ss.forEach(function(s){bds.appendChild(badge(s,"button"));bar.appendChild(badge(s,"span"))});
@@ -274,7 +311,7 @@ pre{overflow-x:auto;background:#fff;border:1px solid var(--line);border-radius:8
     adopt();unread();observe();mark()};
   // ---- flyout beside the spine
   function renderFly(){var s=fl.querySelector('.tn-st[data-k="'+flyKey+'"]');if(!s)return;
-    fly.innerHTML="";fly.appendChild(s.cloneNode(true));applyMore(fly);unread();mark();fly.hidden=false;
+    fly.innerHTML="";var c=s.cloneNode(true);c.classList.remove("shut");var ch=c.querySelector(".tn-h");if(ch){ch.removeAttribute("aria-expanded");ch.tabIndex=-1}fly.appendChild(c);applyMore(fly);unread();mark();fly.hidden=false;
     var b=bds.querySelector('.tn-bd[data-k="'+flyKey+'"]');
     if(b){var r=b.getBoundingClientRect();fly.style.top=Math.max(8,Math.min(r.top,window.innerHeight-fly.offsetHeight-8))+"px"}
     q(bds,".tn-bd").forEach(function(x){x.setAttribute("aria-expanded",x.getAttribute("data-k")===flyKey?"true":"false")})}
@@ -290,11 +327,13 @@ pre{overflow-x:auto;background:#fff;border:1px solid var(--line);border-radius:8
   fly.addEventListener("mouseenter",function(){clearTimeout(hideT)});
   fly.addEventListener("mouseleave",function(){closeFly(false)});
   // ---- jumping to a card
-  function go(id){var t=$(id);if(!t)return;
+  function go(id,keep){var t=$(id);if(!t)return;if(!keep){select(id);applyFocus()}
     for(var p=t.parentElement;p;p=p.parentElement)if(p.tagName==="DETAILS"&&!p.open)p.open=true;
     if(location.hash==="#"+id)t.scrollIntoView();else location.hash=id;
     setCur(id)}
-  function onClick(e){var m=e.target.closest&&e.target.closest(".tn-more");
+  function onClick(e){var h=e.target.closest&&e.target.closest(".tn-h");
+    if(h){if(fly.contains(h)||!window.__fdPref)return;var k=h.closest(".tn-st").getAttribute("data-k");window.__fdPref("tn-c-"+k,shut(k)?0:1);applyShut(fl);applyShut(sl);return}
+    var m=e.target.closest&&e.target.closest(".tn-more");
     if(m){var s=m.closest(".tn-st"),k=s&&s.getAttribute("data-k");more[k]=!more[k];[fl,sl,fly].forEach(applyMore);if(!fly.hidden)renderFly();return}
     var a=e.target.closest&&e.target.closest(".tn-a");if(!a)return;e.preventDefault();
     if(!sheet.hidden)closeSheet(false);closeFly(true);if(exp&&!wide())setExp(false,false);
@@ -306,7 +345,7 @@ pre{overflow-x:auto;background:#fff;border:1px solid var(--line);border-radius:8
     if(flyKey&&!fly.contains(t)&&!aside.contains(t))closeFly(true);
     if(exp&&!wide()&&!phone()&&!aside.contains(t))setExp(false,false)});
   // ---- phone sheet
-  function openSheet(){lastFocus=d.activeElement;var r=bar.getBoundingClientRect();sheet.style.top=r.bottom+"px";
+  function openSheet(){lastFocus=d.activeElement;var r=bar.getBoundingClientRect();sheet.style.top=r.bottom+"px";sheet.style.maxHeight=Math.max(200,window.innerHeight-r.bottom-12)+"px";
     sheet.hidden=back.hidden=false;bar.setAttribute("aria-expanded","true");body.classList.add("tn-lock");
     var a=sheet.querySelector(".tn-a");(a||sx).focus()}
   function closeSheet(ret){if(sheet.hidden)return;sheet.hidden=back.hidden=true;bar.setAttribute("aria-expanded","false");body.classList.remove("tn-lock");
@@ -347,6 +386,7 @@ pre{overflow-x:auto;background:#fff;border:1px solid var(--line);border-radius:8
   var R=(S._r&&typeof S._r==="object")?S._r:{};S._r=R;
   // small per-page preferences other scripts keep in this state (the task navigator's fold): saved like the rest, synced
   window.__fdPref=function(k,v){if(arguments.length<2)return S[k];S[k]=v;save();push()};
+  window.__fdPrefKeys=function(p){return Object.keys(S).filter(function(k){return k.indexOf(p)===0&&S[k]===1})};
   function live(){return document.getElementById("live")}
   function snapshot(){var el=live();if(!el)return;el.querySelectorAll("details[id]").forEach(function(d){S[d.id]=d.open?1:0});save()}
   function restore(root){root.querySelectorAll("details[id]").forEach(function(d){if(d.id in S)d.open=!!S[d.id]})}

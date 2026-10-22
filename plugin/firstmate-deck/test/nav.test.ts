@@ -80,10 +80,17 @@ test("the navigator stays clickable in Lavish's annotate mode: every part of it 
 });
 
 test("every stage heading carries its own drawn icon, and the fold buttons are labelled icons, not text", () => {
-  const heads = [...tpl.matchAll(/<div class="tn-h">(<svg class="tn-ic"[^>]*>.*?<\/svg>)<span class="tn-l">/g)].map((m) => m[1]);
+  const heads = [...tpl.matchAll(/<button class="tn-h" type="button" aria-expanded="true">(<svg class="tn-ic"[^>]*>.*?<\/svg>)<span class="tn-l">/g)].map((m) => m[1]);
   assert.equal(heads.length, stages.length);
   assert.equal(new Set(heads).size, heads.length, "no two stages share an icon");
   assert.match(r.page, /id="tn-open"[^>]*aria-label="Show task titles"[^>]*><svg class="tn-ic"/);
   assert.match(r.page, /id="tn-close"[^>]*aria-label="Fold the task list"[^>]*><svg class="tn-ic"/);
   assert.ok(!r.page.includes(">Fold</button>") && !r.page.includes("\\u25be"));
+});
+
+test("collapsible stage headings, a focus toggle in every navigator surface, and the focus bar outside the live block", () => {
+  assert.equal((tpl.match(/<button class="tn-h" type="button" aria-expanded="true">/g) ?? []).length, stages.length);
+  assert.equal((r.page.match(/class="[^"]*\btn-fx\b[^"]*" type="button" aria-pressed="false"/g) ?? []).length, 3, "spine, rail header, phone list");
+  assert.ok(r.page.indexOf('id="tn-fbar"') < r.page.indexOf('<div id="live">'));
+  assert.match(r.page, /id="tn-fbar" role="status" data-lavish-action hidden/);
 });

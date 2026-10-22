@@ -25,7 +25,29 @@ export function navScript(): string {
     if(save){applied=v?1:0;if(window.__fdPref)window.__fdPref(PK,applied)}}
   // apply the stored choice on load, and again when it changes (the marks endpoint can bring it in after load); only at
   // 1200 px and up, where the unfolded rail pushes the page instead of covering it. No choice yet: unfolded.
-  function adopt(){var p=pref();if(p===undefined)p=1;if(p===applied)return;applied=p;if(wide())setExp(p===1,false)}
+  function adopt(){var p=pref();if(p===undefined)p=1;if(p!==applied){applied=p;if(wide())setExp(p===1,false)}[fl,sl].forEach(applyShut);applyFocus()}
+  // ---- focus view: only the selected task's card shows. On/off is "tn-focus"; the selection is the one "tn-sel:<card id>"
+  // set to 1 (the marks endpoint stores only 0/1 flags, so switching sets the old key to 0). Both persist like the fold.
+  var fbar=$("tn-fbar");
+  function fp(k,v){return window.__fdPref?(arguments.length<2?window.__fdPref(k):window.__fdPref(k,v)):undefined}
+  function selected(){var ks=window.__fdPrefKeys?window.__fdPrefKeys("tn-sel:"):[];for(var i=0;i<ks.length;i++){var id=ks[i].slice(7);if($(id))return id}return null}
+  function select(id){if(!window.__fdPrefKeys)return;window.__fdPrefKeys("tn-sel:").forEach(function(k){if(k!=="tn-sel:"+id)fp(k,0)});if(fp("tn-sel:"+id)!==1)fp("tn-sel:"+id,1)}
+  function applyFocus(){var want=fp("tn-focus")===1,id=want?selected():null;
+    if(want&&!id){var a=(cur&&fl.querySelector('.tn-a[data-t="'+cur+'"]'))||fl.querySelector(".tn-a");if(a){id=a.getAttribute("data-t");select(id)}}
+    var on=want&&!!id;body.classList.toggle("tn-focus",on);
+    q(d,".task.tn-sel").forEach(function(t){if(t.id!==id)t.classList.remove("tn-sel")});
+    if(on){var t=$(id);t.classList.add("tn-sel");for(var p=t.parentElement;p;p=p.parentElement)if(p.tagName==="DETAILS"&&!p.open)p.open=true}
+    q(d,".tn-fx").forEach(function(b){b.setAttribute("aria-pressed",on?"true":"false")});
+    if(fbar){fbar.hidden=!on;if(on){var l=fl.querySelector('.tn-a[data-t="'+id+'"]'),name=l?l.textContent:id,key=fbar.getAttribute("data-id")+"|"+name;
+      if(key!==id+"|"+name){fbar.setAttribute("data-id",id);fbar.innerHTML=${JSON.stringify(svg(ICON.focus))}+'<span>Focus view: <b></b></span><button type="button" class="tn-fall">Show all tasks</button>';fbar.querySelector("b").textContent=name}}}}
+  function setFocus(on){fp("tn-focus",on?1:0);applyFocus();if(!sheet.hidden)closeSheet(false);if(on){var id=selected();if(id)go(id,true)}}
+  d.addEventListener("click",function(e){var b=e.target.closest&&e.target.closest(".tn-fx,.tn-fall");if(b){setFocus(b.classList.contains("tn-fall")?false:fp("tn-focus")!==1);return}
+    var a=e.target.closest&&e.target.closest('#live a[href^="#t-"]');if(a&&fp("tn-focus")===1){select(a.getAttribute("href").slice(1));applyFocus()}});
+  // a stage heading in the rail or the phone list collapses its titles; the choice ("tn-c-<stage>", 1 = collapsed) is
+  // stored like the fold, so it holds across reloads and sessions. The flyout always shows its stage open.
+  function shut(k){return window.__fdPref?window.__fdPref("tn-c-"+k)===1:false}
+  function applyShut(root){q(root,".tn-st").forEach(function(s){var on=shut(s.getAttribute("data-k")),h=s.querySelector(".tn-h");
+    s.classList.toggle("shut",on);if(h)h.setAttribute("aria-expanded",on?"false":"true")})}
   // ---- build from the template
   function stages(){return q(fl,".tn-st")}
   function applyMore(root){q(root,".tn-st[data-cap]").forEach(function(s){var on=!!more[s.getAttribute("data-k")],b=s.querySelector(".tn-more");
@@ -36,7 +58,7 @@ export function navScript(): string {
     if(tagName==="button"){b.type="button";b.setAttribute("data-k",k);b.setAttribute("aria-controls","tn-fly");b.setAttribute("aria-expanded",flyKey===k?"true":"false");
       b.setAttribute("aria-label",s.getAttribute("data-label")+", "+n+(n==="1"?" task":" tasks"));b.title=s.getAttribute("data-label")+" ("+n+")"}
     return b}
-  function build(html){fl.innerHTML=html;sl.innerHTML=html;applyMore(fl);applyMore(sl);
+  function build(html){fl.innerHTML=html;sl.innerHTML=html;applyMore(fl);applyMore(sl);applyShut(fl);applyShut(sl);
     var ss=stages(),on=ss.length>0;aside.hidden=!on;bar.hidden=!on;body.classList.toggle("tn-on",on);
     bds.textContent="";bar.textContent="";
     ss.forEach(function(s){bds.appendChild(badge(s,"button"));bar.appendChild(badge(s,"span"))});
@@ -52,7 +74,7 @@ export function navScript(): string {
     adopt();unread();observe();mark()};
   // ---- flyout beside the spine
   function renderFly(){var s=fl.querySelector('.tn-st[data-k="'+flyKey+'"]');if(!s)return;
-    fly.innerHTML="";fly.appendChild(s.cloneNode(true));applyMore(fly);unread();mark();fly.hidden=false;
+    fly.innerHTML="";var c=s.cloneNode(true);c.classList.remove("shut");var ch=c.querySelector(".tn-h");if(ch){ch.removeAttribute("aria-expanded");ch.tabIndex=-1}fly.appendChild(c);applyMore(fly);unread();mark();fly.hidden=false;
     var b=bds.querySelector('.tn-bd[data-k="'+flyKey+'"]');
     if(b){var r=b.getBoundingClientRect();fly.style.top=Math.max(8,Math.min(r.top,window.innerHeight-fly.offsetHeight-8))+"px"}
     q(bds,".tn-bd").forEach(function(x){x.setAttribute("aria-expanded",x.getAttribute("data-k")===flyKey?"true":"false")})}
@@ -68,11 +90,13 @@ export function navScript(): string {
   fly.addEventListener("mouseenter",function(){clearTimeout(hideT)});
   fly.addEventListener("mouseleave",function(){closeFly(false)});
   // ---- jumping to a card
-  function go(id){var t=$(id);if(!t)return;
+  function go(id,keep){var t=$(id);if(!t)return;if(!keep){select(id);applyFocus()}
     for(var p=t.parentElement;p;p=p.parentElement)if(p.tagName==="DETAILS"&&!p.open)p.open=true;
     if(location.hash==="#"+id)t.scrollIntoView();else location.hash=id;
     setCur(id)}
-  function onClick(e){var m=e.target.closest&&e.target.closest(".tn-more");
+  function onClick(e){var h=e.target.closest&&e.target.closest(".tn-h");
+    if(h){if(fly.contains(h)||!window.__fdPref)return;var k=h.closest(".tn-st").getAttribute("data-k");window.__fdPref("tn-c-"+k,shut(k)?0:1);applyShut(fl);applyShut(sl);return}
+    var m=e.target.closest&&e.target.closest(".tn-more");
     if(m){var s=m.closest(".tn-st"),k=s&&s.getAttribute("data-k");more[k]=!more[k];[fl,sl,fly].forEach(applyMore);if(!fly.hidden)renderFly();return}
     var a=e.target.closest&&e.target.closest(".tn-a");if(!a)return;e.preventDefault();
     if(!sheet.hidden)closeSheet(false);closeFly(true);if(exp&&!wide())setExp(false,false);
@@ -84,7 +108,7 @@ export function navScript(): string {
     if(flyKey&&!fly.contains(t)&&!aside.contains(t))closeFly(true);
     if(exp&&!wide()&&!phone()&&!aside.contains(t))setExp(false,false)});
   // ---- phone sheet
-  function openSheet(){lastFocus=d.activeElement;var r=bar.getBoundingClientRect();sheet.style.top=r.bottom+"px";
+  function openSheet(){lastFocus=d.activeElement;var r=bar.getBoundingClientRect();sheet.style.top=r.bottom+"px";sheet.style.maxHeight=Math.max(200,window.innerHeight-r.bottom-12)+"px";
     sheet.hidden=back.hidden=false;bar.setAttribute("aria-expanded","true");body.classList.add("tn-lock");
     var a=sheet.querySelector(".tn-a");(a||sx).focus()}
   function closeSheet(ret){if(sheet.hidden)return;sheet.hidden=back.hidden=true;bar.setAttribute("aria-expanded","false");body.classList.remove("tn-lock");

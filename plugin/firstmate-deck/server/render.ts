@@ -314,7 +314,7 @@ export function navHtml(buckets: Record<GroupKey, { t: Task }[]>): string {
     }).join("");
     const more = cap ? `<button class="tn-more" type="button" aria-expanded="false" data-more="${items.length - NAV_SHOW} more">${svg(ICON.more)}<span>${items.length - NAV_SHOW} more</span></button>` : "";
     return `<div class="tn-st t-${k}" data-k="${k}" data-n="${items.length}" data-label="${esc(label)}"${cap ? " data-cap" : ""}>` +
-      `<div class="tn-h">${svg(STAGE_ICON[k])}<span class="tn-l">${esc(label)}</span><span class="tn-c">${items.length}</span></div><ul>${lis}</ul>${more}</div>`;
+      `<button class="tn-h" type="button" aria-expanded="true">${svg(STAGE_ICON[k])}<span class="tn-l">${esc(label)}</span><span class="tn-c">${items.length}</span>${svg(ICON.down)}</button><ul>${lis}</ul>${more}</div>`;
   }).join("");
 }
 
@@ -447,10 +447,10 @@ ${CSS}
 </style>
 </head><body>
 <!-- the task navigator: data-lavish-action keeps its clicks working in Lavish's annotate mode -->
-<aside class="tn" id="tn" aria-label="Tasks by stage" data-lavish-action hidden><div class="tn-spine"><button class="tn-tg" id="tn-open" type="button" aria-expanded="false" aria-controls="tn-full" aria-label="Show task titles" title="Show task titles">${svg(ICON.panelOpen)}</button><div class="tn-bds" id="tn-bds"></div></div><div class="tn-full" id="tn-full"><div class="tn-top"><button class="tn-tg" id="tn-close" type="button" aria-expanded="true" aria-controls="tn-full" aria-label="Fold the task list" title="Fold the task list">${svg(ICON.panelClose)}</button><b>Tasks</b></div><div class="tn-fl" id="tn-fl"></div></div></aside>
+<aside class="tn" id="tn" aria-label="Tasks by stage" data-lavish-action hidden><div class="tn-spine"><button class="tn-tg" id="tn-open" type="button" aria-expanded="false" aria-controls="tn-full" aria-label="Show task titles" title="Show task titles">${svg(ICON.panelOpen)}</button><button class="tn-tg tn-fx" type="button" aria-pressed="false" aria-label="Focus view: show only the selected task" title="Focus view: show only the selected task">${svg(ICON.focus)}</button><div class="tn-bds" id="tn-bds"></div></div><div class="tn-full" id="tn-full"><div class="tn-top"><button class="tn-tg" id="tn-close" type="button" aria-expanded="true" aria-controls="tn-full" aria-label="Fold the task list" title="Fold the task list">${svg(ICON.panelClose)}</button><b>Tasks</b><button class="tn-tg tn-fx" type="button" aria-pressed="false" aria-label="Focus view: show only the selected task" title="Focus view: show only the selected task">${svg(ICON.focus)}</button></div><div class="tn-fl" id="tn-fl"></div></div></aside>
 <div class="tn-fly" id="tn-fly" role="region" aria-label="Stage titles" data-lavish-action hidden></div>
 <div class="tn-back" id="tn-back" data-lavish-action hidden></div>
-<div class="tn-sheet" id="tn-sheet" role="dialog" aria-modal="true" aria-label="Tasks by stage" data-lavish-action hidden><div class="tn-sb" id="tn-sl"></div><button class="tn-sx" id="tn-sx" type="button">Close</button></div>
+<div class="tn-sheet" id="tn-sheet" role="dialog" aria-modal="true" aria-label="Tasks by stage" data-lavish-action hidden><div class="tn-sb" id="tn-sl"></div><div class="tn-sf"><button class="tn-fx tn-fxl" type="button" aria-pressed="false">${svg(ICON.focus)}<span>Focus view</span></button><button class="tn-sx" id="tn-sx" type="button">Close</button></div></div>
 <main>
 <h1>${esc(model.title)}</h1>
 <div class="sub">Kept current by the firstmate-deck plugin · last update <b>${esc(stampLong(opts.now))}</b></div>
@@ -463,6 +463,7 @@ ${banner}
 
 <h2 id="tasks">Tasks</h2>
 <div class="m">Each task once: its state, its crew agent live, and what it depends on. Titles and “Open in Paseo” go to the agent in the Paseo web UI.</div>
+<div class="tn-fbar" id="tn-fbar" role="status" data-lavish-action hidden></div>
 <div id="live"><!--LIVE-START-->${stamped}<!--LIVE-END--></div>
 ${names.map((n) => renderSection(model, n)).join("\n")}
 <script>

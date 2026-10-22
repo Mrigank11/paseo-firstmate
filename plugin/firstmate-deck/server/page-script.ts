@@ -15,6 +15,7 @@ export function pageScript(project: string, liveFile: string, tickSeconds: numbe
   var R=(S._r&&typeof S._r==="object")?S._r:{};S._r=R;
   // small per-page preferences other scripts keep in this state (the task navigator's fold): saved like the rest, synced
   window.__fdPref=function(k,v){if(arguments.length<2)return S[k];S[k]=v;save();push()};
+  window.__fdPrefKeys=function(p){return Object.keys(S).filter(function(k){return k.indexOf(p)===0&&S[k]===1})};
   function live(){return document.getElementById("live")}
   function snapshot(){var el=live();if(!el)return;el.querySelectorAll("details[id]").forEach(function(d){S[d.id]=d.open?1:0});save()}
   function restore(root){root.querySelectorAll("details[id]").forEach(function(d){if(d.id in S)d.open=!!S[d.id]})}
