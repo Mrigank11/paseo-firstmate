@@ -2,7 +2,7 @@
 import { createHash } from "node:crypto";
 import { cut } from "./humanize.ts";
 import { cardHash } from "./marks.ts";
-import { markdown } from "./markdown.ts";
+import { inline, markdown } from "./markdown.ts";
 import { ICON, svg } from "./icons.ts";
 import { navScript } from "./nav-script.ts";
 import { pageScript } from "./page-script.ts";
@@ -231,7 +231,7 @@ function row(t: Task, group: GroupKey, ctx: Ctx, idx = 0): string {
   ];
   t.asks.forEach((a) => {
     const box: string[] = [];
-    const asked = `<div class="ask asked">${esc(a.text)}</div>`;
+    const asked = `<div class="ask asked">${inline(a.text)}</div>`;
     const key = `ask-${t.id}-${a.id}`;
     const buttons = (picked?: string) => (a.options ?? []).map((o, k) => {
       const on = picked !== undefined && o === picked;
@@ -253,7 +253,7 @@ function row(t: Task, group: GroupKey, ctx: Ctx, idx = 0): string {
       box.push(asked, `<div class="ask replied">The first mate is working on a follow-up</div>`);
     } else {
       // a "BLUF: ..." text is its own label: no "Your call:" in front of it (no doubled colon), and it is the bold one-liner
-      box.push(/^BLUF:/i.test(a.text) ? `<div class="ask"><b>${esc(a.text)}</b></div>` : `<div class="ask"><b>Your call:</b> ${esc(a.text)}</div>`);
+      box.push(/^BLUF:/i.test(a.text) ? `<div class="ask"><b>${inline(a.text)}</b></div>` : `<div class="ask"><b>Your call:</b> ${inline(a.text)}</div>`);
       if (a.options?.length) {
         box.push(`<div class="opts" data-key="${esc(key)}"><div class="opt-row">${buttons()}<span class="hint">or comment on the card</span></div><div class="pickline" role="status" hidden></div></div>`);
       }
@@ -272,7 +272,7 @@ function row(t: Task, group: GroupKey, ctx: Ctx, idx = 0): string {
   // asks the first mate already answered stay readable on the finished card
   if (group === "done") for (const a of t.answered ?? []) {
     const ctxMd = contextBody(a.text, a.contextMd);
-    const ans = a.text ? `<div class="ask asked">${esc(a.text)}</div>` : "";
+    const ans = a.text ? `<div class="ask asked">${inline(a.text)}</div>` : "";
     const detail = ctxMd.trim() ? `<details class="actx" id="x-${esc(t.id)}-${esc(a.id)}"><summary>Context</summary><div>${markdown(ctxMd)}</div></details>` : "";
     if (ans || detail) out.push(`<div class="askbox answered" id="a-${esc(t.id)}-${esc(a.id)}"><div class="ask-tag">Answered</div>${ans}${detail}</div>`);
   }

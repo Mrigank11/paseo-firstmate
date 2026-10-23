@@ -57,6 +57,19 @@ test("a task with one replied and one open ask stays in Needs you", () => {
   assert.equal(groupOf(t, true), "fm");
 });
 
+test("URLs in the ask line and its context markdown are clickable, in a new tab", () => {
+  const m = structuredClone(model);
+  const t = m.tasks.find((x) => x.id === "ask-fm")!;
+  const url = "http://manjaro.tail2e75.ts.net:4387/session/abc";
+  t.asks.push({ id: "a9", text: `Review ${url} please`, contextMd: `Open ${url}.\n\nAlso [docs](https://d.test/x) and \`${url}\`` });
+  const live = renderProject(m, agents, opts).live;
+  const a = (u: string, text = u) => `<a href="${u}" target="_blank" rel="noopener noreferrer">${text}</a>`;
+  assert.ok(live.includes(`Review ${a(url)} please`));
+  assert.ok(live.includes(`Open ${a(url)}.`));
+  assert.ok(live.includes(a("https://d.test/x", "docs")));
+  assert.ok(live.includes(`<code>${url}</code>`));
+});
+
 test("replying changes the signature", () => {
   const m = structuredClone(model);
   delete m.tasks.find((x) => x.id === "ask-fm")!.asks[0].repliedAt;
