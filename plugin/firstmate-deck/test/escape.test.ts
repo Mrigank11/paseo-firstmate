@@ -61,7 +61,7 @@ test("no payload becomes markup in any field, in the live block, the page or the
   assert.ok(r.live.includes("&lt;script&gt;alert(1)&lt;/script&gt;"));
   assert.ok(r.live.includes("&lt;img src=x onerror=alert(1)&gt;"));
   // the harmless link survives as a link, the javascript: one as plain text
-  assert.ok(r.live.includes('<a href="http://fine.test">ok</a>'));
+  assert.ok(r.live.includes('<a href="http://fine.test" target="_blank" rel="noopener noreferrer">ok</a>'));
   assert.ok(r.live.includes("click"));
 });
 
