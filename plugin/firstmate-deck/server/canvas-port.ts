@@ -34,6 +34,8 @@ export type CanvasData = {
   cards: Record<string, string>;
 };
 
+/** The deck page has one theme (light): the embedded canvas follows it, never prefers-color-scheme. */
+export const PAGE_THEME = "light" as const;
 export const POLL_MS = 3000;
 export const MAX_BACKOFF_MS = 60_000;
 const TIMEOUT_MS = 4000;
@@ -49,6 +51,8 @@ export type CanvasPortOpts = {
   fetch?: FetchLike;
   pollMs?: number;
   maxBackoffMs?: number;
+  /** The theme of the page the canvas is embedded in (the deck page is light). agent-canvas then draws that theme, not the OS's. */
+  theme?: "light" | "dark";
 };
 
 export class CanvasPort {
@@ -135,7 +139,7 @@ export class CanvasPort {
     let changed = new Set<string>();
     try {
       if (!this.css || this.st !== "ok") {
-        const c = await this.get("/api/fm/css", base);
+        const c = await this.get(`/api/fm/css?theme=${this.o.theme ?? PAGE_THEME}`, base);
         if (c.ok) { const css = await c.text(); if (css !== this.css) { this.css = css; ids.forEach((i) => changed.add(i)); } }
       }
       const r = await this.get(`/api/fm/summary?agents=${encodeURIComponent(ids.join(","))}`, base);

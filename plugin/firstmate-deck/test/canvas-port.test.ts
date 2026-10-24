@@ -27,6 +27,7 @@ test("a poll reads the summary, fetches a card once per rev, and tells who chang
   await r.port.poll(); await r.port.poll();
   assert.equal(r.fc.count("/api/fm/card/"), 1, "same rev: no new card fetch");
   assert.equal(r.fc.count("/api/fm/css"), 1);
+  assert.equal(r.fc.cssTheme, "light", "the page is light: the canvas css is asked for that theme, not left to prefers-color-scheme");
   assert.equal(r.changes.length, 1, "nothing moved: no change event");
   r.fc.set(summary("ag-1", { rev: 2, bluf: "Tests green" }));
   await r.port.poll();

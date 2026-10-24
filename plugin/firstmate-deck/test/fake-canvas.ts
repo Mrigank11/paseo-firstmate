@@ -13,6 +13,7 @@ export class FakeCanvas {
   summaries = new Map<string, FmSummary>();
   hits: string[] = [];
   down = false;
+  cssTheme: string | null = null;
   private server: Server;
   url = "";
 
@@ -21,7 +22,7 @@ export class FakeCanvas {
       const u = new URL(req.url ?? "/", "http://x");
       this.hits.push(u.pathname + u.search);
       if (this.down) { res.writeHead(503); return void res.end("down"); }
-      if (u.pathname === "/api/fm/css") { res.writeHead(200, { "content-type": "text/css" }); return void res.end(".acv .blk{color:red}"); }
+      if (u.pathname === "/api/fm/css") { this.cssTheme = u.searchParams.get("theme"); res.writeHead(200, { "content-type": "text/css" }); return void res.end(".acv .blk{color:red}"); }
       if (u.pathname === "/api/fm/summary") {
         const ids = (u.searchParams.get("agents") ?? "").split(",").filter(Boolean);
         const agents = ids.map((i) => this.summaries.get(i)).filter(Boolean);
