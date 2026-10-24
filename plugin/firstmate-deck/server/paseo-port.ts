@@ -38,6 +38,8 @@ export interface PaseoPort {
   agentView(id: string): Promise<AgentView>;
   /** Send `text` to the agent, steering it if it is mid-turn (never interrupting). */
   send(id: string, text: string): Promise<void>;
+  /** Handle-less peek for the gate sweep (CLI only): status, age, parent and the last DONE:/BLOCKED: line of the trailing log block. */
+  sweepInfo?(id: string): Promise<{ status: string; updatedAt: string | null; parentAgentId: string | null; finalLine: string | null }>;
   /** Add (or replace, same id) the plugin timeline row on an agent. False when this port cannot. */
   appendTimelineRow(agentId: string, rowId: string, data: CommentRowData): Promise<boolean>;
 }

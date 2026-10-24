@@ -180,3 +180,31 @@ test("sweep does not repeat a finish the turn hook already handled", async () =>
   assert.equal(await g.sweep(), 0);
   assert.equal(s.world.sent.length, 1);
 });
+
+test("start-up sweep without an SDK handle (CLI path): a DONE missed while down is woken", async () => {
+  const root = mkdtempSync(join(tmpdir(), "gate-cli-"));
+  mkdirSync(join(root, "state"));
+  writeFileSync(join(root, "state", "decisions.md"), "notify: plugin\n");
+  writeFileSync(join(root, "state", "fleet.json"), JSON.stringify({ version: 2, tasks: [{ id: "t1", project: "p", shape: "scout", state: "active" }, { id: "t2", state: "done" }] }));
+  const sent: string[] = [];
+  const row = (id: string) => ({ id, status: "idle", name: id });
+  const exec = async (a: string[]) => {
+    const li = a.indexOf("--label"); const label = li < 0 ? undefined : a[li + 1];
+    if (a[0] === "ls") return JSON.stringify(label === undefined ? [row("fm")] : label === "fm.task=t1" || label === "fm.notify=plugin" ? [row("crew")] : label === "fm.task=t2" ? [row("other")] : []);
+    if (a[0] === "inspect") return JSON.stringify({ Status: "idle", UpdatedAt: new Date().toISOString(), ParentAgentId: "fm" });
+    if (a[0] === "logs") return "[Message received] x\nGo\nStarting\n[Shell] ls\nDONE: missed while down\n";
+    if (a[0] === "send") { sent.push(a[1]); return ""; }
+    throw new Error(a[0]);
+  };
+  const ports = new PortSelector(new CliPort(exec), () => {}); // no capture(): no handle
+  const g = new Gate({ ports, root: () => root, firstmateLabel: () => "firstmate=true", log: () => {}, retryDelayMs: 1 });
+  assert.equal(await g.sweepCli(), 1);
+  const entries = readFileSync(join(root, "state", "gate-log.jsonl"), "utf8").trim().split("\n").map((l) => JSON.parse(l) as GateEntry);
+  assert.equal(entries.length, 1);
+  assert.equal(entries[0].task, "t1");
+  assert.equal(entries[0].verdict, "DONE");
+  assert.equal(entries[0].turnId, null);
+  assert.equal(entries[0].result, "woke");
+  assert.deepEqual(sent, ["fm"]);
+  assert.equal(await g.sweepCli(), 0); // handled once
+});

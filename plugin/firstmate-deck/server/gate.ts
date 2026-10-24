@@ -104,7 +104,14 @@ export class Gate {
   private logPath(): string { return join(this.o.root(), "state", "gate-log.jsonl"); }
 
   start(): void {
-    this.sweepTimer = setInterval(() => void this.sweep().catch((e) => this.o.log(`gate sweep failed: ${e}`)), this.o.sweepEveryMs ?? SWEEP_EVERY_MS);
+    // At plugin start-up, without waiting for a handle. The root is only known once the deck has read its settings, so retry briefly.
+    const boot = (left: number) => {
+      if (this.stopped) return;
+      if (!this.root() && left > 0) return this.later(() => boot(left - 1), 1000);
+      void this.sweepCli().catch((e) => this.o.log(`gate cli sweep failed: ${e}`));
+    };
+    boot(15);
+    this.sweepTimer = setInterval(() => void (this.o.ports.sdkPort() ? this.sweep() : this.sweepCli()).catch((e) => this.o.log(`gate sweep failed: ${e}`)), this.o.sweepEveryMs ?? SWEEP_EVERY_MS);
     this.sweepTimer.unref?.();
   }
 
@@ -259,6 +266,49 @@ export class Gate {
   }
 
   // ---------- startup sweep ----------
+
+  /**
+   * The same sweep without an SDK handle, for plugin start-up (a handle only arrives with the first hook or RPC). The CLI
+   * shows no labels, so it asks per task: for every task `state/fleet.json` holds as active it lists agents carrying
+   * `fm.task=<id>` + `fm.notify=plugin` (a label filter, so the labels are known) and peeks with `sweepInfo`. Only plugin-notified
+   * agents are swept this way; the SDK sweep (first handle, then every 10 min) covers the rest and, via the log, never repeats it.
+   */
+  async sweepCli(): Promise<number> {
+    const cli = this.o.ports.cli;
+    if (!cli.sweepInfo || !this.root() || this.sweeping || this.stopped) return 0;
+    this.sweeping = true;
+    let n = 0;
+    try {
+      this.load();
+      let tasks: { id?: string; project?: string; shape?: string; state?: string }[] = [];
+      try { tasks = JSON.parse(readFileSync(join(this.root(), "state", "fleet.json"), "utf8"))?.tasks ?? []; } catch {}
+      // the label filter below matches fm.task only; plugin-notified agents are those a second filter also lists
+      const notified = new Set((await cli.listAgents({ label: "fm.notify=plugin" }).catch(() => [])).map((x) => x.id));
+      for (const t of tasks) {
+        if (!t.id || t.state !== "active") continue;
+        const found = await cli.listAgents({ label: `fm.task=${t.id}` }).catch(() => []);
+        for (const a of found) {
+          if (a.status !== "idle") continue;
+          const labels: Record<string, string> = { "fm.task": t.id, "fm.notify": "plugin", ...(t.project ? { "fm.project": t.project } : {}), ...(t.shape ? { "fm.shape": t.shape } : {}) };
+          if (!notified.has(a.id)) continue;
+          const info = await cli.sweepInfo(a.id).catch(() => null);
+          if (!info?.finalLine || info.status !== "idle") continue;
+          if (this.now() - (Date.parse(info.updatedAt ?? "") || 0) > SWEEP_WINDOW_MS) continue;
+          const verdict = info.finalLine.startsWith("DONE:") ? "DONE" : "BLOCKED";
+          const last = this.lastByAgent.get(a.id);
+          if (last && last.verdict === verdict && last.line === info.finalLine) continue;
+          await this.enqueue(async () => {
+            await this.decide({ agentId: a.id, task: t.id!, turnId: null, verdict, line: info.finalLine!, labels, parentId: info.parentAgentId });
+            n++;
+          });
+        }
+      }
+    } finally {
+      this.sweeping = false;
+    }
+    if (n) this.o.log(`gate sweep (cli): ${n} missed finish(es) handled`);
+    return n;
+  }
 
   /**
    * Idle `fm.task` agents updated within the window whose final message is DONE:/BLOCKED: and that the log does not already

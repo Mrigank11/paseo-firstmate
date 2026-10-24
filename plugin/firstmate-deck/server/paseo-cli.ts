@@ -97,6 +97,19 @@ export class CliPort implements PaseoPort {
     }
   }
 
+  /**
+   * `inspect` + `logs`, for the gate sweep before any SDK handle exists. The table log does not type its lines, so the final
+   * message is approximated: the last line starting DONE:/BLOCKED: in the trailing block after the last `[Tag]` line.
+   */
+  async sweepInfo(id: string): Promise<{ status: string; updatedAt: string | null; parentAgentId: string | null; finalLine: string | null }> {
+    const meta: any = JSON.parse((await this.exec(["inspect", id, "--json"])) || "{}");
+    const log = (await this.exec(["logs", id, "--tail", "40"])).split("\n");
+    let from = 0;
+    log.forEach((l, i) => { if (l.startsWith("[")) from = i + 1; });
+    const finalLine = [...log.slice(from)].reverse().find((l) => l.startsWith("DONE:") || l.startsWith("BLOCKED:")) ?? null;
+    return { status: String(meta.Status ?? "").toLowerCase(), updatedAt: meta.UpdatedAt ?? null, parentAgentId: meta.ParentAgentId ?? null, finalLine };
+  }
+
   /** The CLI cannot write timeline rows. */
   async appendTimelineRow(): Promise<boolean> {
     return false;
