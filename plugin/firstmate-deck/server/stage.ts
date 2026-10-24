@@ -109,7 +109,7 @@ export function computeStage(task: StageTask, agents: readonly StageAgent[], now
   // An open ask is the captain's (or the first mate's follow-up), whatever the registry state and the agent are doing.
   const asks = task.asks.filter((a) => !closed.includes(a));
   if (asks.length) return asks.some((a) => !a.repliedAt) ? out("Needs you", "you") : out("With the first mate", "fm");
-  if (closed.length) return out("With the first mate", "fm");
+  if (closed.length && task.state !== "active") return out("With the first mate", "fm");
 
   const running = !!cur && !cur.archived && RUNNING.has(cur.status);
   if (task.state === "parked") return out("Parked", "parked", running ? [flag("parked-but-running", "parked, but an agent is running", true)] : []);
@@ -127,6 +127,7 @@ export function computeStage(task: StageTask, agents: readonly StageAgent[], now
     }
     if (canvas.asks.length) return out("With the first mate", "fm"); // a captain pick waiting for the first mate to deliver it
   }
+  if (closed.length) return out("With the first mate", "fm"); // every curated ask resolved itself on the canvas: only bin/fleet answer is left
   if (!cur) {
     const age = now.getTime() - ms(task.since);
     return task.since && age >= DISPATCH_GRACE_MS ? out("Lost", "fm", [flag("no-agent", "no agent found for this task", true)]) : out("Dispatching", "running");

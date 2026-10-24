@@ -168,6 +168,9 @@ test("canvas: a curated ask whose canvas question is answered or gone closes its
   // a registry ask with no ref is never closed by the canvas; and with the canvas unread nothing closes
   assert.equal(stage(task({ asks: [{}] }), [agent()], { canvas: cv([]) }).group, "you");
   assert.equal(stage(task({ asks: [{ ref }] }), [agent()], {}).group, "you");
+  // an unrelated canvas question still open beats the closed ask: the captain's call, flag kept
+  const raw = stage(task({ asks: [{ ref }] }), [agent({ status: "idle" })], { canvas: cv([{ id: "other" }]) });
+  assert.deepEqual([raw.stage, keys(raw)], ["Needs you", ["ref-closed"]]);
   // another curated ask is still open next to the closed one: the open one decides, the flag still tells the first mate
   const two = stage(task({ asks: [{ ref }, {}] }), [agent()], { canvas: cv([]) });
   assert.deepEqual([two.group, keys(two)], ["you", ["ref-closed"]]);
