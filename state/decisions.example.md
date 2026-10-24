@@ -28,10 +28,32 @@ The first mate reads the profile with `list_profiles` and copies its fields into
 
 ## Permission policy
 
-Default posture: auto-approve safe classes, escalate the rest.
+The deck plugin's permission hook classifies crew permission requests against the block below (read/search anywhere; writes only in the crew's own worktree or its `state/tasks/<id>/`; the shell allowlist; no fetch hosts). Everything else is escalated: the first mate is woken with `## Crew PERMISSION · <task>` and the request stays pending for the captain. The hook never denies.
 
-- **Auto-approve:** read-only tools; writes confined to the crew member's own worktree; installing declared dependencies.
-- **Escalate to captain:** anything outside the worktree; network calls to new hosts; deleting files; force-push; any destructive or irreversible action.
+- `mode: shadow` only logs to `state/permission-log.jsonl` (`would-allow` / `escalate`). Flip to `enforce` once the log agrees with what you would have clicked; `shadow` is the rollback.
+- If this block is missing or does not parse, every request escalates and every project page shows a banner.
+
+```json fm-permission-rules
+{
+  "mode": "shadow",
+  "allowKinds": ["tool"],
+  "read": true,
+  "writeWithin": ["$WORKTREE", "$ROOT/state/tasks/$TASK"],
+  "shell": {
+    "allow": [
+      "^git (status|log|diff|show)( |$)",
+      "^(ls|cat|head|tail|wc|rg|grep) ",
+      "^(npm|pnpm) (test|run [\\w:-]+|ci|install)$",
+      "^node --test ",
+      "^npx tsc --noEmit$"
+    ],
+    "denyChars": ";&|><`$()"
+  },
+  "fetchHosts": []
+}
+```
+
+- **Always escalate to the captain** (not expressible as a rule): deleting files, force-push, any destructive or irreversible action.
 
 ## Delivery & merge
 

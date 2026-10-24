@@ -193,10 +193,15 @@ export class SdkPort implements PaseoPort {
   }
 
   /** Status and labels of one agent, fresh from the daemon (hook events carry no labels). Null when it is gone. */
-  async agentInfo(id: string): Promise<{ id: string; status: string; labels: Record<string, string>; archived: boolean; updatedAt: string | null } | null> {
+  async agentInfo(id: string): Promise<{ id: string; status: string; labels: Record<string, string>; archived: boolean; updatedAt: string | null; cwd: string | null } | null> {
     const r = await this.api.agents.ref(id).refresh();
     const a = r?.agent;
-    return a ? { id: a.id, status: a.status, labels: a.labels, archived: !!a.archivedAt, updatedAt: a.updatedAt } : null;
+    return a ? { id: a.id, status: a.status, labels: a.labels, archived: !!a.archivedAt, updatedAt: a.updatedAt, cwd: a.cwd || null } : null;
+  }
+
+  /** Answer an open permission request (the permission hook's auto-approve). */
+  async respondToPermission(id: string, requestId: string, response: { behavior: "allow" } | { behavior: "deny"; message?: string }): Promise<void> {
+    await this.api.agents.ref(id).respondToPermission({ requestId, response });
   }
 
   /** The newest timeline items (oldest first), for the gate's sweep. */

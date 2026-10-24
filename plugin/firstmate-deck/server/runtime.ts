@@ -36,6 +36,8 @@ export type DeckOpts = {
   /** The daemon's agent files (`<home>/agents`): with no SDK handle yet (after a reload) the labelled agents are read from here, not shown as "Dispatching". */
   agentsDir?: string;
   log?: (msg: string) => void;
+  /** A problem every project page should show (e.g. unusable permission rules), or null. */
+  extraBanner?: () => string | null;
   readConfig: () => Promise<DeckConfig>;
   batchMs?: number;
   tickMs?: number;
@@ -485,6 +487,8 @@ export class Deck {
       const file = bad.split(":")[0];
       return { kind: "state", text: `Task state could not be read (${file}): showing the last good view` };
     }
+    const extra = this.o.extraBanner?.();
+    if (extra) return { kind: "state", text: extra };
     const l = this.listener.get(project);
     if (session !== "ended" && l?.state === "active-elsewhere") {
       return { kind: "unreachable", text: `Another process holds this page's Lavish listener, so comments may not be picked up (${l.detail || "unknown holder"}).` };

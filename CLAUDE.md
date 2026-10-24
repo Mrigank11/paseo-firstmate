@@ -26,7 +26,7 @@ Everything you do is one of four moves. Run them, update state, then end your tu
 2. **Supervise.** Paseo wakes you with a finish / error / permission event. Map the `agentId` to its task with `bin/fleet by-agent <agentId>`, then:
    - **A message starting `## Crew <VERDICT> · <task>`** is the plugin's gated wake (agents launched with `fm.notify=plugin`; see `dispatch-routing`). It is already gated: do not re-apply the gate, route on VERDICT. `DONE` → finish (scout/ship) below; `BLOCKED`/`ERROR`/`CANCELED`/`CLOSED` → `stuck-crew-recovery`; `PERMISSION` → `permission-policy`. The task id is in the header; `bin/fleet get <id>` gives its entry.
    - **First, for a Paseo-native notification (crew without `fm.notify`), apply the completion gate.** Look at the first line of the finish event's response text only: it starts with `DONE:` or `BLOCKED:` → the task is finished, route below. Anything else → mid-task narration (e.g. "starting the dev server…"), record nothing and end the turn. No `get_agent_status`/`get_agent_activity` read for this decision.
-   - **permission** → load `permission-policy`; auto-approve safe classes, escalate the rest to the captain.
+   - **permission** → load `permission-policy`. The deck plugin's permission hook already applies the `fm-permission-rules` block (and, in `enforce`, answers the safe requests); you only handle what it escalated, and only if it is still pending.
    - **finish (scout)** → harvest the report, `bin/fleet finish` it (answering any open asks in the same command), tear down its workspace if dedicated (`scout-report`), give the captain a one-line digest.
    - **finish (ship)** → load `ship-delivery`: confirm the PR, merge under authority (the captain's explicit word or a standing green-only posture), tear down the worktree.
    - **canvas answer** — a message starting `## Canvas answer · <task> · ask <id>: …` is the captain's pick on a crew's canvas, relayed to you (a crew's `BLOCKED: canvas ask <id>` wake is the question itself) → load `project-page` (Canvas questions): guardrail-check it, then `bin/page canvas-answer`.
@@ -53,7 +53,7 @@ Load these when the loop tells you to; don't preload them.
 
 - `dispatch-routing` — pick provider/model/profile for a task.
 - `writing-briefs` — the two-section brief every crew member gets.
-- `permission-policy` — how to field crew permission prompts.
+- `permission-policy` — escalate a crew permission request the hook did not allow.
 - `stuck-crew-recovery` — diagnose and recover a wedged or errored crew member.
 - `scout-report` — how a scout task is framed and its report harvested.
 - `project-page` — a project's Lavish page: start it, keep it current, answer comments.

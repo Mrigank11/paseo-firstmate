@@ -66,6 +66,16 @@ export function messageVerdict(items: readonly GateItem[]): { verdict: "DONE" | 
   return { verdict: "NARRATION", line, ...(late ? { nearMiss: late } : {}) };
 }
 
+/** The agent's parent while it is live, else the project's claimed first mate, else the checkout-wide claim. */
+export async function wakeTarget(ports: PortSelector, root: string, parentId: string | null, project: string | undefined): Promise<string | null> {
+  const live = await ports.current().listAgents();
+  if (parentId && live.some((a) => a.id === parentId && !a.archived)) return parentId;
+  for (const c of [project ? projectClaimedId(root, project) : null, claimedId(root)]) {
+    if (c && live.some((a) => a.id === c && !a.archived)) return c;
+  }
+  return null;
+}
+
 export type GateAgentInfo = { id: string; status: string; labels: Record<string, string>; archived: boolean; updatedAt: string | null };
 
 export type TurnEndedEvent = {
@@ -253,16 +263,8 @@ export class Gate {
     this.append({ ...rec, acted: false, result: "failed", note: lastErr.slice(0, 200) });
   }
 
-  /** The agent's parent while it is live, else the project's claimed first mate, else the checkout-wide claim. */
-  private async target(parentId: string | null, project: string | undefined): Promise<string | null> {
-    const port = this.o.ports.current();
-    const live = await port.listAgents();
-    if (parentId && live.some((a) => a.id === parentId && !a.archived)) return parentId;
-    const root = this.root();
-    for (const c of [project ? projectClaimedId(root, project) : null, claimedId(root)]) {
-      if (c && live.some((a) => a.id === c && !a.archived)) return c;
-    }
-    return null;
+  private target(parentId: string | null, project: string | undefined): Promise<string | null> {
+    return wakeTarget(this.o.ports, this.root(), parentId, project);
   }
 
   // ---------- startup sweep ----------

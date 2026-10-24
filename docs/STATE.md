@@ -106,6 +106,16 @@ The deck plugin's `agent.turn_ended` hook (`plugin/firstmate-deck/server/gate.ts
 - Sweep: at plugin start-up (no SDK handle needed) a CLI pass covers plugin-notified agents of the registry's active tasks (`paseo ls --label fm.task=<id>` / `fm.notify=plugin`, `inspect`, `logs`; the final message is approximated from the log, last `DONE:`/`BLOCKED:` line of the trailing block). Once an SDK handle exists (first hook or RPC), and every 10 min, the exact pass runs over all idle `fm.task` agents updated in the last 6 h. Both skip what the log already holds, so a finish is never woken twice.
 - Rollback: delete the `notify: plugin` line (new dispatches use Paseo notifications again; agents already launched with `notifyOnFinish:false` stay plugin-only, so heartbeat `bin/fleet stages` still catches them).
 
+## The permission hook (`state/permission-log.jsonl`)
+
+The deck plugin's `agent.permission_requested` hook (`plugin/firstmate-deck/server/permission.ts`, rules in `server/rules.ts`) classifies the permission requests of agents carrying `fm.task` against the ```` ```json fm-permission-rules ```` block in `state/decisions.md` (re-read when the file's mtime moves). Plugin-owned and append-only. One JSON line per request: `{at, agentId, task, requestId, kind, name, summary, decision, rule, mode, acted, result, note}`, deduped on (agent, request) across restarts.
+
+- Rules: `read` (read/search anywhere), `writeWithin` (edit/write only inside `$WORKTREE`, the agent's cwd under the Paseo worktrees root, or `$ROOT/state/tasks/$TASK`; symlinks resolved), `shell.allow` regexes with `shell.denyChars` (plus any newline, `--output`/`--exec`) refused, `fetchHosts` (exact hosts), `allowKinds` (`question`/`plan`/`mode` always need a person). Optional `worktreeRoots` overrides where a worktree may live (default `<paseo home>/worktrees` and `~/.paseo/worktrees`).
+- `decision`: `would-allow` (shadow), `allow` (enforce; `result: responded`, or `respond-failed` with the request left pending), `escalate`. **It never denies.** A missing or unparsable block escalates everything, `mode` counts as shadow, and every project page shows a banner.
+- `mode: shadow` (the default) only logs. `mode: enforce` answers allowed requests through `respondToPermission({behavior:"allow"})` (verified on Paseo 0.12.0).
+- Escalation: for an agent with `fm.notify=plugin` **and** `notify: plugin` in decisions.md the first mate is woken with `## Crew PERMISSION · <task>` (the request, the rule that failed, agent/request ids; same recipient rules as the gate, `result: woke`); otherwise `result: no-wake` and Paseo's own permission notification is the only wake.
+- Rollback: `mode: shadow`.
+
 ## Reading on a wake (token budget)
 
 - Map the event's `agentId` to its task with `bin/fleet by-agent <agentId>` (reads the agent's `fm.task` label, then the archive), then read that ONE entry (`bin/fleet get <id>`) plus its brief. That is the whole state read for most wakes.
