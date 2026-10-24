@@ -13,11 +13,22 @@ export type Rules = {
   read: boolean;
   /** Path templates (`$WORKTREE`, `$ROOT`, `$TASK`) a write or edit may land in. */
   writeWithin: string[];
-  shell: { allow: RegExp[]; denyChars: string };
+  shell: {
+    allow: RegExp[];
+    /** Extra characters refused anywhere in a command (the parser already refuses expansion and subshell syntax). */
+    denyChars: string;
+    /** Transparent wrappers stripped from the head of a command before matching: regexes over the space-joined words. */
+    wrappers: RegExp[];
+    /** Leading `NAME=value` assignments whose NAME matches are never stripped: the command escalates. */
+    envDeny: RegExp;
+  };
   fetchHosts: string[];
   /** Where a crew agent's cwd counts as its own worktree (default `<paseo home>/worktrees`). */
   worktreeRoots?: string[];
 };
+
+export const DEFAULT_WRAPPERS = ["^rtk ", "^time ", "^command ", "^nohup ", "^nice( -n -?\\d+)? ", "^timeout( -[-\\w=]+)* \\d+[smhd]? ", "^env( -i)? "];
+export const DEFAULT_ENV_DENY = "^(PATH|LD_\\w*|DYLD_\\w*|NODE_\\w*|GIT_\\w*|BASH_ENV|ENV|IFS|SHELL|PAGER|EDITOR|VISUAL|PYTHON\\w*|RUBY\\w*|PERL\\w*|HOME)$";
 
 export type RulesState = { rules: Rules; error: null } | { rules: null; error: string };
 
@@ -61,7 +72,12 @@ export function parseRules(text: string): RulesState {
         allowKinds: strings(j.allowKinds, "allowKinds"),
         read: j.read === true,
         writeWithin: strings(j.writeWithin, "writeWithin"),
-        shell: { allow, denyChars },
+        shell: {
+          allow,
+          denyChars,
+          wrappers: strings(shell.wrappers ?? DEFAULT_WRAPPERS, "shell.wrappers").map((r) => new RegExp(r)),
+          envDeny: new RegExp(typeof shell.envDeny === "string" ? shell.envDeny : DEFAULT_ENV_DENY),
+        },
         fetchHosts: strings(j.fetchHosts, "fetchHosts"),
         ...(j.worktreeRoots !== undefined ? { worktreeRoots: strings(j.worktreeRoots, "worktreeRoots") } : {}),
       },
@@ -133,7 +149,189 @@ function expand(t: string, ctx: RuleContext, worktree: string | null): string | 
 }
 
 // Flags that make an otherwise read-only allowlisted command write or run something.
-const DANGEROUS_FLAG = /(^|\s)--(output|exec|ext-diff|open-files-in-pager)(=|\s|$)/;
+const DANGEROUS_FLAG = /(^|\s)--(output|exec|ext-diff|open-files-in-pager|pre|pre-glob)(=|\s|$)/;
+
+
+// ---------- shell commands ----------
+
+type Redirect = { op: "write"; target: string };
+type Segment = { words: string[]; redirects: Redirect[] };
+
+/**
+ * A deliberately small shell reader, not a shell. It splits a command into segments at `&& || ; |` and each segment into
+ * words (quotes removed), and collects output redirections. Anything it cannot read with certainty returns an error, which
+ * escalates: expansion (`$`, backticks), subshells and groups (`(`), a lone `&`, here-docs, comments, newlines, unterminated
+ * quotes. Input redirections are reads and are dropped.
+ */
+export function splitShell(cmd: string): { segments: Segment[] } | { error: string } {
+  const segments: Segment[] = [];
+  let words: string[] = [];
+  let redirects: Redirect[] = [];
+  let cur: string | null = null; // the word being built (null: between words)
+  let pending: "write" | "read" | null = null; // a redirection waiting for its target word
+  const endWord = (): string | null => {
+    if (cur === null) return null;
+    const w = cur;
+    cur = null;
+    if (pending === "write") redirects.push({ op: "write", target: w });
+    else if (pending !== "read") words.push(w);
+    pending = null;
+    return null;
+  };
+  const endSegment = (): string | null => {
+    endWord();
+    if (pending) return "redirection without a target";
+    if (!words.length && !redirects.length) return "empty command around an operator";
+    segments.push({ words, redirects });
+    words = [];
+    redirects = [];
+    return null;
+  };
+  let i = 0;
+  const n = cmd.length;
+  while (i < n) {
+    const c = cmd[i];
+    if (c === "'") {
+      const j = cmd.indexOf("'", i + 1);
+      if (j < 0) return { error: "unterminated quote" };
+      cur = (cur ?? "") + cmd.slice(i + 1, j);
+      i = j + 1;
+    } else if (c === '"') {
+      let j = i + 1;
+      let buf = "";
+      for (; j < n && cmd[j] !== '"'; j++) {
+        if (cmd[j] === "$" || cmd[j] === "`") return { error: "expansion inside double quotes" };
+        if (cmd[j] === "\\" && j + 1 < n && /["\\]/.test(cmd[j + 1])) j++;
+        buf += cmd[j];
+      }
+      if (j >= n) return { error: "unterminated quote" };
+      cur = (cur ?? "") + buf;
+      i = j + 1;
+    } else if (c === "\\") {
+      if (i + 1 >= n) return { error: "trailing backslash" };
+      cur = (cur ?? "") + cmd[i + 1];
+      i += 2;
+    } else if (c === " " || c === "\t") {
+      endWord();
+      i++;
+    } else if (c === "$" || c === "`" || c === "(" || c === ")") {
+      return { error: `unsupported shell syntax ${JSON.stringify(c)}` };
+    } else if (c === "#" && cur === null) {
+      return { error: "comment" };
+    } else if (c === "&") {
+      if (cmd[i + 1] === "&") { const e = endSegment(); if (e) return { error: e }; i += 2; }
+      else if (cmd[i + 1] === ">") return { error: "&> redirection" };
+      else return { error: "background job" };
+    } else if (c === "|") {
+      const e = endSegment();
+      if (e) return { error: e };
+      i += cmd[i + 1] === "|" ? 2 : 1;
+      if (cmd[i] === "&") return { error: "|& pipe" };
+    } else if (c === ";") {
+      const e = endSegment();
+      if (e) return { error: e };
+      i++;
+    } else if (c === ">" || c === "<") {
+      // an fd number glued to the operator (`2>`) belongs to it, not to the words
+      if (cur !== null && /^\d$/.test(cur) && !pending) cur = null;
+      else endWord();
+      if (pending) return { error: "redirection without a target" };
+      if (c === "<") {
+        if (cmd[i + 1] === "<" || cmd[i + 1] === "(" || cmd[i + 1] === ">") return { error: "here-doc or process substitution" };
+        pending = "read";
+        i++;
+      } else {
+        if (cmd[i + 1] === "(") return { error: "process substitution" };
+        if (cmd[i + 1] === "&") {
+          // `2>&1`, `>&2`: a duplicate of an open fd, not a file
+          const m = /^&(\d|-)(?=$|[\s;|&])/.exec(cmd.slice(i + 1));
+          if (!m) return { error: "unsupported >& redirection" };
+          i += 1 + m[0].length;
+          continue;
+        }
+        if (cmd[i + 1] === ">") i++;
+        if (cmd[i + 1] === "|") i++; // `>|`
+        pending = "write";
+        i++;
+      }
+    } else {
+      cur = (cur ?? "") + c;
+      i++;
+    }
+  }
+  const e = endSegment();
+  if (e) return { error: e };
+  return { segments };
+}
+
+const quoteWord = (w: string): string => (/[\s'"\\*?[\]{}~]/.test(w) || w === "" ? `'${w.replaceAll("'", "'\\''")}'` : w);
+
+/** Strip leading env assignments and transparent wrappers; null when an assignment is denied or nothing is left. */
+export function normalizeSegment(words: readonly string[], sh: Rules["shell"]): { text: string } | { error: string } {
+  let w = [...words];
+  for (let guard = 0; guard < 8; guard++) {
+    let moved = false;
+    while (w.length && /^[A-Za-z_]\w*=/.test(w[0])) {
+      const name = w[0].slice(0, w[0].indexOf("="));
+      if (sh.envDeny.test(name)) return { error: `env assignment ${name} is not allowed` };
+      w = w.slice(1);
+      moved = true;
+    }
+    if (!w.length) break;
+    const joined = w.map(quoteWord).join(" ");
+    for (const re of sh.wrappers) {
+      const m = re.exec(joined);
+      if (!m || m.index !== 0 || !m[0].length) continue;
+      // the match must end on a word boundary: count whole words consumed
+      let used = 0, len = 0;
+      while (used < w.length && len < m[0].length) { len += quoteWord(w[used]).length + 1; used++; }
+      if (len !== m[0].length) continue;
+      w = w.slice(used);
+      moved = true;
+      break;
+    }
+    if (!moved) break;
+  }
+  if (!w.length) return { error: "nothing to run after wrappers" };
+  return { text: w.map(quoteWord).join(" ") };
+}
+
+function writeAllowed(rules: Rules, ctx: RuleContext, raw: string): { ok: boolean; target: string } {
+  const wt = worktreeOf(rules, ctx);
+  const target = realPathLoose(isAbsolute(raw) ? raw : resolve(ctx.cwd ?? ".", raw));
+  for (const t of rules.writeWithin) {
+    const dir = expand(t, ctx, wt);
+    if (dir && inside(target, realPathLoose(dir))) return { ok: true, target };
+  }
+  return { ok: false, target };
+}
+
+function classifyShell(rules: Rules, cmd: string, ctx: RuleContext): Classification {
+  const esc = (why: string): Classification => ({ decision: "escalate", rule: `shell: ${why}` });
+  if (!cmd.trim()) return esc("empty command");
+  if (/[\n\r]/.test(cmd)) return esc("newline in command");
+  const bad = [...rules.shell.denyChars].find((c) => cmd.includes(c));
+  if (bad) return esc(`contains ${JSON.stringify(bad)}`);
+  const parsed = splitShell(cmd);
+  if ("error" in parsed) return esc(`unparseable (${parsed.error})`);
+  const hits: string[] = [];
+  for (const seg of parsed.segments) {
+    for (const r of seg.redirects) {
+      if (/[*?[\]{}]/.test(r.target) || r.target.startsWith("~") || r.target === "") return esc(`redirect target ${JSON.stringify(r.target)} is not a plain path`);
+      if (r.target === "/dev/null") continue;
+      const w = writeAllowed(rules, ctx, r.target);
+      if (!w.ok) return esc(`redirect to ${w.target} outside writeWithin`);
+    }
+    if (!seg.words.length) return esc("redirection without a command");
+    const n = normalizeSegment(seg.words, rules.shell);
+    if ("error" in n) return esc(n.error);
+    if (DANGEROUS_FLAG.test(n.text)) return esc(`write/exec flag in ${JSON.stringify(n.text)}`);
+    const hit = rules.shell.allow.find((r) => r.test(n.text));
+    if (!hit) return esc(`${JSON.stringify(n.text)} is not on the allowlist`);
+    hits.push(hit.source);
+  }
+  return { decision: "allow", rule: `shell:${[...new Set(hits)].join(" + ")}` };
+}
 
 /** Decide one request. `detail`-less or unknown-shaped requests always escalate. */
 export function classify(rules: Rules, req: PermissionRequestLike, ctx: RuleContext): Classification {
@@ -148,24 +346,13 @@ export function classify(rules: Rules, req: PermissionRequestLike, ctx: RuleCont
     case "write": {
       const raw = typeof d.filePath === "string" ? d.filePath : "";
       if (!raw) return { decision: "escalate", rule: `${d.type}: no filePath` };
-      const wt = worktreeOf(rules, ctx);
-      const target = realPathLoose(isAbsolute(raw) ? raw : resolve(ctx.cwd ?? ".", raw));
-      for (const t of rules.writeWithin) {
-        const dir = expand(t, ctx, wt);
-        if (dir && inside(target, realPathLoose(dir))) return { decision: "allow", rule: `${d.type} within ${t}` };
-      }
+      const w = writeAllowed(rules, ctx, raw);
+      if (w.ok) return { decision: "allow", rule: `${d.type} within writeWithin` };
+      const target = w.target;
       return { decision: "escalate", rule: `${d.type} outside writeWithin (${target})` };
     }
-    case "shell": {
-      const cmd = typeof d.command === "string" ? d.command : "";
-      if (!cmd.trim()) return { decision: "escalate", rule: "shell: empty command" };
-      if (/[\n\r]/.test(cmd)) return { decision: "escalate", rule: "shell: newline in command" };
-      const bad = [...rules.shell.denyChars].find((c) => cmd.includes(c));
-      if (bad) return { decision: "escalate", rule: `shell: contains ${JSON.stringify(bad)}` };
-      if (DANGEROUS_FLAG.test(cmd)) return { decision: "escalate", rule: "shell: write/exec flag" };
-      const hit = rules.shell.allow.find((r) => r.test(cmd));
-      return hit ? { decision: "allow", rule: `shell:${hit.source}` } : { decision: "escalate", rule: "shell: not on the allowlist" };
-    }
+    case "shell":
+      return classifyShell(rules, typeof d.command === "string" ? d.command : "", ctx);
     case "fetch": {
       let host = "";
       try { host = new URL(String(d.url)).hostname; } catch {}

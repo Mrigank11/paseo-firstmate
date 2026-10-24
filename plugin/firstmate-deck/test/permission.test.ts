@@ -10,7 +10,7 @@ import { FakeWorld, fakePaseo } from "./fake-paseo.ts";
 
 const RULES = (mode: string, extra: object = {}) => "# d\n\n- notify: plugin\n\n```json fm-permission-rules\n" + JSON.stringify({
   mode, allowKinds: ["tool"], read: true, writeWithin: ["$WORKTREE", "$ROOT/state/tasks/$TASK"],
-  shell: { allow: ["^git (status|log|diff|show)( |$)", "^(ls|cat) "], denyChars: ";&|><`$()" }, fetchHosts: [], ...extra,
+  shell: { allow: ["^git (status|log|diff|show)( |$)", "^(ls|cat)( |$)"], denyChars: ";&|><`$()" }, fetchHosts: [], ...extra,
 }) + "\n```\n";
 const CREW = { "fm.task": "t1", "fm.project": "p", "fm.shape": "ship", "fm.notify": "plugin" };
 

@@ -8,7 +8,7 @@ import { classify, parseRules, RulesFile, summarize, type Rules } from "../serve
 const BLOCK = (o: object) => "# decisions\n\n```json fm-permission-rules\n" + JSON.stringify(o, null, 2) + "\n```\n";
 const STARTER = {
   mode: "shadow", allowKinds: ["tool"], read: true, writeWithin: ["$WORKTREE", "$ROOT/state/tasks/$TASK"],
-  shell: { allow: ["^git (status|log|diff|show)( |$)", "^(ls|cat|head|tail|wc|rg|grep) ", "^(npm|pnpm) (test|run [\\w:-]+|ci|install)$", "^node --test ", "^npx tsc --noEmit$"], denyChars: ";&|><`$()" },
+  shell: { allow: ["^git (status|log|diff|show)( |$)", "^(ls|cat|head|tail|wc|rg|grep)( |$)", "^(npm|pnpm) (test|run [\\w:-]+|ci|install)$", "^node --test ", "^npx tsc --noEmit$"] },
   fetchHosts: [],
 };
 const rules = (over: object = {}): Rules => { const s = parseRules(BLOCK({ ...STARTER, ...over })); assert.equal(s.error, null); return s.rules!; };
@@ -81,12 +81,73 @@ test("a task id that is not a plain slug never expands $TASK", () => {
   assert.equal(classify(r, tool({ type: "write", filePath: join(e.root, "state", "tasks", "..", "fleet.json") }), { ...e.ctx, cwd: null, task: ".." }).decision, "escalate");
 });
 
-test("shell: the allowlist, with metacharacters, newlines and write flags refused", () => {
+test("shell: the allowlist; unlisted commands, write flags and newlines escalate", () => {
   const e = env();
   const r = rules();
   const sh = (command: string) => classify(r, tool({ type: "shell", command }), e.ctx).decision;
-  for (const c of ["git status", "git diff --stat", "ls -la src", "cat package.json", "npm test", "npm run build:all", "node --test test/a.test.ts", "npx tsc --noEmit", "rg -n foo src"]) assert.equal(sh(c), "allow", c);
-  for (const c of ["git status; rm -rf /", "ls | sh", "cat a > b", "cat $(whoami)", "ls `id`", "git status && x", "git push", "rm -rf x", "curl http://x", "npm publish", "npm run build -- --x", "git diff --output=/tmp/x", "ls\nrm x", "", "git statusx"]) assert.equal(sh(c), "escalate", JSON.stringify(c));
+  for (const c of ["git status", "git diff --stat", "ls -la src", "cat package.json", "npm test", "npm run build:all", "node --test test/a.test.ts", "npx tsc --noEmit", "rg -n foo src", "rg 'a b' src"]) assert.equal(sh(c), "allow", c);
+  for (const c of ["git push", "rm -rf x", "curl http://x", "npm publish", "npm run build -- --x", "git diff --output=/tmp/x", "rg --pre ./evil x", "ls\nrm x", "", "   ", "git statusx", "sh -c 'ls'", "bash script.sh"]) assert.equal(sh(c), "escalate", JSON.stringify(c));
+});
+
+test("shell: transparent wrappers and env assignments are stripped before matching", () => {
+  const e = env();
+  const r = rules();
+  const sh = (command: string) => classify(r, tool({ type: "shell", command }), e.ctx);
+  for (const c of ["rtk ls -la .", "rtk git status", "time npm test", "command ls src", "nice -n 5 git log", "timeout 30 npm test", "timeout -k5 10s git diff", "env ls", "env -i ls", "FOO=bar ls src", "CI=1 FOO=bar rtk git status", "rtk time timeout 5 ls", "nohup ls"]) assert.equal(sh(c).decision, "allow", c);
+  // a wrapper never makes a command safe: what is left must itself be allowed
+  for (const c of ["rtk sh -c 'ls'", "rtk bash -c ls", "timeout 5 curl http://x", "time rm -rf x", "nice -n 5 npm publish", "env sh", "rtk", "timeout 5", "env", "FOO=bar", "rtk rtk", "xargs ls", "env -S 'ls'"]) assert.equal(sh(c).decision, "escalate", c);
+  // env assignments that change what runs
+  for (const c of ["PATH=/tmp/x ls", "LD_PRELOAD=/tmp/x.so ls", "GIT_EXTERNAL_DIFF=/tmp/x git diff", "NODE_OPTIONS=--require=/tmp/x npm test", "FOO=bar PATH=/x ls", "HOME=/tmp ls"]) assert.equal(sh(c).decision, "escalate", c);
+  assert.match(sh("rtk ls .").rule, /^shell:/);
+});
+
+test("shell: wrappers are config, not code", () => {
+  const e = env();
+  const sh = (r: Rules, command: string) => classify(r, tool({ type: "shell", command }), e.ctx).decision;
+  assert.equal(sh(rules(), "mywrap ls"), "escalate");
+  assert.equal(sh(rules({ shell: { ...STARTER.shell, wrappers: ["^mywrap "] } }), "mywrap ls"), "allow");
+  assert.equal(sh(rules({ shell: { ...STARTER.shell, wrappers: ["^mywrap "] } }), "rtk ls"), "escalate"); // a configured list replaces the defaults
+  assert.equal(sh(rules({ shell: { ...STARTER.shell, envDeny: "^FOO$" } }), "PATH=/x ls"), "allow");
+  assert.equal(sh(rules({ shell: { ...STARTER.shell, envDeny: "^FOO$" } }), "FOO=1 ls"), "escalate");
+  // a regex that cuts a word in half does not strip half a word
+  assert.equal(sh(rules({ shell: { ...STARTER.shell, wrappers: ["^rt"] } }), "rtk ls"), "escalate");
+});
+
+test("shell: compound commands need every part allowed", () => {
+  const e = env();
+  const r = rules();
+  const sh = (command: string) => classify(r, tool({ type: "shell", command }), e.ctx).decision;
+  for (const c of ["git status && git diff", "ls; ls src", "cat a | rg x", "rtk git log || rtk git status", "ls src | head -5 | wc -l", "cd_not_a_thing_but_ls; ls".replace("cd_not_a_thing_but_ls; ", "")]) assert.equal(sh(c), "allow", c);
+  for (const c of ["ls; rm -rf /", "git status && git push", "ls | sh", "cat a | tee b", "ls && curl http://x", "ls || rm x", "rtk ls; rtk rm x", "ls;", "; ls", "ls &&", "ls | ", "ls & rm x", "ls |& cat", "cat a | xargs rm"]) assert.equal(sh(c), "escalate", JSON.stringify(c));
+});
+
+test("shell: expansion, subshells and unparseable syntax escalate", () => {
+  const e = env();
+  const r = rules();
+  const sh = (command: string) => classify(r, tool({ type: "shell", command }), e.ctx);
+  for (const c of ["cat $(whoami)", "ls `id`", "ls $HOME", "ls ${HOME}", "(ls)", "ls (x)", "cat <(ls)", "ls \"$(id)\"", "ls \"`id`\"", "echo 'unterminated", "ls \"unterminated", "ls #c", "cat <<EOF", "cat <<< x", "ls &> out", "ls >& out", "ls >(x)", "ls trailing\\", "rtk $(echo ls)", "FOO=$(id) ls", "FOO=`id` ls"]) {
+    assert.equal(sh(c).decision, "escalate", c);
+  }
+  // quoted metacharacters are plain text, not syntax
+  for (const c of ["rg 'a;b' src", "rg \"a|b\" src", "rg 'a && b' .", "rg '$x' .", "rg \"a\\\"b\" .", "ls a\\;b"]) assert.equal(sh(c).decision, "allow", c);
+  assert.match(sh("cat $(whoami)").rule, /unparseable/);
+});
+
+test("shell: redirections are writes and obey writeWithin; reads and fd duplicates are free", () => {
+  const e = env();
+  const r = rules();
+  const sh = (command: string) => classify(r, tool({ type: "shell", command }), e.ctx).decision;
+  for (const c of ["ls > out.txt", "ls >> out.txt", "ls > /dev/null", "ls 2>/dev/null", "ls 2>&1", "rtk npm test 2>&1 | head", "npm test > " + join(e.wt, "log.txt"), "cat < in.txt", "ls >&2", "ls > " + join(e.root, "state", "tasks", "t1", "out.txt")]) assert.equal(sh(c), "allow", c);
+  for (const c of ["ls > /tmp/x", "ls > " + join(e.base, "x"), "ls >> ../x", "ls > " + join(e.root, "state", "fleet.json"), "ls > ~/.bashrc", "ls > *.txt", "ls >", "ls > out.txt > /etc/x", "echo hi > /etc/passwd", "ls 2> /tmp/err", "> /tmp/x"]) assert.equal(sh(c), "escalate", c);
+  symlinkSync(e.base, join(e.wt, "lnk"));
+  assert.equal(sh("ls > lnk/x"), "escalate"); // a symlink out of the worktree
+});
+
+test("shell: a legacy denyChars still refuses those characters anywhere", () => {
+  const e = env();
+  const r = rules({ shell: { ...STARTER.shell, denyChars: "*" } });
+  assert.equal(classify(r, tool({ type: "shell", command: "ls *.ts" }), e.ctx).decision, "escalate");
+  assert.equal(classify(r, tool({ type: "shell", command: "ls src" }), e.ctx).decision, "allow");
 });
 
 test("fetch: only listed hosts", () => {

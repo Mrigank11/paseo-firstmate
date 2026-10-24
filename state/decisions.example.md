@@ -32,6 +32,7 @@ The deck plugin's permission hook classifies crew permission requests against th
 
 - `mode: shadow` only logs to `state/permission-log.jsonl` (`would-allow` / `escalate`). Flip to `enforce` once the log agrees with what you would have clicked; `shadow` is the rollback.
 - If this block is missing or does not parse, every request escalates and every project page shows a banner.
+- Shell commands are normalised before matching: split into `&& || ; |` parts (**every** part must be allowed), leading `NAME=value` assignments stripped (names matching `envDeny` escalate), then the `wrappers` regexes stripped from the head (`rtk ls`, `timeout 5 ls`, `env -i ls` are matched as `ls`; a new wrapper is one more line here). Redirections to files must land inside `writeWithin`. Anything the reader cannot parse with certainty (`$(…)`, backticks, `$VAR`, subshells, here-docs, background `&`, comments, newlines) escalates. A wrapper never makes a command safe: `rtk sh -c …` is `sh -c …`, which is not on the allowlist.
 
 ```json fm-permission-rules
 {
@@ -41,13 +42,22 @@ The deck plugin's permission hook classifies crew permission requests against th
   "writeWithin": ["$WORKTREE", "$ROOT/state/tasks/$TASK"],
   "shell": {
     "allow": [
-      "^git (status|log|diff|show)( |$)",
-      "^(ls|cat|head|tail|wc|rg|grep) ",
-      "^(npm|pnpm) (test|run [\\w:-]+|ci|install)$",
-      "^node --test ",
-      "^npx tsc --noEmit$"
-    ],
-    "denyChars": ";&|><`$()"
+        "^git (status|log|diff|show)( |$)",
+        "^(ls|cat|head|tail|wc|rg|grep)( |$)",
+        "^(npm|pnpm) (test|run [\\w:-]+|ci|install)$",
+        "^node --test ",
+        "^npx tsc --noEmit$"
+      ],
+    "wrappers": [
+        "^rtk ",
+        "^time ",
+        "^command ",
+        "^nohup ",
+        "^nice( -n -?\\d+)? ",
+        "^timeout( -[-\\w=]+)* \\d+[smhd]? ",
+        "^env( -i)? "
+      ],
+    "envDeny": "^(PATH|LD_\\w*|DYLD_\\w*|NODE_\\w*|GIT_\\w*|BASH_ENV|ENV|IFS|SHELL|PAGER|EDITOR|VISUAL|PYTHON\\w*|RUBY\\w*|PERL\\w*|HOME)$"
   },
   "fetchHosts": []
 }
