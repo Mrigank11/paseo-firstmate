@@ -163,6 +163,31 @@ def main():
         plan[ag] = pick
         if len({x[0] for x in lst}) > 1:
             reused[ag] = [x[0] for x in lst]
+    # agents that already carry an fm.task label (read from the daemon home's agent files; the CLI does not show labels)
+    by_task = {}
+    if not a.no_daemon:
+        import glob
+        home = os.environ.get("PASEO_HOME") or os.path.expanduser("~/.paseo")
+        for f in glob.glob(os.path.join(home, "agents", "*", "*.json")):
+            try:
+                rec = read_json(f)
+            except (OSError, ValueError):
+                continue
+            tid = (rec.get("labels") or {}).get("fm.task")
+            if tid and rec.get("id") and not rec.get("archivedAt"):
+                by_task.setdefault(tid, []).append(str(rec["id"]))
+    for ag, (tid, _, _) in plan.items():
+        by_task.setdefault(tid, [])
+        if ag not in by_task[tid]:
+            by_task[tid].append(ag)
+
+    def task_agent_status(tid):
+        sts = [agents[x] for x in by_task.get(tid, []) if x in agents]
+        for want in ("running", "initializing"):
+            if want in sts:
+                return want
+        return sts[-1] if sts else "none"
+
     missing = sorted(ag for ag in plan if agents and ag not in agents) if not a.no_daemon else []
 
     def labels_of(ag):
@@ -193,7 +218,7 @@ def main():
                 seq += 1
                 x["id"] = f"a{seq}"
         if t.get("status") == "needs-captain" and not asks:
-            running = agents.get(t.get("agentId", "")) in ("running", "initializing")
+            running = task_agent_status(t["id"]) in ("running", "initializing")
             if not running:
                 text = (t.get("notes") or t.get("title") or t.get("intent") or "Needs your call").strip().replace("\n", " ")
                 text = (text if len(text) <= 190 else text[:187].rsplit(" ", 1)[0] + "...")
@@ -219,8 +244,7 @@ def main():
     # ---- stage diff
     diff, unknown = [], 0
     for t, n in zip(tasks, new_tasks):
-        ag = t.get("agentId")
-        fact = None if a.no_daemon else (agents.get(ag, "none") if ag else "none")
+        fact = None if a.no_daemon else task_agent_status(t["id"])
         g1, g2 = v1_group(t), v2_group(n, n["state"], fact)
         if g2 == "?":
             unknown += 1
