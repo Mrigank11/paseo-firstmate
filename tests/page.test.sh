@@ -28,6 +28,7 @@ F
 cat >"$T/fakebin/paseo" <<'F'
 #!/usr/bin/env bash
 echo "paseo $*" >>"$FAKE_LOG"
+if [[ "$1" == --home ]]; then shift 2; fi
 case "$1 $2" in
   "plugin ls")
     if [[ -n "${FAKE_PLUGINS_DISABLED:-}" ]]; then echo "error: plugins are disabled" >&2; exit 1; fi
@@ -39,6 +40,12 @@ case "$1 $2" in
   "plugin install") if [[ -n "${FAKE_PLUGINS_DISABLED:-}" ]]; then echo "error: plugins are disabled" >&2; exit 1; fi; : >"$FAKE_INSTALLED" ;;
   "plugin reload") : ;;
   "agent update") : ;;
+  "daemon config")
+    case "$3" in
+      get) if [[ -f "$FAKE_PROFILES" ]]; then jq -n --slurpfile v "$FAKE_PROFILES" '{set:true,value:$v[0]}'; else echo '{"set":false}'; fi ;;
+      set) printf '%s' "$5" >"$FAKE_PROFILES" ;;
+    esac ;;
+  "daemon reload") : ;;
 esac
 if [[ "$1" == inspect ]]; then
   case " ${FAKE_UNKNOWN_AGENTS:-} " in *" $2 "*) echo "agent not found: $2" >&2; exit 1 ;; esac
@@ -52,7 +59,7 @@ cat >"$T/fakebin/npm" <<'F'
 echo "npm $* (cwd $PWD)" >>"$FAKE_LOG"
 F
 chmod +x "$T/fakebin/"*
-export FAKE_INSTALLED="$T/installed" FAKE_LS="$T/ls.json"
+export FAKE_PROFILES="$T/profiles.json" FAKE_INSTALLED="$T/installed" FAKE_LS="$T/ls.json"
 export PATH="$T/fakebin:$PATH"
 
 # A stand-in for the plugin: once bin/page has reset a page to listener=pending, answer like the real plugin would.
@@ -484,6 +491,21 @@ grep -q "already stopped" <<<"$("$P" stop demo 2>&1)" && ok "...and a second sto
 "$P" stop nosuch >/dev/null 2>&1 && bad "stop refuses an unknown project" || ok "stop refuses an unknown project"
 go demo >/dev/null; grep -q "was stopped" "$T/go.err" && ok "start resumes a stopped page, saying so" || bad "start after stop" "$(tail -3 "$T/go.err")"
 eq "$(jq -r .session "$PJD/page.json")" open "...and the page is open again"
+
+# --- profiles ------------------------------------------------------------------------------------------------
+mkdir -p "$T/ph" "$T/fakehome/.paseo"
+"$P" profiles >/dev/null 2>&1 && bad "profiles refuses without PASEO_HOME" || ok "profiles refuses without PASEO_HOME"
+HOME="$T/fakehome" PASEO_HOME="$T/fakehome/.paseo" "$P" profiles --apply >/dev/null 2>&1 && bad "profiles --apply refuses the live home" || ok "profiles --apply refuses the live home"
+HOME="$T/fakehome" PASEO_HOME="$T/fakehome/.paseo" "$P" profiles >/dev/null 2>&1 && bad "profiles dry run refuses the live home" || ok "profiles dry run refuses the live home"
+[[ ! -f "$T/profiles.json" ]] && ok "...and nothing was written" || bad "live refusal wrote"
+out="$(PASEO_HOME="$T/ph" "$P" profiles)"
+grep -q "+ fm-planning: add" <<<"$out" && grep -q "dry run" <<<"$out" && [[ ! -f "$T/profiles.json" ]] && ok "profiles dry run lists the adds and writes nothing" || bad "profiles dry run" "$out"
+echo '[{"id":"mine","name":"Mine","provider":"claude"},{"id":"fm-fallback","name":"old","provider":"claude"}]' >"$T/profiles.json"
+out="$(PASEO_HOME="$T/ph" "$P" profiles --apply)"
+eq "$(jq -r 'map(.id)|join(",")' "$T/profiles.json")" "mine,fm-planning,fm-contributor,fm-fallback" "profiles --apply merges by id and keeps the captain's own"
+eq "$(jq -r '.[]|select(.id=="fm-fallback")|.model' "$T/profiles.json")" claude-sonnet-5-5 "...and replaces a repo profile of the same id"
+grep -q "~ fm-fallback: update" <<<"$out" && ok "...and reports the update" || bad "update report" "$out"
+grep -q "nothing to change" <<<"$(PASEO_HOME="$T/ph" "$P" profiles)" && ok "profiles is idempotent" || bad "profiles idempotent"
 
 echo; echo "page.test.sh: $pass passed, $fail failed"
 [[ $fail -eq 0 ]]

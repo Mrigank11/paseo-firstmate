@@ -42,9 +42,11 @@ The contributor lane is typically the cheap, high-context `opencode/opencode-go/
 
 ## 3. Materializing a lane or profile into create_agent
 
-A lane's raw spec maps straight onto the call: `provider/model` → `provider` (e.g. `claude-work/claude-opus-5-5`), its mode → `settings.modeId`, its thinking option → `settings.thinkingOptionId` (e.g. the planning lane sets `"medium"`), its features → `settings.features`. A Paseo profile — a lane value of `profile:<name>`, or the section-1 fallback — materializes the same way: there is no `profile` param on `mcp__paseo__create_agent`, so map profile `provider`/`model` → `provider`, `modeId` → `settings.modeId`, `thinkingOptionId` → `settings.thinkingOptionId`, `featureValues` → `settings.features`.
+A lane is normally a Paseo profile (`profile:fm-planning`, `profile:fm-contributor`, `profile:fm-fallback`; the repo's `config/paseo-profiles.json` is their source, installed with `bin/page profiles --apply`). Call `mcp__paseo__list_profiles`, find the profile by `id`, and copy its fields: there is no `profile` param on `mcp__paseo__create_agent`, so the profile's `provider` + `model` → `provider` (`<provider>/<model>`, e.g. `claude-work/claude-opus-5-5`), `modeId` → `settings.modeId`, `thinkingOptionId` → `settings.thinkingOptionId`, `featureValues` → `settings.features`. `notes` says when to use it. A lane written as a raw spec (`provider/model · mode · features`) maps the same way. If `list_profiles` does not have the profile, fall back to the raw spec in `decisions.md`, or tell the captain the profiles are not installed.
 
-Given a profile `{ "provider": "claude/opus", "modeId": "build", "thinkingOptionId": "think-hard", "featureValues": { "auto_accept": true } }`, the call becomes:
+**Contributor fallback.** If the `fm-contributor` agent cannot start (the provider errors on launch, e.g. OpenCode too old for `muse-spark-1.3-contributor`), relaunch once with `profile:fm-fallback` and say so in one line to the captain; do not retry the failing profile.
+
+Given a profile `{ "provider": "claude", "model": "opus", "modeId": "build", "thinkingOptionId": "think-hard", "featureValues": { "auto_accept": true } }`, the call becomes:
 
 ```json
 {
