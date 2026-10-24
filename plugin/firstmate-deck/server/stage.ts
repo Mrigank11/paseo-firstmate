@@ -17,6 +17,8 @@ export type StageAgent = {
   pendingPermissions: number;
   /** The agent's `DONE:` / `BLOCKED:` line, when known. */
   final?: string;
+  /** Its `canvas.relay` label names this agent (the first mate), and that agent is gone: a canvas pick would go nowhere. */
+  relayGone?: string;
 };
 
 /** What a badge on the card says. `drift` flags are the registry and Paseo disagreeing: the first mate should act. */
@@ -99,6 +101,7 @@ export function computeStage(task: StageTask, agents: readonly StageAgent[], now
   }
 
   const canvas = !cur || cur.archived ? undefined : opts.canvas;
+  if (cur && !cur.archived && cur.relayGone) extra.push(flag("relay-target-gone", `canvas relay target ${cur.relayGone.slice(0, 8)} is gone: bin/page claim re-points it`, true));
   if (canvas?.verdict === "Disputed") extra.push(flag("canvas-disputed", "canvas: status disputed"));
   if (canvas?.verdict === "Stale") extra.push(flag("canvas-stale", "canvas: out of date"));
   // A curated ask whose canvas question is answered or gone has resolved itself: the first mate only has to close it.
@@ -155,6 +158,7 @@ export type LabeledAgent = {
   updatedAt?: string | null;
   lastActivityAt?: string | null;
   pendingPermissions?: number;
+  relayGone?: string;
 };
 
 /** The agents of one task: the ones Paseo knows by the `fm.task` label. No label, no agent. */
@@ -164,6 +168,6 @@ export function stageAgentsFor(
 ): StageAgent[] {
   return (labeled ?? []).map((a) => ({
     id: a.id, status: a.status, archived: a.archived, createdAt: a.createdAt, lastActivityAt: a.lastActivityAt ?? a.updatedAt,
-    pendingPermissions: a.pendingPermissions ?? 0, final: a.archived ? undefined : view(a.id)?.final,
+    pendingPermissions: a.pendingPermissions ?? 0, final: a.archived ? undefined : view(a.id)?.final, relayGone: a.relayGone,
   }));
 }

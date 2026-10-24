@@ -137,6 +137,8 @@ export class Deck {
 
   /** Paseo agents by the task they carry in their `fm.task` label (archived ones included): what the stage engine reads. */
   private labeled = new Map<string, PortAgent[]>();
+  /** Ids of the live agents, read only while some crew carries a `canvas.relay` label (null = not read). */
+  private relayLive: Set<string> | null = null;
   private labeledKey = "";
   private labeledFlight: { at: number; p: Promise<boolean> } | null = null;
   /** Agents seen on an event that no page tracks: asked about once (a new crew agent), not on every turn of the first mate. */
@@ -434,8 +436,15 @@ export class Deck {
       for (const a of list) { const t = a.labels["fm.task"]; if (t) by.set(t, [...(by.get(t) ?? []), a]); }
       const key = JSON.stringify([...by].sort(([x], [y]) => x.localeCompare(y)).map(([t, as]) => [t, as.map((a) => [a.id, a.status, a.archived, a.createdAt, a.pendingPermissions])]));
       this.labeled = by;
-      const changed = key !== this.labeledKey;
-      this.labeledKey = key;
+      // only worth a second read when some live crew carries a relay label
+      this.relayLive = null;
+      if (list.some((a) => !a.archived && a.labels["canvas.relay"])) {
+        try { this.relayLive = new Set((await (sdk ?? this.ports.current()).listAgents()).map((a) => a.id)); }
+        catch (e) { this.log(`listing live agents for canvas.relay failed: ${(e as Error).message}`); }
+      }
+      const key2 = key + JSON.stringify(this.relayLive ? list.filter((a) => a.labels["canvas.relay"] && !this.relayLive!.has(a.labels["canvas.relay"])).map((a) => a.id).sort() : null);
+      const changed = key2 !== this.labeledKey;
+      this.labeledKey = key2;
       return changed;
     })();
     this.labeledFlight = { at: Date.now(), p };
@@ -444,7 +453,12 @@ export class Deck {
 
   private labeledFor(model: ProjectModel): Record<string, LabeledAgent[]> {
     const out: Record<string, LabeledAgent[]> = {};
-    for (const t of model.tasks) { const as = this.labeled.get(t.id); if (as?.length) out[t.id] = as; }
+    for (const t of model.tasks) {
+      const as = this.labeled.get(t.id);
+      if (!as?.length) continue;
+      // `canvas.relay` names the first mate that dispatched the crew; once that agent is gone, a pick on the canvas has nobody to go to
+      out[t.id] = as.map((a) => { const to = a.labels["canvas.relay"]; return to && this.relayLive && !a.archived && !this.relayLive.has(to) ? { ...a, relayGone: to } : a; });
+    }
     return out;
   }
 
@@ -512,7 +526,7 @@ export class Deck {
 
   private viewsKey(project: string, ids: string[]): string {
     const model = this.lastGood.get(project);
-    return JSON.stringify([ids.map((id) => this.agents.peek(id) ?? null), model ? Object.entries(this.labeledFor(model)).map(([t, as]) => [t, as.map((a) => [a.id, a.status, a.archived, a.pendingPermissions])]) : null]);
+    return JSON.stringify([ids.map((id) => this.agents.peek(id) ?? null), model ? Object.entries(this.labeledFor(model)).map(([t, as]) => [t, as.map((a) => [a.id, a.status, a.archived, a.pendingPermissions, a.relayGone])]) : null]);
   }
 
   /**

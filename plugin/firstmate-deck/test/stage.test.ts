@@ -175,3 +175,11 @@ test("canvas: a curated ask whose canvas question is answered or gone closes its
   const two = stage(task({ asks: [{ ref }, {}] }), [agent()], { canvas: cv([]) });
   assert.deepEqual([two.group, keys(two)], ["you", ["ref-closed"]]);
 });
+
+test("canvas: a crew whose canvas.relay first mate is gone carries the relay-target-gone drift flag (live tasks only)", () => {
+  const s = stage(task(), [agent({ relayGone: "fm-9999999" })]);
+  assert.deepEqual([s.stage, keys(s), s.flags[0].drift], ["Running", ["relay-target-gone"], true]);
+  assert.deepEqual(keys(stage(task(), [agent()])), []);
+  assert.deepEqual(keys(stage(task({ state: "done" }), [agent({ status: "idle", relayGone: "fm-1" })])), [], "a finished task has nothing to relay");
+  assert.deepEqual(keys(stage(task(), [agent({ archived: true, relayGone: "fm-1" })])), ["archived-agent-open-task"], "an archived agent has no canvas to relay: only its own flag");
+});

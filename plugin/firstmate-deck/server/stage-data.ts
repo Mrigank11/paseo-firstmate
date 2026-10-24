@@ -16,7 +16,7 @@ import { loadAllLive, type Task } from "./state.ts";
 import { canvasInput } from "./canvas-view.ts";
 import type { FmSummary } from "./canvas-port.ts";
 
-export type Rec = { id: string; task: string; status: string; archived: boolean; createdAt: string | null; lastActivityAt: string | null; pending: number };
+export type Rec = { id: string; task: string; status: string; archived: boolean; createdAt: string | null; lastActivityAt: string | null; pending: number; labels?: Record<string, string>; relayGone?: string };
 
 
 const home = () => process.env.PASEO_HOME || join(homedir(), ".paseo");
@@ -52,7 +52,9 @@ export function labelledAgents(taskIds: string[]): Rec[] {
       const task = a?.labels?.["fm.task"];
       if (typeof task !== "string" || !task || typeof a.id !== "string") continue;
       const archived = !!a.archivedAt;
+      const relay = a.labels?.["canvas.relay"];
       out.push({
+        labels: a.labels, ...(typeof relay === "string" && relay && !archived && !status.has(relay) ? { relayGone: relay } : {}),
         id: a.id, task, archived, createdAt: a.createdAt ?? null, lastActivityAt: a.lastActivityAt ?? a.updatedAt ?? null,
         status: status.get(a.id) ?? a.lastStatus ?? "unknown", pending: a.requiresAttention && a.attentionReason === "permission" ? 1 : 0,
       });
@@ -61,7 +63,7 @@ export function labelledAgents(taskIds: string[]): Rec[] {
   return out;
 }
 
-const toAgent = (r: Rec): StageAgent => ({ id: r.id, status: r.status, archived: r.archived, createdAt: r.createdAt, lastActivityAt: r.lastActivityAt, pendingPermissions: r.pending });
+const toAgent = (r: Rec): StageAgent => ({ id: r.id, status: r.status, archived: r.archived, createdAt: r.createdAt, lastActivityAt: r.lastActivityAt, pendingPermissions: r.pending, relayGone: r.relayGone });
 
 export type Row = { id: string; project: string | null; state: string; stage: string; group: string; agentId: string | null; flags: Stage["flags"]; note?: string; canvas?: { verdict: string; bluf: string; asks: number } };
 
