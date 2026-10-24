@@ -15,7 +15,7 @@ Named lanes map a task's role to an exact launch config. The first mate infers e
 
 **Lane assignment** (role → lane):
 
-- first mate itself + secondmates → `planning`
+- first mate itself → `planning`
 - judgment work (architecture, ambiguous debugging, design, final review, a scout whose value is a judgment call) → `planning`
 - everything else (most scouts, well-specified ships, fan-out, scraping, bulk edits) → `contributor`  ← **default**
 
@@ -34,10 +34,6 @@ Default posture: auto-approve safe classes, escalate the rest.
 - **Merge posture** (default off): set `auto-merge: green-only` to let the first mate merge a PR once all required checks pass; otherwise every merge waits for your explicit word. A red PR never auto-merges.
 - (e.g. "the sales-infra repo is `gated` on `nix flake check`")
 
-## AFK
-
-- `afk: false` — set true via `/afk`. When active, the digest cadence and start time are recorded here.
-
 ## Preferences
 
-- (e.g. "digest me hourly when I'm AFK, not per-event")
+- (e.g. "always scout before shipping in the payments repo")

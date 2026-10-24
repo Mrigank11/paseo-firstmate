@@ -22,7 +22,7 @@ Re-read `decisions.md` every dispatch rather than trusting a remembered copy —
 
 Lanes are keyed by role; you infer the role (the captain can always override):
 
-- **planning / judgment** — you (the first mate) and any secondmate, plus tasks that need real reasoning: architecture, ambiguous debugging, design, final review, or a scout whose value is a judgment call.
+- **planning / judgment** — you (the first mate), plus tasks that need real reasoning: architecture, ambiguous debugging, design, final review, or a scout whose value is a judgment call.
 - **contributor / execution** — everything else: most scouts, well-specified ship implementations, fan-out research, scraping, bulk edits. This is the default lane.
 
 **Lane × shape guard:** the planning lane runs *plan-only scouts* — a planning-lane agent reads and outputs a plan, never a ship, and never edits code. Implementation is always a *contributor-lane ship*, briefed from that plan. Escalate to a planning-lane scout only when planning genuinely exceeds your own model's reach; otherwise plan in-house and dispatch a cheap ship directly.

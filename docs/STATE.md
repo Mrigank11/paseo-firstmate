@@ -13,8 +13,6 @@ state/
   firstmate.json        # {"agentId","claimedAt"}: the checkout-wide first mate (fallback for pages with no claim.json), written by plain bin/page claim
   # projects/<project>/claim.json  {"agentId","claimedAt"}: that page's own first mate, written by bin/page claim <project> / start
   decisions.md          # captain prefs, routing lanes, permission + merge policy
-  secondmates.md        # phase 3: roster of subordinate first mates (only if any)
-  afk-log.md            # phase 3: running log while the captain is AFK (only if any)
   tasks/
     <id>/
       brief.md          # captain's intent + firstmate spec (see writing-briefs skill)
