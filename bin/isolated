@@ -11,13 +11,15 @@
 #   bin/isolated fleet|page <args>  bin/fleet / bin/page against the isolated state (FIRSTMATE_ROOT + PASEO_HOME set)
 #   bin/isolated env                print the variables to eval for a shell that talks only to the isolated environment
 #
-# Overrides: ISO_HOME (default ~/.paseo-fm-v2), ISO_ROOT (state, default ~/.paseo-fm-v2-root), ISO_PORT (6782),
+# Overrides: ISO_BASE (default /home/mrigank/projects/paseo-isolated), ISO_HOME (default $ISO_BASE/paseo-home), ISO_ROOT (state, default $ISO_BASE/fm-root), ISO_WORK ($ISO_BASE/work), ISO_PORT (6782),
 # ISO_CANVAS_PORT (6791), ISO_LAVISH_PORT (4411), ISO_MARKS_PORT (4412), ISO_HOST (tailnet IP), ISO_CANVAS_DIR (agent-canvas checkout).
 set -euo pipefail
 
 REPO="$(cd "$(dirname "$0")/.." && pwd)"
-ISO_HOME="${ISO_HOME:-$HOME/.paseo-fm-v2}"
-ISO_ROOT="${ISO_ROOT:-$HOME/.paseo-fm-v2-root}"
+ISO_BASE="${ISO_BASE:-/home/mrigank/projects/paseo-isolated}"   # on-disk (~ is tmpfs in sandboxed sessions)
+ISO_HOME="${ISO_HOME:-$ISO_BASE/paseo-home}"
+ISO_ROOT="${ISO_ROOT:-$ISO_BASE/fm-root}"
+ISO_WORK="${ISO_WORK:-$ISO_BASE/work}"   # scratch cwd for demo agents
 ISO_PORT="${ISO_PORT:-6782}"
 ISO_CANVAS_PORT="${ISO_CANVAS_PORT:-6791}"
 ISO_LAVISH_PORT="${ISO_LAVISH_PORT:-4411}"
@@ -40,7 +42,7 @@ export_env() {
 }
 
 write_config() {
-  mkdir -p "$ISO_HOME"
+  mkdir -p "$ISO_HOME" "$ISO_WORK"
   local cfg="$ISO_HOME/config.json"
   [[ -f "$cfg" ]] && return 0
   cat >"$cfg" <<JSON
@@ -65,14 +67,14 @@ seed_state() {
   mkdir -p "$S"
   printf 'LAVISH_AXI_PORT=%s\nLAVISH_AXI_STATE_DIR=%s\n' "$ISO_LAVISH_PORT" "$ISO_ROOT/lavish" >"$S/page.env"
   mkdir -p "$ISO_ROOT/lavish"
-  [[ -f "$S/fleet.json" ]] || echo '{"tasks":[]}' >"$S/fleet.json"
+  [[ -f "$S/fleet.json" ]] || echo '{"version":2,"tasks":[]}' >"$S/fleet.json"
   [[ -f "$S/decisions.md" ]] || cp "$REPO/state/decisions.example.md" "$S/decisions.md"
   local F=("$REPO/bin/fleet") ; export_env
   if ! "${F[@]}" get sample-audit >/dev/null 2>&1; then
-    "${F[@]}" add sample-audit intent="Audit the retry logic in the sync worker" shape=scout status=done project="$PROJECT" title="Audit sync retries" >/dev/null
+    "${F[@]}" add sample-audit intent="Audit the retry logic in the sync worker" shape=scout state=done project="$PROJECT" title="Audit sync retries" >/dev/null
     "${F[@]}" card sample-audit --file <(printf '## Sample audit\n\nThe sync worker retries three times with no backoff. Recommend exponential backoff.\n') >/dev/null
-    "${F[@]}" add sample-queued intent="Add jittered backoff to the sync worker" shape=ship status=queued project="$PROJECT" title="Add backoff to sync" >/dev/null
-    "${F[@]}" add sample-ask intent="Pick the queue library" shape=scout status=needs-captain project="$PROJECT" title="Pick a queue library" >/dev/null
+    "${F[@]}" add sample-queued intent="Add jittered backoff to the sync worker" shape=ship state=queued project="$PROJECT" title="Add backoff to sync" >/dev/null
+    "${F[@]}" add sample-ask intent="Pick the queue library" shape=scout state=active project="$PROJECT" title="Pick a queue library" >/dev/null
     "${F[@]}" ask sample-ask "Which queue library should the sync worker use?" --options "BullMQ|pg-boss|Keep in-process" >/dev/null
   fi
 }
@@ -86,7 +88,7 @@ cmd_up() {
   if ! (ss -ltn 2>/dev/null | grep -q "$ISO_HOST:$ISO_PORT "); then
     ss -ltn 2>/dev/null | grep -qE "[:.]$ISO_PORT " && die "port $ISO_PORT is taken by another process"
     echo "isolated: starting daemon on $ISO_HOST:$ISO_PORT (home $ISO_HOME)"
-    P start >/dev/null
+    (cd "$ISO_HOME" && P start >/dev/null)   # a stable cwd: the daemon builds plugins from it
   fi
   seed_state
   # The plugin must not share the live Lavish (4387, default) or read-marks (4398) ports: set its own in the plugin settings.
@@ -102,7 +104,7 @@ cmd_up() {
   # The page needs a live first-mate agent ON THIS DAEMON to claim it (comments are delivered there): a tiny idle stand-in.
   local fm; fm="$(cat "$ISO_ROOT/fm-agent" 2>/dev/null || true)"
   if [[ -z "$fm" ]] || ! P inspect "$fm" --json >/dev/null 2>&1; then
-    fm="$(P run --no-wait --quiet --provider claude --model claude-sonnet-5-5 --mode bypassPermissions --title "First mate (isolated stand-in)" --cwd "$ISO_ROOT" "Reply with the single word ready, then stop. Do nothing else." | tail -1)"
+    fm="$(P run --no-wait --quiet --provider claude --model claude-sonnet-5-5 --mode bypassPermissions --title "First mate (isolated stand-in)" --cwd "$ISO_WORK" "Reply with the single word ready, then stop. Do nothing else." | tail -1)"
     echo "$fm" >"$ISO_ROOT/fm-agent"
   fi
   PASEO_AGENT_ID="$fm" "$REPO/bin/page" start "$PROJECT" --title "Demo app (isolated)" >/dev/null || echo "isolated: bin/page start reported a problem (bin/isolated page status)" >&2

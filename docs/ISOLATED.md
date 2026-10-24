@@ -4,8 +4,8 @@
 
 | What | Value (override with `ISO_*` env) |
 |---|---|
-| Paseo home | `~/.paseo-fm-v2` |
-| State root (`FIRSTMATE_ROOT`) | `~/.paseo-fm-v2-root` (state in `…/state`) |
+| Paseo home | `/home/mrigank/projects/paseo-isolated/paseo-home` (`ISO_HOME`; base `ISO_BASE`: `~` is tmpfs in sandboxed sessions, `~/projects` is on disk) |
+| State root (`FIRSTMATE_ROOT`) | `…/paseo-isolated/fm-root` (state in `…/state`); demo agents work in `…/paseo-isolated/work` |
 | Daemon + web UI | `http://manjaro.tail2e75.ts.net:6782/` (tailnet `100.101.33.17:6782`) |
 | agent-canvas | port 6791, installed from `/home/mrigank/projects/paseo-plugins/agent-canvas` |
 | Lavish / read-marks | 4411 / 4412 (set in the plugin settings, so the live 4387 / 4398 are not shared) |
