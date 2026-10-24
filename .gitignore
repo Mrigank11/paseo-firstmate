@@ -11,3 +11,4 @@ state/page.env
 dev/
 state/firstmate.json
 state/fleet.json.lock
+.isolated/
