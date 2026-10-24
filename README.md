@@ -49,15 +49,15 @@ Then open the checkout as a Claude Code project, or spawn it as a Paseo agent, a
 
 The first mate handles setup itself (asking before changing anything): it copies `state/decisions.example.md` → `state/decisions.md` (gitignored runtime policy — edit to taste) and sets your **routing lanes** (`planning` vs `contributor`), permission posture, and merge authority. Then it writes `state/tasks/<id>/brief.md` per task, spawns the crew member, records it in `state/fleet.json`, and ends its turn. Paseo wakes it on finish/error/permission — it harvests scout reports, confirms ship PRs, merges only under authority (your explicit word, or a standing `auto-merge: green-only` posture — red PRs never auto-merge), and tears down worktrees.
 
-Try `/bearings` anytime for a one-screen fleet digest, `/afk` before stepping away for batched digests, `/ahoy` when you're back.
+Try `/bearings` anytime for a one-screen fleet digest.
 
 ## Repo map
 
 | Path | What it is |
 | --- | --- |
 | [`CLAUDE.md`](CLAUDE.md) | The captain contract — loaded every turn, small on purpose. Start here. |
-| [`.claude/skills/`](.claude/skills/) | Triggered skills carrying the detail: `dispatch-routing`, `writing-briefs`, `permission-policy`, `stuck-crew-recovery`, `scout-report`, `ship-delivery`, `session-digest`, `afk-mode`, `secondmates`. Loaded on demand, never preloaded. |
-| [`.claude/commands/`](.claude/commands/) | Slash commands: `/bearings`, `/afk`, `/ahoy`. |
+| [`.claude/skills/`](.claude/skills/) | Triggered skills carrying the detail: `dispatch-routing`, `writing-briefs`, `permission-policy`, `stuck-crew-recovery`, `scout-report`, `ship-delivery`, `session-digest`. Loaded on demand, never preloaded. |
+| [`.claude/commands/`](.claude/commands/) | Slash commands: `/bearings`. |
 | [`docs/STATE.md`](docs/STATE.md) | Fleet state format — `fleet.json`, task dirs, restart reconstruction, heartbeat safety net. |
 | [`state/`](state/) | Disk-backed runtime state (gitignored — not source): `fleet.json`, `decisions.md`, `tasks/<id>/brief.md` + `report.md`. The `.example` files are the templates; your live copies stay local. |
 
@@ -67,11 +67,11 @@ A project can have a live page in Lavish: its tasks, what needs the captain, wha
 
 ## Configuration at a glance
 
-Everything the captain can tune lives in `state/decisions.md` (from the example template): routing lanes mapping task roles to exact launch configs, the permission auto-approve/escalate boundary, per-project delivery modes (`direct-PR` / `local-only` / `gated`), the `auto-merge: green-only` posture, AFK cadence, and free-form preferences. The first mate re-reads it on every dispatch and permission wake — edits take effect immediately.
+Everything the captain can tune lives in `state/decisions.md` (from the example template): routing lanes mapping task roles to exact launch configs, the permission auto-approve/escalate boundary, per-project delivery modes (`direct-PR` / `local-only` / `gated`), the `auto-merge: green-only` posture, and free-form preferences. The first mate re-reads it on every dispatch and permission wake — edits take effect immediately.
 
 ## Status
 
-Working today: the first mate dispatches and supervises crew as isolated Paseo agents across both task shapes (scout reports, ship PRs), handles permission prompts against your configured boundary, and confirms ship PRs and merges them under your merge authority before tearing down worktrees. Also in: per-project delivery modes, the `/bearings` fleet digest, `/afk` + `/ahoy` away-mode digests, and subordinate secondmate sub-fleets. Validated end-to-end: a real Paseo agent cold-started from `CLAUDE.md` correctly delegates a scout and drives the fleet. This is an early open-source snapshot, so expect rough edges — issues/PRs describing what broke (with your `fleet.json` task entry and brief) are the most useful contributions.
+Working today: the first mate dispatches and supervises crew as isolated Paseo agents across both task shapes (scout reports, ship PRs), handles permission prompts against your configured boundary, and confirms ship PRs and merges them under your merge authority before tearing down worktrees. Also in: per-project delivery modes, the `/bearings` fleet digest. Validated end-to-end: a real Paseo agent cold-started from `CLAUDE.md` correctly delegates a scout and drives the fleet. This is an early open-source snapshot, so expect rough edges — issues/PRs describing what broke (with your `fleet.json` task entry and brief) are the most useful contributions.
 
 ## License
 

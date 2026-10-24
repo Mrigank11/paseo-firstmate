@@ -10,6 +10,7 @@ export FAKE_LOG="$T/fake.log"
 export FAKE_PLUGIN_STATUS=running
 export PASEO_AGENT_ID=agent-fm-1
 export PAGE_VERIFY_SECS=3 PAGE_INSTALL_WAIT=6
+export STAGE_AGENTS_JSON="$T/no-agents.json"; echo '[{"id":"crew-9","task":"scout-1","status":"running","archived":false,"createdAt":null,"lastActivityAt":null,"pending":0}]' >"$T/no-agents.json"
 unset PASEO_HOME LAVISH_AXI_PORT LAVISH_AXI_STATE_DIR FIRSTMATE_LABEL
 pass=0; fail=0
 ok()  { echo "PASS $1"; pass=$((pass+1)); }
@@ -27,6 +28,7 @@ F
 cat >"$T/fakebin/paseo" <<'F'
 #!/usr/bin/env bash
 echo "paseo $*" >>"$FAKE_LOG"
+if [[ "$1" == --home ]]; then shift 2; fi
 case "$1 $2" in
   "plugin ls")
     if [[ -n "${FAKE_PLUGINS_DISABLED:-}" ]]; then echo "error: plugins are disabled" >&2; exit 1; fi
@@ -38,6 +40,12 @@ case "$1 $2" in
   "plugin install") if [[ -n "${FAKE_PLUGINS_DISABLED:-}" ]]; then echo "error: plugins are disabled" >&2; exit 1; fi; : >"$FAKE_INSTALLED" ;;
   "plugin reload") : ;;
   "agent update") : ;;
+  "daemon config")
+    case "$3" in
+      get) if [[ -f "$FAKE_PROFILES" ]]; then jq -n --slurpfile v "$FAKE_PROFILES" '{set:true,value:$v[0]}'; else echo '{"set":false}'; fi ;;
+      set) printf '%s' "$5" >"$FAKE_PROFILES" ;;
+    esac ;;
+  "daemon reload") : ;;
 esac
 if [[ "$1" == inspect ]]; then
   case " ${FAKE_UNKNOWN_AGENTS:-} " in *" $2 "*) echo "agent not found: $2" >&2; exit 1 ;; esac
@@ -51,7 +59,7 @@ cat >"$T/fakebin/npm" <<'F'
 echo "npm $* (cwd $PWD)" >>"$FAKE_LOG"
 F
 chmod +x "$T/fakebin/"*
-export FAKE_INSTALLED="$T/installed" FAKE_LS="$T/ls.json"
+export FAKE_PROFILES="$T/profiles.json" FAKE_INSTALLED="$T/installed" FAKE_LS="$T/ls.json"
 export PATH="$T/fakebin:$PATH"
 
 # A stand-in for the plugin: once bin/page has reset a page to listener=pending, answer like the real plugin would.
@@ -134,8 +142,15 @@ grep -q "second line" "$FAKE_LOG" && ok "reply - reads stdin" || bad "reply - re
 jq '.lastRender=(now-45|todate) | .banner="First mate unreachable, 1 comment queued" | .listener="ok" | .pluginRoot=$r' --arg r "$T/root" "$PROJ/page.json" >"$PROJ/p.tmp" && mv "$PROJ/p.tmp" "$PROJ/page.json"
 st="$("$P" status)"
 grep -q "^PROJECT" <<<"$st" && ok "status has a header" || bad "status has a header"
-for col in LISTENER BANNER RENDERED "PLUGIN ROOT" UNDELIVERED; do grep -q "$col" <<<"$st" && ok "status column $col" || bad "status column $col" "$st"; done
-grep -E "^demo +[^ ]+ +open +ok +First mate unreachable, 1 comment queued +[0-9]+s ago +$T/root +1 +- +running +http://fake.test:4390/session/abc123" <<<"$st" >/dev/null && ok "status row: session, listener, banner, age, root, undelivered, plugin, url" || bad "status row" "$st"
+for col in LISTENER BANNER RENDERED "PLUGIN ROOT" UNDELIVERED DRIFT; do grep -q "$col" <<<"$st" && ok "status column $col" || bad "status column $col" "$st"; done
+grep -E "^demo +[^ ]+ +open +ok +First mate unreachable, 1 comment queued +[0-9]+s ago +$T/root +1 +0 +- +running +http://fake.test:4390/session/abc123" <<<"$st" >/dev/null && ok "status row: session, listener, banner, age, root, undelivered, plugin, url" || bad "status row" "$st"
+cp "$T/root/state/fleet.json" "$T/fleet.pre-drift" 2>/dev/null || echo '{"version":2,"tasks":[]}' >"$T/fleet.pre-drift"
+echo '{"version":2,"tasks":[{"id":"drifted","intent":"x","shape":"ship","state":"queued","project":"demo","asks":[]}]}' >"$T/root/state/fleet.json"
+echo '[{"id":"ag-d","task":"drifted","status":"running","archived":false,"createdAt":"2026-10-24T10:00:00Z","lastActivityAt":null,"pending":0}]' >"$T/agents-drift.json"
+dst="$(STAGE_AGENTS_JSON="$T/agents-drift.json" "$P" status demo 2>"$T/drift.err")"
+grep -E "^demo .* +1 +- +running" <<<"$dst" >/dev/null && ok "status: DRIFT counts a queued task that has a running agent" || bad "status DRIFT" "$dst"
+grep -q "drift: drifted" "$T/drift.err" && ok "...and names the drifted task on stderr" || bad "drift stderr" "$(cat "$T/drift.err")"
+cp "$T/fleet.pre-drift" "$T/root/state/fleet.json"
 grep -q "^other" <<<"$st" && ok "status lists every project" || bad "status lists every project"
 eq "$("$P" status demo | wc -l)" 2 "status <project> shows one row"
 jq '.pluginRoot="/somewhere/else"' "$PROJ/page.json" >"$PROJ/p.tmp" && mv "$PROJ/p.tmp" "$PROJ/page.json"
@@ -198,7 +213,7 @@ PASEO_AGENT_ID= go refused >/dev/null 2>&1 && bad "start without PASEO_AGENT_ID 
 # ---- crew can never become the first mate (C2) ----
 cp "$T/root/state/fleet.json" "$T/fleet.keep" 2>/dev/null || true
 cat >"$T/root/state/fleet.json" <<'J'
-{"tasks":[{"id":"scout-1","intent":"x","shape":"scout","status":"running","agentId":"crew-9"}]}
+{"version":2,"tasks":[{"id":"scout-1","intent":"x","shape":"scout","state":"active"}]}
 J
 echo '{"id":"old-crew","intent":"x","shape":"ship","status":"done","agentId":"crew-archived"}' >"$T/root/state/fleet-archive.jsonl"
 echo '{"agentId":"agent-fm-1","claimedAt":"2026-10-21T00:00:00Z"}' >"$T/root/state/firstmate.json"
@@ -212,6 +227,21 @@ msg="$(PASEO_AGENT_ID=crew-archived "$P" claim 2>&1)"; rc=$?
 printf '{garbage\n{"id":"old-crew2","agentId":"crew-after-garbage"}\n' >"$T/root/state/fleet-archive.jsonl"
 msg="$(PASEO_AGENT_ID=crew-after-garbage "$P" claim 2>&1)"; rc=$?
 [[ $rc -ne 0 ]] && grep -q "is crew on task old-crew2" <<<"$msg" && ok "...a malformed archive line does not hide later crew" || bad "archive with a bad line" "$msg"
+# ---- claim re-points the open crews' canvas relay ----
+echo '[{"id":"crew-9","task":"scout-1","status":"running","archived":false,"createdAt":null,"lastActivityAt":null,"pending":0,"labels":{"canvas.relay":"agent-fm-1"}},{"id":"crew-8","task":"scout-1","status":"running","archived":false,"createdAt":null,"lastActivityAt":null,"pending":0,"labels":{"canvas.relay":"agent-fm-2"}}]' >"$T/relay-agents.json"
+: >"$FAKE_LOG"
+PASEO_AGENT_ID=agent-fm-2 STAGE_AGENTS_JSON="$T/relay-agents.json" "$P" claim >"$T/relay.out" 2>&1
+grep -q "agent update crew-9 --label canvas.relay=agent-fm-2" "$FAKE_LOG" && ok "claim re-labels an open crew's canvas.relay to the new first mate" || bad "claim relabel" "$(cat "$FAKE_LOG")"
+grep -q "agent update crew-8 --label canvas.relay" "$FAKE_LOG" && bad "...but not a crew that already relays to it" || ok "...but not a crew that already relays to it"
+echo '{"agentId":"agent-fm-1","claimedAt":"2026-10-21T00:00:00Z"}' >"$T/root/state/firstmate.json"
+# Paseo is the source of truth: an agent carrying an fm.task label is crew even when fleet.json never recorded it
+echo '{"version":2,"tasks":[]}' >"$T/root/state/fleet.json"
+echo '[{"id":"crew-labelled","task":"some-task","status":"running","archived":false,"createdAt":null,"lastActivityAt":null,"pending":0}]' >"$T/agents.json"
+msg="$(STAGE_AGENTS_JSON="$T/agents.json" PASEO_AGENT_ID=crew-labelled "$P" claim 2>&1)"; rc=$?
+[[ $rc -ne 0 ]] && grep -q "agent crew-labelled is crew on task some-task" <<<"$msg" && ok "claim refuses an agent labelled fm.task (no fleet.json record)" || bad "claim refuses a labelled agent" "$msg"
+cat >"$T/root/state/fleet.json" <<'J'
+{"version":2,"tasks":[{"id":"scout-1","intent":"x","shape":"scout","state":"active"}]}
+J
 rm -f "$T/root/state/firstmate.json"
 PASEO_AGENT_ID=crew-9 go claimcrew >/dev/null 2>&1 && bad "start by a crew agent with no live claim is refused" || ok "start by a crew agent with no live claim is refused"
 rm -f "$T/root/state/fleet-archive.jsonl"
@@ -284,7 +314,7 @@ eq "$(jq -r .session "$PROJ/page.json")" open "...and reopens it"
 # ---- reply --followup ----
 mkdir -p "$T/root/state"
 cat >"$T/root/state/fleet.json" <<'J'
-{"tasks":[{"id":"pick-db","intent":"x","shape":"scout","status":"needs-captain","project":"demo","asks":[{"text":"A or B?","since":"2026-10-21T09:00:00Z"},{"text":"Flag?","since":"2026-10-21T09:00:00Z"}]},
+{"version":2,"tasks":[{"id":"pick-db","intent":"x","shape":"scout","state":"active","project":"demo","asks":[{"text":"A or B?","since":"2026-10-21T09:00:00Z"},{"text":"Flag?","since":"2026-10-21T09:00:00Z"}]},
 {"id":"other-t","intent":"y","shape":"scout","status":"queued","project":"demo","asks":[{"text":"Q?","since":"2026-10-21T09:00:00Z"}]}]}
 J
 echo '{"id":"c9","at":"2026-10-21T10:00:00Z","project":"demo","target":"t-pick-db#a1","text":"more detail please","prompt":{},"delivered":true,"answered":false}' >"$PROJ/inbox.jsonl"
@@ -306,7 +336,7 @@ eq "$(jq -r '.tasks[0].asks[1] | has("pendingSince")' "$T/root/state/fleet.json"
 
 # ---- reply applies option picks (stable ask ids) ----
 cat >"$T/root/state/fleet.json" <<'J'
-{"tasks":[{"id":"pick","intent":"x","shape":"scout","status":"needs-captain","project":"demo","asks":[
+{"version":2,"tasks":[{"id":"pick","intent":"x","shape":"scout","state":"active","project":"demo","asks":[
  {"id":"a1","text":"DB?","since":"2026-10-21T09:00:00Z","options":["Postgres","SQLite"]},
  {"id":"a2","text":"CI?","since":"2026-10-21T09:00:00Z","options":["Buildkite","Actions"]},
  {"id":"a3","text":"Region?","since":"2026-10-21T09:00:00Z","options":["eu","us"]}]}]}
@@ -323,7 +353,7 @@ grep -q "applied option picks: pick#a2" <<<"$out" && ok "...and reports what it 
 eq "$(jq -r 'select(.id=="k2") | .answered' "$PROJ/inbox.jsonl")" true "--keep-open keeps the ask a3 open but still answers its comment"
 eq "$(jq -r 'select(.id=="k4") | .answered' "$PROJ/inbox.jsonl")" false "an undelivered pick is neither applied nor answered"
 cat >"$T/root/state/fleet.json" <<'J'
-{"tasks":[{"id":"pick","intent":"x","shape":"scout","status":"needs-captain","project":"demo","asks":[
+{"version":2,"tasks":[{"id":"pick","intent":"x","shape":"scout","state":"active","project":"demo","asks":[
  {"id":"a1","text":"DB?","since":"2026-10-21T09:00:00Z","options":["Postgres","SQLite"]}]}]}
 J
 cp "$T/root/state/fleet.json" "$T/fleet.before"
@@ -335,7 +365,7 @@ printf '%s\n' '{"id":"k6","at":"2026-10-21T10:00:00Z","project":"demo","target":
 eq "$rc" 0 "two picks on one ask: the second does not fail the reply"
 eq "$(jq -c '.tasks[0].asks' "$T/root/state/fleet.json")" '[]' "...and the ask is answered once"
 cat >"$T/root/state/fleet.json" <<'J'
-{"tasks":[{"id":"pick","intent":"x","shape":"scout","status":"needs-captain","project":"demo","asks":[{"id":"a1","text":"DB?","since":"2026-10-21T09:00:00Z"},{"id":"a2","text":"CI?","since":"2026-10-21T09:00:00Z"}]}]}
+{"version":2,"tasks":[{"id":"pick","intent":"x","shape":"scout","state":"active","project":"demo","asks":[{"id":"a1","text":"DB?","since":"2026-10-21T09:00:00Z"},{"id":"a2","text":"CI?","since":"2026-10-21T09:00:00Z"}]}]}
 J
 echo '{"id":"k8","at":"2026-10-21T10:00:00Z","project":"demo","target":"t-pick#a1","text":"Picked: A","prompt":{},"delivered":true,"answered":false,"choice":{"task":"pick","ask":"a1","option":"A"}}' >"$PROJ/inbox.jsonl"
 "$P" reply demo "need detail" --followup pick:a1 >/dev/null 2>&1
@@ -374,15 +404,14 @@ jq '.lastRender=(now-5|todate)' "$PROJ/page.json" >"$PROJ/p.tmp" && mv "$PROJ/p.
 
 # ---- status warns about live tasks with no project ----
 cat >"$T/root/state/fleet.json" <<J
-{"tasks":[{"id":"loose-in-repo","intent":"x","shape":"ship","status":"running","workspaceId":"/tmp/some-repo-wt/feat"},
-{"id":"loose-in-repo2","intent":"x","shape":"ship","status":"running","workspaceId":"/tmp/some-repo/sub"},
-{"id":"loose-other","intent":"x","shape":"scout","status":"queued"},
-{"id":"done-loose","intent":"x","shape":"scout","status":"done"},
-{"id":"tagged","intent":"x","shape":"scout","status":"running","project":"demo"}]}
+{"version":2,"tasks":[{"id":"loose-a","intent":"x","shape":"ship","state":"active"},
+{"id":"loose-b","intent":"x","shape":"ship","state":"active"},
+{"id":"loose-other","intent":"x","shape":"scout","state":"queued"},
+{"id":"done-loose","intent":"x","shape":"scout","state":"done"},
+{"id":"tagged","intent":"x","shape":"scout","state":"active","project":"demo"}]}
 J
 w="$("$P" status 2>&1 >/dev/null)"
-grep -q "live task loose-in-repo2 has no project, but its workspace is in project demo's repo (/tmp/some-repo): bin/fleet set loose-in-repo2 project=demo" <<<"$w" && ok "status warns about a project-less task whose workspace is in a project's repo" || bad "status repo warning" "$w"
-grep -q "1 live task has no project while project pages exist (loose-other)\|2 live tasks have no project while project pages exist (loose-in-repo, loose-other)" <<<"$w" && ok "...and counts the other project-less live tasks" || bad "status generic warning" "$w"
+grep -q "3 live tasks have no project while project pages exist (loose-a, loose-b, loose-other)" <<<"$w" && ok "status counts the project-less live tasks" || bad "status generic warning" "$w"
 grep -q "done-loose\|tagged" <<<"$w" && bad "done and tagged tasks are not warned about" || ok "done and tagged tasks are not warned about"
 rm -f "$T/root/state/fleet.json"
 
@@ -462,6 +491,21 @@ grep -q "already stopped" <<<"$("$P" stop demo 2>&1)" && ok "...and a second sto
 "$P" stop nosuch >/dev/null 2>&1 && bad "stop refuses an unknown project" || ok "stop refuses an unknown project"
 go demo >/dev/null; grep -q "was stopped" "$T/go.err" && ok "start resumes a stopped page, saying so" || bad "start after stop" "$(tail -3 "$T/go.err")"
 eq "$(jq -r .session "$PJD/page.json")" open "...and the page is open again"
+
+# --- profiles ------------------------------------------------------------------------------------------------
+mkdir -p "$T/ph" "$T/fakehome/.paseo"
+"$P" profiles >/dev/null 2>&1 && bad "profiles refuses without PASEO_HOME" || ok "profiles refuses without PASEO_HOME"
+HOME="$T/fakehome" PASEO_HOME="$T/fakehome/.paseo" "$P" profiles --apply >/dev/null 2>&1 && bad "profiles --apply refuses the live home" || ok "profiles --apply refuses the live home"
+HOME="$T/fakehome" PASEO_HOME="$T/fakehome/.paseo" "$P" profiles >/dev/null 2>&1 && bad "profiles dry run refuses the live home" || ok "profiles dry run refuses the live home"
+[[ ! -f "$T/profiles.json" ]] && ok "...and nothing was written" || bad "live refusal wrote"
+out="$(PASEO_HOME="$T/ph" "$P" profiles)"
+grep -q "+ fm-planning: add" <<<"$out" && grep -q "dry run" <<<"$out" && [[ ! -f "$T/profiles.json" ]] && ok "profiles dry run lists the adds and writes nothing" || bad "profiles dry run" "$out"
+echo '[{"id":"mine","name":"Mine","provider":"claude"},{"id":"fm-fallback","name":"old","provider":"claude"}]' >"$T/profiles.json"
+out="$(PASEO_HOME="$T/ph" "$P" profiles --apply)"
+eq "$(jq -r 'map(.id)|join(",")' "$T/profiles.json")" "mine,fm-planning,fm-contributor,fm-fallback" "profiles --apply merges by id and keeps the captain's own"
+eq "$(jq -r '.[]|select(.id=="fm-fallback")|.model' "$T/profiles.json")" claude-sonnet-5-5 "...and replaces a repo profile of the same id"
+grep -q "~ fm-fallback: update" <<<"$out" && ok "...and reports the update" || bad "update report" "$out"
+grep -q "nothing to change" <<<"$(PASEO_HOME="$T/ph" "$P" profiles)" && ok "profiles is idempotent" || bad "profiles idempotent"
 
 echo; echo "page.test.sh: $pass passed, $fail failed"
 [[ $fail -eq 0 ]]

@@ -1,9 +1,8 @@
 # Runtime fleet state — not source
 state/fleet.json
 state/fleet-archive.jsonl
+state/gate-log.jsonl
 state/decisions.md
-state/secondmates.md
-state/afk-log.md
 state/tasks/
 state/projects/
 node_modules/
@@ -13,3 +12,4 @@ state/page.env
 dev/
 state/firstmate.json
 state/fleet.json.lock
+.isolated/

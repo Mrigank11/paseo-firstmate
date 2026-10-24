@@ -3,7 +3,11 @@ import { deckSettings, summaryRpc } from "./shared/contract.ts";
 import { resolveConfig, type SettingsValues } from "./server/config.ts";
 import { CliPort, detectHome, makeExec } from "./server/paseo-cli.ts";
 import { PortSelector } from "./server/paseo-port.ts";
+import { homedir } from "node:os";
+import { join } from "node:path";
 import { Deck } from "./server/runtime.ts";
+import { Gate } from "./server/gate.ts";
+import { Permission } from "./server/permission.ts";
 
 const AGENT_EVENTS = [
   "agent.turn_started",
@@ -29,6 +33,8 @@ export default function contribute(server: PluginServerContext) {
     exec,
     ports,
     home,
+    extraBanner: (): string | null => permission.problem(),
+    agentsDir: join(home ?? join(homedir(), ".paseo"), "agents"),
     log,
     readConfig: async () => {
       const st = await settings.read();
@@ -37,6 +43,16 @@ export default function contribute(server: PluginServerContext) {
       return resolveConfig(v, process.env);
     },
   });
+  // The finish gate: audits every crew turn end (state/gate-log.jsonl) and, behind `notify: plugin`, wakes the first mate.
+  const gate = new Gate({ ports, root: () => deck.root(), firstmateLabel: () => deck.firstmateLabel(), log });
+  gate.start();
+  const deckFirstHandle = ports.onFirstHandle;
+  ports.onFirstHandle = () => {
+    deckFirstHandle?.();
+    void gate.sweep().catch((e) => log(`gate sweep failed: ${e}`));
+  };
+  // The permission hook: classifies crew permission requests against state/decisions.md (shadow: log only; enforce: auto-allow the safe ones).
+  const permission = new Permission({ ports, root: (): string => deck.root(), paseoHome: home ?? join(homedir(), ".paseo"), log });
   deck.start().catch((e) => log(`start failed: ${e?.stack ?? e}`));
   const unsub = settings.subscribe(() => void deck.configure().catch((e) => log(`reconfigure failed: ${e}`)));
 
@@ -49,6 +65,9 @@ export default function contribute(server: PluginServerContext) {
     server.on(name, (event, ctx) => {
       ports.capture(ctx, `hook ${name}`);
       deck.onAgentEvent(event.agent.id);
+      if (name === "agent.turn_ended") void gate.onTurnEnded(event as never);
+      if (name === "agent.permission_requested") void permission.onRequested(event as never);
+      if (name === "agent.closed") void gate.onClosed(event as never);
     });
   }
   // no pill depends on these, but any callback can be the first to carry a handle
@@ -59,6 +78,7 @@ export default function contribute(server: PluginServerContext) {
   return async () => {
     log("cleanup");
     unsub();
+    gate.stop();
     deck.stop();
   };
 }

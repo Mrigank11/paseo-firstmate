@@ -15,7 +15,7 @@ function world(asks: object[], inbox: object[]) {
   const pdir = join(root, "state", "projects", "p");
   mkdirSync(pdir, { recursive: true });
   writeFileSync(join(pdir, "project.json"), JSON.stringify({ title: "P" }));
-  writeFileSync(join(root, "state", "fleet.json"), JSON.stringify({ tasks: [{ id: "pick", intent: "x", title: "Pick", status: "needs-captain", project: "p", asks }] }));
+  writeFileSync(join(root, "state", "fleet.json"), JSON.stringify({ version: 2, tasks: [{ id: "pick", intent: "x", title: "Pick", state: "active", project: "p", asks }] }));
   writeFileSync(join(pdir, "inbox.jsonl"), inbox.map((e) => JSON.stringify(e) + "\n").join(""));
   return loadProject(root, "p");
 }
@@ -87,8 +87,8 @@ test("failed tasks are not counted as done in the page summary", () => {
   const pdir = join(root, "state", "projects", "p");
   mkdirSync(pdir, { recursive: true });
   writeFileSync(join(pdir, "project.json"), "{}");
-  writeFileSync(join(root, "state", "fleet.json"), JSON.stringify({ tasks: [
-    { id: "ok", intent: "ok", status: "done", project: "p" }, { id: "bad", intent: "bad", status: "failed", project: "p" }, { id: "bad2", intent: "bad2", status: "failed", project: "p" }] }));
+  writeFileSync(join(root, "state", "fleet.json"), JSON.stringify({ version: 2, tasks: [
+    { id: "ok", intent: "ok", state: "done", project: "p" }, { id: "bad", intent: "bad", state: "failed", project: "p" }, { id: "bad2", intent: "bad2", state: "failed", project: "p" }] }));
   const html = renderProject(loadProject(root, "p"), {}, opts).live;
   assert.match(html, /class="sum c-done">1 done</);
   assert.match(html, /class="sum c-fail">2 failed</);

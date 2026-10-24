@@ -3,6 +3,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { stateOf } from "../server/stage.ts";
 import { loadProject, type ProjectModel, type Task } from "../server/state.ts";
 import { renderProject, trailHtml } from "../server/render.ts";
 
@@ -22,17 +23,17 @@ function evilModel(): ProjectModel {
     { name: "endpoints", kind: "md", content: MD_EVIL },
     { name: "decisions", kind: "md", content: "[x](javascript:alert(1))" },
   ];
-  const task = (over: Partial<Task>): Task => ({ id: "e", intent: "", status: "queued", depends_on: [], asks: [], notes: "", card: "", answered: [], hasReport: false, updatedMs: 0, ...over });
+  const task = (over: Partial<Task>): Task => ({ id: "e", intent: "", state: stateOf(over), depends_on: [], asks: [], notes: "", card: "", answered: [], hasReport: false, updatedMs: 0, ...over });
   m.tasks = [
-    task({ id: "e-title", title: EVIL, status: "needs-captain", notes: EVIL,
+    task({ id: "e-title", title: EVIL, state: "active", notes: EVIL,
       asks: [{ id: "a1", text: EVIL, since: "2026-10-21T09:00:00Z", contextMd: MD_EVIL, options: [EVIL, "B"] }] }),
-    task({ id: "e-intent", intent: EVIL, status: "running", agentId: "ag-1", card: MD_EVIL }),
-    task({ id: "e-replied", intent: "plain", status: "needs-captain",
+    task({ id: "e-intent", intent: EVIL, state: "active", card: MD_EVIL }),
+    task({ id: "e-replied", intent: "plain", state: "active",
       asks: [{ id: "a1", text: EVIL, since: "2026-10-21T09:00:00Z", contextMd: "", repliedAt: "2026-10-21T09:10:00Z", replyText: EVIL },
         { id: "a2", text: EVIL, since: "2026-10-21T09:00:00Z", contextMd: "", repliedAt: "2026-10-21T09:10:00Z", replyChoice: EVIL }] }),
-    task({ id: "e-dep", intent: "dependent", status: "queued", depends_on: ["e-title"], notes: EVIL }),
+    task({ id: "e-dep", intent: "dependent", state: "queued", depends_on: ["e-title"], notes: EVIL }),
   ];
-  m.archive = [task({ id: "e-arch", title: EVIL, status: "done", depends_on: ["e-intent"], card: MD_EVIL })];
+  m.archive = [task({ id: "e-arch", title: EVIL, state: "done", depends_on: ["e-intent"], card: MD_EVIL })];
   m.comments = [{ id: "c1", at: "2026-10-21T10:15:00Z", target: "t-e-title", text: EVIL, delivered: true, answered: false }];
   return m;
 }

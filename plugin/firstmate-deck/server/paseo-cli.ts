@@ -51,8 +51,10 @@ export class CliPort implements PaseoPort {
     this.exec = exec;
   }
 
-  async listAgents(o: { label?: string } = {}): Promise<PortAgent[]> {
-    const args = o.label ? ["ls", "-g", "--label", o.label, "--json"] : ["ls", "-g", "--json"]; // archived agents are not listed
+  async listAgents(o: { label?: string; includeArchived?: boolean } = {}): Promise<PortAgent[]> {
+    // The CLI cannot filter by a bare key, nor show labels or archive state, so label-based lookups come back unfiltered and unlabelled
+    // (the deck then falls back to each task's recorded agent): archived agents are not listed.
+    const args = o.label && o.label.includes("=") ? ["ls", "-g", "--label", o.label, "--json"] : ["ls", "-g", "--json"];
     const rows: any[] = JSON.parse((await this.exec(args)) || "[]");
     return Promise.all(rows.map(async (a): Promise<PortAgent> => {
       let createdAt: string | null = null;
@@ -93,6 +95,19 @@ export class CliPort implements PaseoPort {
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
+  }
+
+  /**
+   * `inspect` + `logs`, for the gate sweep before any SDK handle exists. The table log does not type its lines, so the final
+   * message is approximated: the last line starting DONE:/BLOCKED: in the trailing block after the last `[Tag]` line.
+   */
+  async sweepInfo(id: string): Promise<{ status: string; updatedAt: string | null; parentAgentId: string | null; finalLine: string | null }> {
+    const meta: any = JSON.parse((await this.exec(["inspect", id, "--json"])) || "{}");
+    const log = (await this.exec(["logs", id, "--tail", "40"])).split("\n");
+    let from = 0;
+    log.forEach((l, i) => { if (l.startsWith("[")) from = i + 1; });
+    const finalLine = [...log.slice(from)].reverse().find((l) => l.startsWith("DONE:") || l.startsWith("BLOCKED:")) ?? null;
+    return { status: String(meta.Status ?? "").toLowerCase(), updatedAt: meta.UpdatedAt ?? null, parentAgentId: meta.ParentAgentId ?? null, finalLine };
   }
 
   /** The CLI cannot write timeline rows. */

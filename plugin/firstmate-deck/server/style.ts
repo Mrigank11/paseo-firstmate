@@ -46,6 +46,7 @@ details[open]>summary::before{transform:rotate(45deg)}
 .p-you{background:#fde6cf;color:var(--you)}.p-done{background:#dcfce7;color:var(--ok)}.p-error{background:#fee2e2;color:#b91c1c}
 @keyframes pulse{50%{opacity:.3}}@media (prefers-reduced-motion:reduce){.p-running .dot{animation:none}}
 .facts{font-variant-numeric:tabular-nums}.open{margin-left:auto;font-weight:500}
+.stg{font-weight:600;color:var(--fg)}.fl{font-size:11.5px;padding:1px 7px;border-radius:5px;background:var(--soft);color:var(--mut)}.fl-d{background:#fee2e2;color:#b91c1c;font-weight:600}
 .cur{font-size:13px;color:#3d3a34;margin-top:6px;max-width:80ch}
 details.stp>summary.cur{display:block}
 details.stp>summary.cur::before{width:5px;height:5px;margin:0 8px 2px 1px}
@@ -176,4 +177,19 @@ body.tn-focus #live .task:not(.tn-sel),body.tn-focus #live .grp:not(:has(.tn-sel
   body.tn-on .task,body.tn-on .grp,body.tn-on [data-section],body.tn-on h2{scroll-margin-top:96px}
   body.tn-lock{overflow:hidden}
 }
+/* the agent's canvas inside a card (render.ts canvasFragment) */
+.cv{margin-top:8px;padding:2px 0 2px 12px;border-left:2px solid var(--line)}
+.cv-top{display:flex;flex-wrap:wrap;align-items:center;gap:4px 8px}
+.cv-v{font-size:11.5px;font-weight:700;padding:1px 8px;border-radius:999px;background:var(--soft);color:var(--mut)}
+.cv-warn{background:#fde6cf;color:var(--you)}.cv-bad{background:#fee2e2;color:#b91c1c}.cv-ok{background:#dcfce7;color:var(--ok)}
+.cv-bluf{margin-top:5px;font-size:14px;overflow-wrap:anywhere}
+.cv-steps{display:flex;flex-wrap:wrap;align-items:center;gap:4px 10px;margin-top:6px;font-size:12.5px;color:var(--mut)}
+.cv-bar{display:inline-flex;gap:2px}.cv-bar i{width:14px;height:5px;border-radius:2px;background:var(--line)}.cv-bar i.on{background:var(--ok)}.cv-bar i.now{background:var(--run)}
+.cv-n{font-variant-numeric:tabular-nums}.cv-now b{color:var(--fg);margin-right:4px}
+.cv-f{display:none;margin-top:4px}
+/* the embedded canvas wears the deck's own surface: its tokens are re-pointed at the page's (agent-canvas's .acv sets its own, so two classes) */
+.cv-f.acv,.cv-f .acv{--bg:#f7f6f2;--raised:#fff;--well:#f1efe8;--line:#e4e0d4;--line-strong:#d6d1c2;--fg:#1c1b19;--muted:#625f57;--faint:#8a857a;--sans:inherit;background:transparent;font-size:14px}
+body.tn-focus .task.tn-sel .cv.has-full .cv-f{display:block}body.tn-focus .task.tn-sel .cv.has-full .cv-c{display:none}
+.cv-links{display:flex;flex-wrap:wrap;gap:4px 14px;margin-top:8px;font-size:12.5px}.cv-open{font-weight:600}.cv-links .open{margin-left:0}
+.askbox.raw{border-left:3px solid #f3d5bc;padding-left:10px;margin-top:8px}.cv-down{background:#fef3c7;color:#92400e}
 @media (max-width:560px){.open{margin-left:0}main{padding:18px 14px 60px}nav{margin:12px -14px 0;padding:8px 14px}h1{font-size:20px}.tt{flex-direction:column;gap:4px}.s-you{padding:12px}.tw table{min-width:480px}}`;

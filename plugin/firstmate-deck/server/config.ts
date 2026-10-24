@@ -3,7 +3,7 @@ import { existsSync, realpathSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 
-export type SettingsValues = { firstmateRoot?: string; firstmateLabel?: string; lavishPort?: number; lavishStateDir?: string; readMarksPort?: number; readMarksHost?: string };
+export type SettingsValues = { firstmateRoot?: string; firstmateLabel?: string; lavishPort?: number; lavishStateDir?: string; readMarksPort?: number; readMarksHost?: string; canvasUrl?: string; canvasDir?: string };
 
 export type DeckConfig = {
   root: string;
@@ -14,18 +14,27 @@ export type DeckConfig = {
   readMarksPort?: number;
   /** Fallback tailnet host to bind when `tailscale ip -4` finds none. */
   readMarksHost?: string;
+  /** Base URL of agent-canvas (default http://127.0.0.1:6790). "" = no canvas in the cards. */
+  canvasUrl?: string;
+  canvasDir?: string;
   /** Set by normalizeRoot when the root is unusable (missing, or no state/ inside). Shown in the app and the log. */
   rootProblem?: string;
 };
 
 export const LAVISH_DEFAULT_PORT = 4387;
 export const READ_MARKS_DEFAULT_PORT = 4398;
+export const CANVAS_DEFAULT_URL = "http://127.0.0.1:6790";
 
 export function resolveConfig(s: SettingsValues, env: Record<string, string | undefined>): DeckConfig {
   // The settings schema always yields a port (default 4387, Lavish's own default), so "unset" means "still the
   // default": only then does the environment get a say.
   const port = s.lavishPort && s.lavishPort !== LAVISH_DEFAULT_PORT ? String(s.lavishPort) : env.LAVISH_AXI_PORT || (s.lavishPort ? String(s.lavishPort) : undefined);
+  // like the Lavish port: the schema always yields a URL, so "still the default" lets the environment have a say; "off" disables
+  const cu = (s.canvasUrl ?? "").trim();
+  const canvasUrl = cu === "off" ? "" : cu && cu !== CANVAS_DEFAULT_URL ? cu : (env.AGENT_CANVAS_URL ?? "").trim() || cu || CANVAS_DEFAULT_URL;
   return {
+    canvasUrl,
+    canvasDir: s.canvasDir || env.AGENT_CANVAS_DIR || undefined,
     root: s.firstmateRoot || env.FIRSTMATE_ROOT || "",
     firstmateLabel: s.firstmateLabel || "firstmate=true",
     lavishPort: port,

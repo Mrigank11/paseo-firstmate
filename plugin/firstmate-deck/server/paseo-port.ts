@@ -24,17 +24,22 @@ export type PortAgent = {
   thinking: string | null;
   title: string | null;
   archived: boolean;
+  lastActivityAt?: string | null;
+  /** Open permission requests (0 when unknown, as on the CLI). */
+  pendingPermissions?: number;
 };
 
 export type CommentRowData = { project: string; pageUrl: string | null; at: string; comments: { target: string; text: string }[]; replied: boolean };
 
 export interface PaseoPort {
   readonly kind: "sdk" | "cli";
-  /** Live (non-archived) agents, optionally only those carrying `label` ("key=value"). */
-  listAgents(o?: { label?: string }): Promise<PortAgent[]>;
+  /** Live (non-archived) agents, optionally only those carrying `label` ("key=value", or just "key"), archived ones too with `includeArchived`. */
+  listAgents(o?: { label?: string; includeArchived?: boolean }): Promise<PortAgent[]>;
   agentView(id: string): Promise<AgentView>;
   /** Send `text` to the agent, steering it if it is mid-turn (never interrupting). */
   send(id: string, text: string): Promise<void>;
+  /** Handle-less peek for the gate sweep (CLI only): status, age, parent and the last DONE:/BLOCKED: line of the trailing log block. */
+  sweepInfo?(id: string): Promise<{ status: string; updatedAt: string | null; parentAgentId: string | null; finalLine: string | null }>;
   /** Add (or replace, same id) the plugin timeline row on an agent. False when this port cannot. */
   appendTimelineRow(agentId: string, rowId: string, data: CommentRowData): Promise<boolean>;
 }
@@ -144,13 +149,13 @@ export class SdkPort implements PaseoPort {
     this.api = api;
   }
 
-  async listAgents(o: { label?: string } = {}): Promise<PortAgent[]> {
+  async listAgents(o: { label?: string; includeArchived?: boolean } = {}): Promise<PortAgent[]> {
     const [key, value] = o.label ? parseLabel(o.label) : ["", null];
     const out: PortAgent[] = [];
     let cursor: string | undefined;
     for (let page = 0; page < MAX_PAGES; page++) {
       const r = await this.api.agents.list({
-        filter: key && value !== null ? { labels: { [key]: value } } : undefined,
+        filter: { ...(key && value !== null ? { labels: { [key]: value } } : {}), ...(o.includeArchived ? { includeArchived: true } : {}) },
         page: { limit: PAGE_LIMIT, ...(cursor ? { cursor } : {}) },
       });
       for (const { agent: a } of r.entries) {
@@ -158,6 +163,7 @@ export class SdkPort implements PaseoPort {
         out.push({
           id: a.id, status: a.status, labels: a.labels, createdAt: a.createdAt, updatedAt: a.updatedAt,
           model: a.model, thinking: a.effectiveThinkingOptionId ?? a.thinkingOptionId ?? null, title: a.title, archived: !!a.archivedAt,
+          lastActivityAt: a.updatedAt, pendingPermissions: a.pendingPermissions?.length ?? 0,
         });
       }
       if (!r.pageInfo.hasMore || !r.pageInfo.nextCursor) break;
@@ -184,6 +190,24 @@ export class SdkPort implements PaseoPort {
       ...v,
       ...(page.hasOlder ? { stepsAtLeast: true } : {}),
     };
+  }
+
+  /** Status and labels of one agent, fresh from the daemon (hook events carry no labels). Null when it is gone. */
+  async agentInfo(id: string): Promise<{ id: string; status: string; labels: Record<string, string>; archived: boolean; updatedAt: string | null; cwd: string | null } | null> {
+    const r = await this.api.agents.ref(id).refresh();
+    const a = r?.agent;
+    return a ? { id: a.id, status: a.status, labels: a.labels, archived: !!a.archivedAt, updatedAt: a.updatedAt, cwd: a.cwd || null } : null;
+  }
+
+  /** Answer an open permission request (the permission hook's auto-approve). */
+  async respondToPermission(id: string, requestId: string, response: { behavior: "allow" } | { behavior: "deny"; message?: string }): Promise<void> {
+    await this.api.agents.ref(id).respondToPermission({ requestId, response });
+  }
+
+  /** The newest timeline items (oldest first), for the gate's sweep. */
+  async tailItems(id: string): Promise<TimelineItem[]> {
+    const page = await this.api.agents.ref(id).timeline.refetch({ direction: "tail", limit: TAIL_LIMIT, projection: "projected" });
+    return [...page.entries].sort((x, y) => x.seqStart - y.seqStart).map((e) => e.item);
   }
 
   async send(id: string, text: string): Promise<void> {

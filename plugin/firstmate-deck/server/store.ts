@@ -25,6 +25,9 @@ export type Choice = { task: string; ask: string; option: string; askText?: stri
 
 /** An ask id as bin/fleet writes it. Older inbox entries and older pages used the 1-based index, which is read as "a<n>". */
 export const ASK_ID = /^a[1-9][0-9]*$/;
+/** A question on the crew's canvas, as a page option click names it: "c-<canvas ask id>". Never a registry ask, so `askIdOf` refuses it. */
+export const CANVAS_ASK = /^c-[A-Za-z0-9_]+$/;
+export const canvasAskIdOf = (v: unknown): string | null => (typeof v === "string" && CANVAS_ASK.test(v) ? v : null);
 export function askIdOf(v: unknown): string | null {
   if (typeof v === "string") return ASK_ID.test(v) ? v : null;
   if (typeof v === "number" && Number.isInteger(v) && v >= 1) return `a${v}`;
@@ -47,6 +50,10 @@ export type PageJson = {
   /** The Lavish port / state dir the plugin's poll uses (null = Lavish's defaults); bin/page uses the same ones. */
   lavishPort?: string | null;
   lavishStateDir?: string | null;
+  /** agent-canvas base URL the plugin pulls from (null = none); `bin/fleet stage(s)` reads the same canvases. */
+  canvasUrl?: string | null;
+  /** The agent-canvas checkout (settings `canvasDir`): `bin/page canvas-snippet` runs its brief-snippet from here. */
+  canvasDir?: string | null;
   /** Timeline rows still saying "awaiting reply": row id -> the agent that got them and the inbox ids they carry. */
   openRows?: Record<string, { agentId: string; ids: string[] }>;
   /** Last-known agent pills (agent id -> view), shown marked stale when the daemon cannot be asked (e.g. right after a reload). */

@@ -1,0 +1,332 @@
+#!/usr/bin/env python3
+"""Migrate state/fleet.json from v1 (run state in the registry) to v2 (intent only; Paseo holds run state).
+
+  bin/migrate-fleet-v2 [--state <dir>] [--apply] [--no-daemon]
+
+Dry run by default: prints the plan and changes nothing. --apply writes it.
+
+What it does (docs/STATE.md has the v2 schema):
+  1. Label plan: every Paseo agent that worked on a task (live `agentId`, every archive line's `agentId`) gets
+     fm.task / fm.project / fm.shape labels. A reused agent belongs to the live task if there is one, else the newest
+     archive line; every task id it served is listed.
+  2. Registry transform: status -> state (dispatched/running/needs-captain -> active), since = lastEvent, notes /
+     provider / agentId / workspaceId / preview move out of the registry (task log, preview.json, `agents`), version: 2.
+     A needs-captain task with no open ask gets a DRAFT ask from its notes (unless its agent is running): rewrite it.
+  3. Stage diff: the page group each live task had under v1 vs the one it gets under v2.
+  --apply: backs up fleet.json and the archive to <state>/backup/, runs a canary label write on one archived agent
+  (aborts if it does not read back), writes the labels, writes fleet.json atomically, appends `migrated v2` to every
+  task log. It holds the fleet lock (the same flock bin/fleet takes) for the whole run. It does NOT touch the plugin:
+  run `bin/page install` afterwards (with PASEO_HOME set if the daemon is not ~/.paseo).
+
+The Paseo daemon is the one in $PASEO_HOME (default ~/.paseo), through the `paseo` CLI ($PASEO_BIN overrides it).
+--no-daemon: dry run only, plans from the files alone (no agent checks, no stage facts for active tasks).
+"""
+import argparse
+import fcntl
+import json
+import os
+import re
+import subprocess
+import sys
+from datetime import datetime, timezone
+
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+RUNSTATE = ("status", "agentId", "workspaceId", "lastEvent", "notes", "preview", "provider")
+STATE_OF = {"dispatched": "active", "running": "active", "needs-captain": "active"}
+V2_STATES = ("queued", "active", "parked", "blocked", "done", "failed")
+KEEP = ("id", "intent", "title", "project", "shape", "order", "legacyId", "blocked_on", "depends_on", "branch", "pr")
+GROUP_LABEL = {"you": "Needs you", "fm": "With the first mate", "running": "Running", "blocked": "Blocked", "next": "Next up", "parked": "Parked", "done": "Done"}
+
+
+def die(msg):
+    print(f"migrate-fleet-v2: {msg}", file=sys.stderr)
+    sys.exit(1)
+
+
+def now():
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def paseo(args, check=True):
+    cmd = [os.environ.get("PASEO_BIN", "paseo"), *args]
+    h = os.environ.get("PASEO_HOME")
+    if h:
+        cmd += ["--home", h]
+    r = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+    if check and r.returncode != 0:
+        die(f"`{' '.join(cmd)}` failed: {(r.stderr or r.stdout).strip().splitlines()[:1]}")
+    return r
+
+
+def read_json(path):
+    with open(path) as f:
+        return json.load(f)
+
+
+def read_archive(path):
+    lines = []
+    if os.path.exists(path):
+        for raw in open(path):
+            raw = raw.strip()
+            if not raw:
+                continue
+            try:
+                lines.append(json.loads(raw))
+            except ValueError:
+                pass  # a crash mid-append leaves a bad line; it never counted
+    return lines
+
+
+def v1_group(t):
+    """The page group a v1 task was in (the old groupOf): an open ask is Needs you, else by status."""
+    if t.get("asks"):
+        return "you"
+    return {"needs-captain": "you", "dispatched": "running", "running": "running", "queued": "next", "parked": "parked",
+            "blocked": "blocked", "done": "done", "failed": "done"}.get(t.get("status"), "fm")
+
+
+def v2_group(t, state, agent):
+    """The group computeStage gives the migrated task. `agent` is None (unknown), "none", or the agent's Paseo status."""
+    if t.get("asks"):
+        return "you"
+    if state in ("done", "failed"):
+        return "done"
+    if state in ("parked", "blocked"):
+        return state
+    if state == "queued":
+        return "next"
+    if agent is None:
+        return "?"
+    if agent == "none":
+        return "fm"  # Lost (the registry's `since` is old) or Dispatching within 10 minutes: shown as running
+    return "running" if agent in ("running", "initializing") else "fm"
+
+
+def main():
+    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("--state", default=os.path.join(ROOT, "state"))
+    ap.add_argument("--apply", action="store_true")
+    ap.add_argument("--no-daemon", action="store_true", help="dry run from the files only")
+    a = ap.parse_args()
+    if a.apply and a.no_daemon:
+        die("--apply needs the daemon (labels are written through it)")
+    state = os.path.abspath(a.state)
+    fleet_path = os.path.join(state, "fleet.json")
+    arch_path = os.path.join(state, "fleet-archive.jsonl")
+    if not os.path.exists(fleet_path):
+        die(f"{fleet_path} not found")
+
+    lock = None
+    if a.apply:
+        lock = open(fleet_path + ".lock", "w")
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError:
+            die("fleet.json is locked by another writer; try again")
+
+    fleet = read_json(fleet_path)
+    if fleet.get("version") == 2:
+        die("fleet.json is already v2; nothing to do")
+    tasks = fleet.get("tasks", [])
+    archive = read_archive(arch_path)
+
+    # ---- preflight: the daemon
+    agents = {}  # id -> status, from the daemon
+    if not a.no_daemon:
+        r = paseo(["ls", "-a", "-g", "--json"])
+        try:
+            agents = {str(x["id"]): str(x.get("status", "unknown")) for x in json.loads(r.stdout or "[]")}
+        except ValueError:
+            die("could not read `paseo ls` output")
+
+    # ---- label plan: agent -> every task it served
+    latest = {}  # archive: newest line per task id
+    for ln in archive:
+        if isinstance(ln.get("id"), str):
+            latest[ln["id"]] = ln
+    serves = {}  # agent -> [(task id, kind, source)] oldest first; archive lines in file order, live tasks last
+    order = {}
+    for i, ln in enumerate(archive):
+        if ln.get("agentId") and isinstance(ln.get("id"), str):
+            order[(ln["agentId"], ln["id"])] = i
+    for tid, ln in latest.items():
+        if ln.get("agentId"):
+            serves.setdefault(ln["agentId"], []).append((tid, "archive", ln))
+    for t in tasks:
+        if t.get("agentId"):
+            serves.setdefault(t["agentId"], []).append((t["id"], "live", t))
+    plan = {}  # agent -> chosen (task id, source)
+    reused = {}
+    for ag, lst in serves.items():
+        live = [x for x in lst if x[1] == "live"]
+        pick = live[-1] if live else sorted(lst, key=lambda x: order.get((ag, x[0]), 0))[-1]
+        plan[ag] = pick
+        if len({x[0] for x in lst}) > 1:
+            reused[ag] = [x[0] for x in lst]
+    # agents that already carry an fm.task label (read from the daemon home's agent files; the CLI does not show labels)
+    by_task = {}
+    if not a.no_daemon:
+        import glob
+        home = os.environ.get("PASEO_HOME") or os.path.expanduser("~/.paseo")
+        for f in glob.glob(os.path.join(home, "agents", "*", "*.json")):
+            try:
+                rec = read_json(f)
+            except (OSError, ValueError):
+                continue
+            tid = (rec.get("labels") or {}).get("fm.task")
+            if tid and rec.get("id") and not rec.get("archivedAt"):
+                by_task.setdefault(tid, []).append(str(rec["id"]))
+    for ag, (tid, _, _) in plan.items():
+        by_task.setdefault(tid, [])
+        if ag not in by_task[tid]:
+            by_task[tid].append(ag)
+
+    def task_agent_status(tid):
+        sts = [agents[x] for x in by_task.get(tid, []) if x in agents]
+        for want in ("running", "initializing"):
+            if want in sts:
+                return want
+        return sts[-1] if sts else "none"
+
+    missing = sorted(ag for ag in plan if agents and ag not in agents) if not a.no_daemon else []
+
+    def labels_of(ag):
+        tid, _, src = plan[ag]
+        lab = {"fm.task": tid}
+        if src.get("project"):
+            lab["fm.project"] = src["project"]
+        if src.get("shape") in ("scout", "ship"):
+            lab["fm.shape"] = src["shape"]
+        return lab
+
+    # ---- registry transform
+    new_tasks, drafts, log_lines, moved = [], [], {}, {}
+    for t in tasks:
+        n = {k: t[k] for k in KEEP if t.get(k) not in (None, "")}
+        st = STATE_OF.get(t.get("status"), t.get("status"))
+        if st not in V2_STATES:
+            die(f"task {t.get('id')}: unknown status {t.get('status')!r}")
+        n["state"] = st
+        n["since"] = t.get("lastEvent") or now()
+        n.setdefault("depends_on", [])
+        if st != "blocked":
+            n.pop("blocked_on", None)
+        asks = [dict(x) for x in t.get("asks", [])]
+        seq = max([t.get("askSeq", 0)] + [int(m.group(1)) for x in asks for m in [re.match(r"^a(\d+)$", str(x.get("id", "")))] if m] or [0])
+        for x in asks:
+            if not x.get("id"):
+                seq += 1
+                x["id"] = f"a{seq}"
+        if t.get("status") == "needs-captain" and not asks:
+            running = task_agent_status(t["id"]) in ("running", "initializing")
+            if not running:
+                text = (t.get("notes") or t.get("title") or t.get("intent") or "Needs your call").strip().replace("\n", " ")
+                text = (text if len(text) <= 190 else text[:187].rsplit(" ", 1)[0] + "...")
+                seq += 1
+                asks.append({"id": f"a{seq}", "text": f"[draft, from the v1 notes] {text}"[:200], "since": n["since"]})
+                drafts.append((t["id"], asks[-1]["text"], a.no_daemon))
+        n["asks"] = asks
+        n["askSeq"] = seq
+        if t.get("agentId"):
+            n["agents"] = [t["agentId"]]
+        new_tasks.append(n)
+        lines = []
+        if t.get("notes"):
+            lines.append(f"migrated notes: {t['notes']}")
+        gone = {k: t[k] for k in ("provider", "agentId", "workspaceId") if t.get(k)}
+        if gone:
+            lines.append("migrated: " + " ".join(f"{k}={v}" for k, v in gone.items()))
+        lines.append("migrated v2")
+        log_lines[t["id"]] = lines
+        if t.get("preview"):
+            moved[t["id"]] = t["preview"]
+
+    # ---- stage diff
+    diff, unknown = [], 0
+    for t, n in zip(tasks, new_tasks):
+        fact = None if a.no_daemon else task_agent_status(t["id"])
+        g1, g2 = v1_group(t), v2_group(n, n["state"], fact)
+        if g2 == "?":
+            unknown += 1
+        elif g1 != g2:
+            diff.append((t["id"], t.get("status"), n["state"], g1, g2))
+
+    # ---- report
+    statuses = {}
+    for t in tasks:
+        statuses[t.get("status")] = statuses.get(t.get("status"), 0) + 1
+    print(f"{'APPLY' if a.apply else 'DRY RUN'}  state={state}  daemon={'none (files only)' if a.no_daemon else (os.environ.get('PASEO_HOME') or '~/.paseo')}")
+    print(f"live tasks: {len(tasks)}  " + ", ".join(f"{k}={v}" for k, v in sorted(statuses.items(), key=lambda kv: str(kv[0]))) + f"   archive lines: {len(archive)}")
+    print(f"labels to write: {len(plan)} agents (fm.task, fm.project, fm.shape); reused across tasks: {len(reused)}; missing from the daemon: " + (str(len(missing)) if not a.no_daemon else "not checked"))
+    for ag, tids in sorted(reused.items()):
+        print(f"  reused {ag[:8]}: tasks {', '.join(dict.fromkeys(tids))} -> labelled {plan[ag][0]}")
+    for ag in missing:
+        print(f"  MISSING from the daemon: {ag} (task {plan[ag][0]}): no label written")
+    print(f"registry: status -> state, since = lastEvent, run-state keys removed ({', '.join(RUNSTATE)}), version 2")
+    n_notes = sum(1 for t in tasks if t.get("notes"))
+    print(f"  notes -> task logs: {n_notes}; previews -> tasks/<id>/preview.json: {len(moved)}; agentId -> agents[]: {sum(1 for t in tasks if t.get('agentId'))}")
+    print(f"draft asks (needs-captain with no open ask): {len(drafts)}" + ("  [no daemon: tasks whose agent is running would get none]" if a.no_daemon and drafts else ""))
+    for tid, text, _ in drafts:
+        print(f"  {tid}: {text}")
+    print(f"stage diff (v1 group -> v2 group), {len(diff)} of {len(tasks) - unknown} compared tasks change:")
+    for tid, s1, s2, g1, g2 in diff:
+        print(f"  {tid}: {s1} -> {s2}   {GROUP_LABEL.get(g1, g1)} -> {GROUP_LABEL.get(g2, g2)}")
+    if unknown:
+        print(f"  ({unknown} active task(s) not compared: their group is decided by Paseo, so it needs a daemon that knows the agents; run without --no-daemon)")
+
+    if not a.apply:
+        print("\nDry run: nothing written. Re-run with --apply to migrate.")
+        return
+
+    # ---- apply
+    ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    bdir = os.path.join(state, "backup")
+    os.makedirs(bdir, exist_ok=True)
+    b1 = os.path.join(bdir, f"fleet.v1.{ts}.json")
+    with open(b1, "w") as f:
+        json.dump(fleet, f, indent=1)
+    if os.path.exists(arch_path):
+        with open(arch_path) as src, open(os.path.join(bdir, f"fleet-archive.{ts}.jsonl"), "w") as dst:
+            dst.write(src.read())
+    print(f"\nbackups: {b1} (+ archive copy)")
+
+    todo = [ag for ag in plan if ag not in missing]
+    canary = next((ag for ag in todo if plan[ag][1] == "archive"), todo[0] if todo else None)
+    def write_labels(ag):
+        args = ["agent", "update", ag]
+        for k, v in labels_of(ag).items():
+            args += ["--label", f"{k}={v}"]
+        paseo(args)
+    if canary:
+        write_labels(canary)
+        r = paseo(["ls", "-a", "-g", "--label", f"fm.task={labels_of(canary)['fm.task']}", "--json"])
+        if canary not in [str(x.get("id")) for x in json.loads(r.stdout or "[]")]:
+            die(f"canary failed: agent {canary} did not read back with fm.task={labels_of(canary)['fm.task']}; nothing else was written (registry untouched)")
+        print(f"canary ok: {canary[:8]} carries fm.task={labels_of(canary)['fm.task']}")
+    for i, ag in enumerate(todo):
+        if ag != canary:
+            write_labels(ag)
+    print(f"labels written: {len(todo)}")
+
+    for tid, p in moved.items():
+        os.makedirs(os.path.join(state, "tasks", tid), exist_ok=True)
+        with open(os.path.join(state, "tasks", tid, "preview.json"), "w") as f:
+            json.dump(p, f, separators=(",", ":"))
+            f.write("\n")
+    stamp = now()
+    for tid, lines in log_lines.items():
+        os.makedirs(os.path.join(state, "tasks", tid), exist_ok=True)
+        with open(os.path.join(state, "tasks", tid, "log.md"), "a") as f:
+            for ln in lines:
+                f.write(f"{stamp} {ln}\n")
+    tmp = fleet_path + f".mig.{os.getpid()}"
+    with open(tmp, "w") as f:
+        json.dump({"version": 2, "tasks": new_tasks}, f, indent=1)
+        f.write("\n")
+    os.replace(tmp, fleet_path)
+    print(f"fleet.json is v2 ({len(new_tasks)} tasks). Rollback: cp {b1} {fleet_path}")
+    print("next: re-install the plugin from this checkout so the page reads v2:  PASEO_HOME=<daemon home> bin/page install")
+
+
+if __name__ == "__main__":
+    main()

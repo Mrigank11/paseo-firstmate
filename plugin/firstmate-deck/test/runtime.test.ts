@@ -27,11 +27,13 @@ function rig(fleet: object, o: { sdk?: boolean } = {}) {
   mkdirSync(join(pdir, "sections"), { recursive: true });
   writeFileSync(join(pdir, "project.json"), JSON.stringify({ title: "Demo", sections: ["endpoints"] }));
   writeFileSync(join(pdir, "sections", "endpoints.md"), "- GET /x\n");
-  writeFileSync(join(root, "state", "fleet.json"), JSON.stringify(fleet));
+  writeFileSync(join(root, "state", "fleet.json"), JSON.stringify({ version: 2, ...fleet }));
   const fw = new FakeWorld().add(
     { id: "ag-1", status: "running", createdAt: "2026-10-21T10:00:00Z", updatedAt: "2026-10-21T10:05:00Z", model: "m", items: [shell("make build")] },
     { id: "fm-1", status: "idle", labels: { firstmate: "true" } },
   );
+  // the registry no longer names a task's agent: Paseo does, by label. A test fleet's `agentId` (ignored by the plugin) says which fake agent to label.
+  for (const t of (fleet as any).tasks) if (t.agentId && fw.agents.get(t.agentId)) fw.agents.get(t.agentId)!.labels = { "fm.task": t.id, "fm.project": t.project };
   const cliCalls: string[][] = [];
   const exec = async (args: string[]) => {
     cliCalls.push(args);
@@ -63,7 +65,7 @@ function rig(fleet: object, o: { sdk?: boolean } = {}) {
     get rows() { return fw.rows.map((r) => ({ agentId: r.agentId, id: (r.item as any).id as string, data: (r.item as any).data })); },
   };
 }
-const FLEET = { tasks: [{ id: "t1", intent: "do it", status: "running", project: "demo", agentId: "ag-1", shape: "ship" }] };
+const FLEET = { tasks: [{ id: "t1", intent: "do it", state: "active", project: "demo", agentId: "ag-1", shape: "ship" }] };
 
 test("page.html is rewritten only when the signature moves; live.js on every render", async () => {
   const r = rig(FLEET);
@@ -84,7 +86,7 @@ test("page.html is rewritten only when the signature moves; live.js on every ren
   assert.notEqual(readFileSync(r.page, "utf8"), "MARKER", "agent status changed: html rewritten");
 
   writeFileSync(r.page, "MARKER");
-  writeFileSync(join(r.root, "state", "fleet.json"), JSON.stringify({ tasks: [{ ...FLEET.tasks[0], status: "done" }] }));
+  writeFileSync(join(r.root, "state", "fleet.json"), JSON.stringify({ version: 2, tasks: [{ ...FLEET.tasks[0], state: "done" }] }));
   await r.deck.render("demo");
   assert.notEqual(readFileSync(r.page, "utf8"), "MARKER", "fleet change: html rewritten");
   r.deck.stop();
@@ -96,7 +98,7 @@ test("a fleet.json change re-renders the page within a second (watcher + debounc
   await r.deck.render("demo");
   assert.ok(!/Fresh task/.test(readFileSync(r.live, "utf8")));
   const t0 = Date.now();
-  writeFileSync(join(r.root, "state", "fleet.json"), JSON.stringify({ tasks: [{ id: "n1", intent: "x", title: "Fresh task", status: "queued", project: "demo" }] }));
+  writeFileSync(join(r.root, "state", "fleet.json"), JSON.stringify({ version: 2, tasks: [{ id: "n1", intent: "x", title: "Fresh task", state: "queued", project: "demo" }] }));
   await until(() => /Fresh task/.test(readFileSync(r.live, "utf8")), 1500);
   assert.ok(Date.now() - t0 < 1000, `took ${Date.now() - t0} ms`);
   r.deck.stop();
@@ -109,7 +111,7 @@ test("repeated atomic replaces of fleet.json (temp file + rename, like bin/fleet
   const fleet = join(r.root, "state", "fleet.json");
   for (let i = 1; i <= 4; i++) {
     const t0 = Date.now();
-    writeFileSync(fleet + ".tmpXYZ", JSON.stringify({ tasks: [{ id: "n1", intent: "x", title: `Round ${i}`, status: "queued", project: "demo" }] }));
+    writeFileSync(fleet + ".tmpXYZ", JSON.stringify({ version: 2, tasks: [{ id: "n1", intent: "x", title: `Round ${i}`, status: "queued", project: "demo" }] }));
     renameSync(fleet + ".tmpXYZ", fleet);
     await until(() => readFileSync(r.live, "utf8").includes(`Round ${i}`), 1500);
     assert.ok(Date.now() - t0 < 1000, `round ${i} took ${Date.now() - t0} ms`);
@@ -118,7 +120,7 @@ test("repeated atomic replaces of fleet.json (temp file + rename, like bin/fleet
 });
 
 test("a task card appearing later (new tasks/<id>/ dir) is picked up", async () => {
-  const r = rig({ tasks: [{ id: "n1", intent: "x", title: "Card task", status: "queued", project: "demo" }] });
+  const r = rig({ tasks: [{ id: "n1", intent: "x", title: "Card task", state: "queued", project: "demo" }] });
   await r.deck.configure();
   await r.deck.render("demo");
   mkdirSync(join(r.root, "state", "tasks", "n1"), { recursive: true });
@@ -177,13 +179,13 @@ test("undelivered inbox entries are re-sent when the plugin starts", async () =>
 
 test("summary follows the contract shape", async () => {
   const r = rig({ tasks: [
-    { id: "a", intent: "ask", status: "needs-captain", project: "demo", asks: [{ text: "Which?", since: "2026-10-20" }] },
-    { id: "b", intent: "run", status: "running", project: "demo", agentId: "ag-1" },
-    { id: "f", intent: "replied", status: "needs-captain", project: "demo", asks: [{ text: "Options?", since: "2026-10-21T09:00:00Z" }] },
-    { id: "c", intent: "later", status: "queued", project: "demo" },
-    { id: "d", intent: "hold", status: "parked", project: "demo" },
-    { id: "e", intent: "fin", status: "done", project: "demo" },
-    { id: "g", intent: "wait", status: "blocked", blocked_on: "Nemath: Trigger Prod API key", project: "demo" },
+    { id: "a", intent: "ask", state: "active", project: "demo", asks: [{ text: "Which?", since: "2026-10-20" }] },
+    { id: "b", intent: "run", state: "active", project: "demo", agentId: "ag-1" },
+    { id: "f", intent: "replied", state: "active", project: "demo", asks: [{ text: "Options?", since: "2026-10-21T09:00:00Z" }] },
+    { id: "c", intent: "later", state: "queued", project: "demo" },
+    { id: "d", intent: "hold", state: "parked", project: "demo" },
+    { id: "e", intent: "fin", state: "done", project: "demo" },
+    { id: "g", intent: "wait", state: "blocked", blocked_on: "Nemath: Trigger Prod API key", project: "demo" },
   ] });
   writeFileSync(join(r.pdir, "inbox.jsonl"), JSON.stringify({ id: "c1", at: "2026-10-21T09:05:00Z", project: "demo", target: "t-f#a1", text: "more detail" }) + "\n");
   await r.deck.configure();
@@ -241,7 +243,7 @@ test("bin/page reply (inbox.jsonl rewritten from outside) re-renders with 'answe
 });
 
 test("an ask-choice prompt is stored with its choice and shows 'You picked' immediately; the message carries it", async () => {
-  const r = rig({ tasks: [{ id: "t1", intent: "x", title: "Pick one", status: "needs-captain", project: "demo", asks: [{ text: "Which design?", since: "2026-10-21T09:00:00Z", options: ["A card", "B console"] }] }] });
+  const r = rig({ tasks: [{ id: "t1", intent: "x", title: "Pick one", state: "active", project: "demo", asks: [{ text: "Which design?", since: "2026-10-21T09:00:00Z", options: ["A card", "B console"] }] }] });
   await r.deck.configure();
   await r.deck.render("demo");
   assert.match(liveHtml(r.live), /class="opt"/);
@@ -269,7 +271,7 @@ const askBlock = (html: string, task: string, ask: string): string => {
   const j = rest.search(/class="askbox"|<\/article>/);
   return j < 0 ? rest : rest.slice(0, j);
 };
-const THREE = (asks: object[]) => ({ tasks: [{ id: "pick", intent: "x", title: "Pick stack", status: "needs-captain", project: "demo", asks }] });
+const THREE = (asks: object[]) => ({ tasks: [{ id: "pick", intent: "x", title: "Pick stack", state: "active", project: "demo", asks }] });
 const ASKS3 = [
   { id: "a1", text: "Postgres or SQLite?", since: "2026-10-21T09:00:00Z", options: ["Postgres", "SQLite"] },
   { id: "a2", text: "Which CI provider?", since: "2026-10-21T09:00:00Z", options: ["Buildkite", "Actions"] },
@@ -285,7 +287,7 @@ test("C1: answering ask 1 does not move a click on ask 2 onto another question",
   await until(() => /You picked/.test(liveHtml(r.live)), 1000);
   assert.match(askBlock(liveHtml(r.live), "pick", "a2"), /You picked <b>Buildkite<\/b>/);
   // the first mate answers ask 1 first: ask 2 becomes the first element of the array
-  writeFileSync(join(r.root, "state", "fleet.json"), JSON.stringify(THREE(ASKS3.slice(1))));
+  writeFileSync(join(r.root, "state", "fleet.json"), JSON.stringify({ version: 2, ...THREE(ASKS3.slice(1)) }));
   await r.deck.render("demo");
   const html = liveHtml(r.live);
   assert.match(askBlock(html, "pick", "a2"), /You picked <b>Buildkite<\/b>/, "the pick still sits under 'Which CI provider?'");
@@ -342,7 +344,7 @@ test("C1: asks without ids (written before ids existed) fall back to their index
 
 test("C2: a first-mate claim held by a crew agent is ignored (with a log line)", async () => {
   const logs: string[] = [];
-  const r = rig({ tasks: [{ id: "t1", intent: "x", status: "running", project: "demo", agentId: "ag-1" }] });
+  const r = rig({ tasks: [{ id: "t1", intent: "x", state: "active", project: "demo", agentId: "ag-1" }] });
   const deck = new Deck({ exec: async () => "", ports: r.ports, batchMs: 30, log: (m) => logs.push(m), readConfig: async () => ({ root: r.root, firstmateLabel: "firstmate=true" }) });
   writeFileSync(join(r.root, "state", "firstmate.json"), JSON.stringify({ agentId: "ag-1", claimedAt: "2026-10-21T10:00:00Z" }));
   await deck.configure();
@@ -354,11 +356,11 @@ test("C2: a first-mate claim held by a crew agent is ignored (with a log line)",
 
 test("C3: a malformed archive line is skipped with a warning; the page still renders", async () => {
   const logs: string[] = [];
-  const r = rig({ tasks: [{ id: "t1", intent: "live", status: "running", project: "demo" }] });
+  const r = rig({ tasks: [{ id: "t1", intent: "live", state: "active", project: "demo" }] });
   writeFileSync(join(r.root, "state", "fleet-archive.jsonl"), [
-    JSON.stringify({ id: "old1", intent: "Archived one", status: "done", project: "demo" }),
+    JSON.stringify({ id: "old1", intent: "Archived one", state: "done", project: "demo" }),
     '{"id":"half","project":"demo","stat',
-    JSON.stringify({ id: "old2", intent: "Archived two", status: "failed", project: "demo" }),
+    JSON.stringify({ id: "old2", intent: "Archived two", state: "failed", project: "demo" }),
   ].join("\n") + "\n");
   const deck = new Deck({ exec: async () => "", ports: r.ports, log: (m) => logs.push(m), readConfig: async () => ({ root: r.root, firstmateLabel: "firstmate=true" }) });
   await deck.configure();
@@ -372,7 +374,7 @@ test("C3: a malformed archive line is skipped with a warning; the page still ren
 });
 
 test("C3: an empty or malformed fleet.json keeps the last good view, sets loadError and a banner; fixing it clears both", async () => {
-  const r = rig({ tasks: [{ id: "t1", intent: "keep me visible", status: "queued", project: "demo" }] });
+  const r = rig({ tasks: [{ id: "t1", intent: "keep me visible", state: "queued", project: "demo" }] });
   await r.deck.configure();
   await r.deck.render("demo");
   assert.match(liveHtml(r.live), /keep me visible/);
@@ -387,7 +389,7 @@ test("C3: an empty or malformed fleet.json keeps the last good view, sets loadEr
   await r.deck.render("demo");
   assert.match(liveHtml(r.live), /keep me visible/);
   assert.match(readPageJson(join(r.pdir, "page.json")).loadError ?? "", /^fleet\.json: invalid JSON/);
-  writeFileSync(fleet, JSON.stringify({ tasks: [{ id: "t1", intent: "back to normal", status: "queued", project: "demo" }] }));
+  writeFileSync(fleet, JSON.stringify({ version: 2, tasks: [{ id: "t1", intent: "back to normal", state: "queued", project: "demo" }] }));
   await r.deck.render("demo");
   assert.match(liveHtml(r.live), /back to normal/);
   assert.equal(readPageJson(join(r.pdir, "page.json")).loadError, null);
@@ -419,10 +421,10 @@ test("M4: every live payload carries a growing sequence number", async () => {
 
 test("failed tasks are counted as failed, not done, in the summary", async () => {
   const r = rig({ tasks: [
-    { id: "ok1", intent: "fine", status: "done", project: "demo" },
-    { id: "bad1", intent: "broke", status: "failed", project: "demo" },
+    { id: "ok1", intent: "fine", state: "done", project: "demo" },
+    { id: "bad1", intent: "broke", state: "failed", project: "demo" },
   ] });
-  writeFileSync(join(r.root, "state", "fleet-archive.jsonl"), JSON.stringify({ id: "bad0", intent: "old fail", status: "failed", project: "demo" }) + "\n" + JSON.stringify({ id: "ok0", intent: "old fine", status: "done", project: "demo" }) + "\n");
+  writeFileSync(join(r.root, "state", "fleet-archive.jsonl"), JSON.stringify({ id: "bad0", intent: "old fail", state: "failed", project: "demo" }) + "\n" + JSON.stringify({ id: "ok0", intent: "old fine", state: "done", project: "demo" }) + "\n");
   await r.deck.configure();
   const c = (await r.deck.summary()).projects[0].counts;
   assert.deepEqual([c.done, c.failed], [2, 2]);
@@ -433,7 +435,7 @@ test("failed tasks are counted as failed, not done, in the summary", async () =>
 });
 
 test("a comment on the ask itself moves it to 'With the first mate' at once; a comment on the card does not", async () => {
-  const r = rig({ tasks: [{ id: "t1", intent: "x", title: "Pick one", status: "needs-captain", project: "demo", asks: [{ text: "Which design?", since: "2026-10-21T09:00:00Z" }] }] });
+  const r = rig({ tasks: [{ id: "t1", intent: "x", title: "Pick one", state: "active", project: "demo", asks: [{ text: "Which design?", since: "2026-10-21T09:00:00Z" }] }] });
   await r.deck.configure();
   await r.deck.render("demo");
   r.deck.ingest("demo", [{ prompt: "why so slow?", selector: "article#t-t1 > div.tt" }]);
@@ -568,30 +570,32 @@ test("rendering never touches the CLI: pills and steps come from the SDK", async
   r.deck.stop();
 });
 
-test("without a handle the last-known views (remembered in page.json) are shown as 'status unknown (reconnecting)'", async () => {
+test("without a handle the CLI cannot see fm.task labels: no agent is claimed, nothing is guessed, no CLI call to render", async () => {
   const r = rig(FLEET, { sdk: false });
-  const view = { status: "running", createdAt: "2026-10-21T10:00:00Z", updatedAt: "2026-10-21T10:05:00Z", model: "m", stepCount: 7, recent: ["Ran make build"] };
-  writeFileSync(join(r.pdir, "page.json"), JSON.stringify({ lavishUrl: null, session: "unknown", lastRender: null, lastDelivery: null, undelivered: 0, agentViews: { "ag-1": view } }));
   await r.deck.configure();
   await r.deck.render("demo");
-  assert.equal(pill(r.live), "status unknown (reconnecting)");
-  assert.match(liveHtml(r.live), /7 steps/, "the last-known facts are kept");
-  assert.match(liveHtml(r.live), /Ran make build/);
+  assert.equal(pill(r.live), "Dispatching");
   assert.deepEqual(r.cliCalls.filter((c) => VIEW_CALLS.test(c[0])), [], "no CLI calls to render");
-  assert.equal(readPageJson(join(r.pdir, "page.json")).agentViews!["ag-1"].stepCount, 7, "the remembered view survives");
-  // the first hook hands over a handle: the very next render asks the daemon and the pill is real again
+  // the first hook hands over a handle: the very next render asks the daemon, finds the agent by its label, and the pill is real
   r.ports.capture({ paseo: fakePaseo(r.fw) }, "hook agent.turn_started");
   await until(() => pill(r.live) === "running", 1500);
-  assert.match(liveHtml(r.live), /Ran make build/);
   r.deck.stop();
 });
 
-test("no handle and nothing remembered: the pill says the status is unknown, not a guess", async () => {
+test("after a reload (no SDK handle yet) the labelled agents come from the daemon's agent files: not Dispatching", async () => {
   const r = rig(FLEET, { sdk: false });
-  await r.deck.configure();
-  await r.deck.render("demo");
-  assert.equal(pill(r.live), "status unknown (reconnecting)");
-  assert.deepEqual(r.cliCalls.filter((c) => VIEW_CALLS.test(c[0])), []);
+  const agentsDir = join(r.root, "daemon", "agents");
+  mkdirSync(join(agentsDir, "ab"), { recursive: true });
+  writeFileSync(join(agentsDir, "ab", "ag-1.json"), JSON.stringify({ id: "ag-1", labels: { "fm.task": "t1", "fm.project": "demo" }, createdAt: "2026-10-21T10:00:00Z", updatedAt: "2026-10-21T10:05:00Z" }));
+  const deck = new Deck({ exec: async (a: string[]) => (a[0] === "ls" ? JSON.stringify([{ id: "ag-1", status: "running" }]) : ""), ports: r.ports, batchMs: 30, agentsDir, readConfig: async () => ({ root: r.root, firstmateLabel: "firstmate=true" }) });
+  await deck.configure();
+  await deck.render("demo");
+  assert.notEqual(pill(r.live), "Dispatching");
+  assert.match(readFileSync(r.live, "utf8"), /Running/);
+  // a later SDK handle takes over without a flicker back to Dispatching
+  r.ports.capture({ paseo: fakePaseo(r.fw) }, "hook agent.turn_started");
+  await until(() => pill(r.live) === "running", 1500);
+  deck.stop();
   r.deck.stop();
 });
 
@@ -611,11 +615,11 @@ test("a failed SDK read keeps the last view but marks it stale", async () => {
 
 test("an agent event refreshes just that agent and re-renders its project; ticks refresh only running agents", async () => {
   const fleet = { tasks: [
-    { id: "t1", intent: "do it", status: "running", project: "demo", agentId: "ag-1", shape: "ship" },
-    { id: "t2", intent: "idle one", status: "running", project: "demo", agentId: "ag-2", shape: "ship" },
+    { id: "t1", intent: "do it", state: "active", project: "demo", agentId: "ag-1", shape: "ship" },
+    { id: "t2", intent: "idle one", state: "active", project: "demo", agentId: "ag-2", shape: "ship" },
   ] };
   const r = rig(fleet);
-  r.fw.add({ id: "ag-2", status: "idle", items: [shell("make two")] });
+  r.fw.add({ id: "ag-2", status: "idle", labels: { "fm.task": "t2", "fm.project": "demo" }, items: [shell("make two")] });
   await r.deck.configure();
   await r.deck.render("demo");
   assert.equal(r.fw.count("refetch:ag-1"), 1);
@@ -641,7 +645,7 @@ test("an agent event refreshes just that agent and re-renders its project; ticks
 });
 
 test("a project with no running agent asks the daemon nothing on a tick", async () => {
-  const r = rig({ tasks: [{ id: "t1", intent: "x", status: "running", project: "demo", agentId: "ag-1" }] });
+  const r = rig({ tasks: [{ id: "t1", intent: "x", state: "active", project: "demo", agentId: "ag-1" }] });
   r.world.status = "idle";
   await r.deck.configure();
   await r.deck.render("demo");
@@ -689,4 +693,166 @@ test("per-project claims: a comment on each page reaches only that page's first 
   assert.equal((await r.deck.summary("other")).firstmateAgentId, "fm-other");
   assert.equal((await r.deck.summary("demo")).firstmateAgentId, "fm-1");
   r.deck.stop();
+});
+
+// ---------- computed stages: Paseo + the fm.task label decide, the registry only holds intent ----------
+
+import { assistant } from "./fake-paseo.ts";
+
+const taskCard = (live: string, id: string) => {
+  const i = live.indexOf(`id=\\"t-${id}\\"`);
+  return i < 0 ? "" : live.slice(i, live.indexOf("</article>", i) > 0 ? live.indexOf("</article>", i) : undefined);
+};
+const groupOfCard = (live: string, id: string) => {
+  const m = [...live.matchAll(/id=\\"g-(\w+)\\"/g)].map((x) => [x[1], x.index!] as const);
+  const at = live.indexOf(`id=\\"t-${id}\\"`);
+  return m.filter(([, i]) => i < at).pop()?.[0];
+};
+
+test("stage: a running agent found by its fm.task label is Running, not whatever the registry last said", async () => {
+  // v1 registry still says needs-captain (no ask) with no agentId: the old page put this in Needs you
+  const r = rig({ tasks: [{ id: "t2", intent: "stale", state: "active", project: "demo", shape: "ship" }] });
+  r.fw.add({ id: "ag-2", status: "running", labels: { "fm.task": "t2", "fm.project": "demo" }, createdAt: "2026-10-24T10:00:00Z", items: [shell("npm test")] });
+  await r.deck.configure();
+  await r.deck.render("demo");
+  const live = readFileSync(r.live, "utf8");
+  assert.equal(groupOfCard(live, "t2"), "running");
+  assert.match(taskCard(live, "t2"), /class=\\"stg\\">Running</);
+  const sum = await r.deck.summary("demo");
+  assert.deepEqual([sum.projects[0].counts.needsYou, sum.projects[0].counts.running, sum.projects[0].running[0].agentId], [0, 1, "ag-2"]);
+  r.deck.stop();
+});
+
+test("stage: follows the agent: DONE: line -> Review; archived -> drift badge; ask-free", async () => {
+  const r = rig({ tasks: [{ id: "t2", intent: "x", state: "active", since: "2026-10-24T09:00:00Z", project: "demo", shape: "scout" }] });
+  r.fw.add({ id: "ag-2", status: "running", labels: { "fm.task": "t2" }, createdAt: "2026-10-24T10:00:00Z", items: [shell("ls")] });
+  await r.deck.configure();
+  await r.deck.render("demo");
+  assert.equal(groupOfCard(readFileSync(r.live, "utf8"), "t2"), "running");
+
+  const a = r.fw.agents.get("ag-2")!;
+  a.status = "idle"; a.items = [shell("ls"), assistant("DONE: report written")];
+  r.deck.onAgentEvent("ag-2");
+  await r.deck.render("demo");
+  let live = readFileSync(r.live, "utf8");
+  assert.equal(groupOfCard(live, "t2"), "fm");
+  assert.match(taskCard(live, "t2"), /class=\\"stg\\">Review</);
+
+  a.archivedAt = "2026-10-24T11:00:00Z";
+  r.deck.onAgentEvent("ag-2");
+  await r.deck.render("demo");
+  live = readFileSync(r.live, "utf8");
+  assert.match(taskCard(live, "t2"), /fl fl-d\\" title=\\"archived-agent-open-task\\"/);
+  r.deck.stop();
+});
+
+test("stage: drift is shown, not hidden: a queued task with a running agent; a task with no agent after the grace window", async () => {
+  const r = rig({ tasks: [
+    { id: "q1", intent: "queued", state: "queued", project: "demo", shape: "ship" },
+    { id: "l1", intent: "lost", state: "active", since: "2026-10-24T00:00:00Z", project: "demo", shape: "ship" },
+  ] });
+  r.fw.add({ id: "ag-q", status: "running", labels: { "fm.task": "q1" }, createdAt: "2026-10-24T10:00:00Z", items: [shell("ls")] });
+  await r.deck.configure();
+  await r.deck.render("demo");
+  const live = readFileSync(r.live, "utf8");
+  assert.equal(groupOfCard(live, "q1"), "next");
+  assert.match(taskCard(live, "q1"), /title=\\"queued-but-has-agent\\"/);
+  assert.equal(groupOfCard(live, "l1"), "fm");
+  assert.match(taskCard(live, "l1"), /title=\\"no-agent\\"/);
+  r.deck.stop();
+});
+
+test("stage: a new labelled agent seen on an event is picked up once", async () => {
+  const r = rig({ tasks: [{ id: "t3", intent: "x", state: "active", since: new Date().toISOString(), project: "demo", shape: "ship" }] });
+  await r.deck.configure();
+  await r.deck.render("demo");
+  assert.match(taskCard(readFileSync(r.live, "utf8"), "t3"), /Dispatching/);
+  r.fw.add({ id: "ag-3", status: "running", labels: { "fm.task": "t3" }, items: [shell("ls")] });
+  r.deck.onAgentEvent("ag-3");
+  await until(() => /class=\\"stg\\">Running</.test(taskCard(readFileSync(r.live, "utf8"), "t3")), 2000);
+  r.deck.stop();
+});
+
+// ---- the crew's canvas in the card (F1), against a fake agent-canvas on loopback ----
+import { FakeCanvas, summary as canvasSummary } from "./fake-canvas.ts";
+
+const canvasDeck = (r: ReturnType<typeof rig>, fc: FakeCanvas, url = fc.url) =>
+  new Deck({ exec: async () => "", ports: r.ports, batchMs: 30, canvasPollMs: 30, readConfig: async () => ({ root: r.root, firstmateLabel: "firstmate=true", canvasUrl: url }) });
+const CV_FLEET = { version: 2, tasks: [{ id: "t2", intent: "build", title: "Build it", state: "active", since: "2026-10-24T09:00:00Z", project: "demo", shape: "ship" }] };
+const cvRig = () => {
+  const r = rig(CV_FLEET);
+  r.fw.add({ id: "ag-2", status: "running", labels: { "fm.task": "t2" }, createdAt: "2026-10-24T10:00:00Z", items: [shell("npm test")] });
+  return r;
+};
+
+test("canvas: the live page shows the agent's canvas, follows its changes, and records the canvas URL for the CLI", async () => {
+  const fc = await new FakeCanvas().start();
+  fc.set(canvasSummary("ag-2", { bluf: "Wiring the routes" }));
+  const r = cvRig();
+  const deck = canvasDeck(r, fc);
+  await deck.configure();
+  await deck.render("demo");
+  await until(() => /Wiring the routes/.test(readFileSync(r.live, "utf8")), 3000);
+  assert.match(taskCard(readFileSync(r.live, "utf8"), "t2"), /Open canvas ↗/);
+  assert.match(readFileSync(r.page, "utf8"), /\.acv \.blk\{color:red\}/);
+  assert.equal(readPageJson(join(r.pdir, "page.json")).canvasUrl, fc.url);
+  // the canvas moves: the page follows without any agent event
+  fc.set(canvasSummary("ag-2", { rev: 2, bluf: "Routes done, tests next" }));
+  await until(() => /Routes done, tests next/.test(readFileSync(r.live, "utf8")), 3000);
+  // a raw question lands in the stage
+  fc.set(canvasSummary("ag-2", { rev: 3, openAsks: [{ id: "db", question: "pg or sqlite?", blocking: true, options: [{ value: "pg", label: "pg" }, { value: "sqlite", label: "sqlite" }] }] }));
+  await until(() => /Running · 1 question/.test(readFileSync(r.live, "utf8")), 3000);
+  const sum = await deck.summary("demo");
+  assert.equal(sum.projects[0].counts.running, 1);
+  deck.stop(); await fc.stop();
+});
+
+test("canvas: a click on a raw ask is validated against the live canvas and reaches the first mate as a canvas ask", async () => {
+  const fc = await new FakeCanvas().start();
+  fc.set(canvasSummary("ag-2", { openAsks: [{ id: "db", question: "pg or sqlite?", blocking: true, options: [{ value: "pg", label: "pg" }, { value: "sqlite", label: "sqlite" }] }] }));
+  const r = cvRig();
+  const deck = canvasDeck(r, fc);
+  await deck.configure();
+  await deck.render("demo");
+  await until(() => /Uncurated/.test(readFileSync(r.live, "utf8")), 3000);
+  const pick = (opt: string) => ({ prompt: `Picked: ${opt}\n\nContext data:\n${JSON.stringify({ kind: "ask-choice", task: "t2", ask: "c-db", option: opt })}`, selector: "#o-t2-c-db-1" });
+  deck.ingest("demo", [pick("pg"), pick("mysql")]);
+  await until(() => r.world.sent.length > 0, 3000);
+  const msg = r.world.sent.join("\n");
+  assert.match(msg, /picked option "pg" for canvas ask db \("pg or sqlite\?"\)/);
+  assert.match(msg, /option "mysql" for canvas ask db .* no longer open, ignored|no longer open, ignored: option "mysql" for canvas ask db/);
+  const inbox = readInbox(join(r.pdir, "inbox.jsonl"));
+  assert.deepEqual(inbox.map((e) => [e.target, !!e.stale]), [["t-t2#c-db", false], ["t-t2#c-db", true]]);
+  // the pick moves the card to "sent to the first mate" and the stage to With the first mate
+  await until(() => /Sent to the first mate/.test(readFileSync(r.live, "utf8")), 3000);
+  assert.match(taskCard(readFileSync(r.live, "utf8"), "t2"), /class=\\"stg\\">With the first mate</);
+  deck.stop(); await fc.stop();
+});
+
+test("canvas: agent-canvas down is a soft badge and the page keeps working; it heals when the canvas returns", async () => {
+  const fc = await new FakeCanvas().start();
+  fc.set(canvasSummary("ag-2", { bluf: "Up" }));
+  fc.down = true;
+  const r = cvRig();
+  const deck = canvasDeck(r, fc);
+  await deck.configure();
+  await deck.render("demo");
+  await until(() => /canvas unavailable/.test(readFileSync(r.live, "utf8")), 3000);
+  assert.match(taskCard(readFileSync(r.live, "utf8"), "t2"), /class=\\"stg\\">Running</);
+  fc.down = false;
+  await until(() => /Up/.test(readFileSync(r.live, "utf8")) && !/canvas unavailable/.test(readFileSync(r.live, "utf8")), 3000);
+  deck.stop(); await fc.stop();
+});
+
+test("canvas: 'off' in settings means no requests at all", async () => {
+  const fc = await new FakeCanvas().start();
+  fc.set(canvasSummary("ag-2"));
+  const r = cvRig();
+  const deck = canvasDeck(r, fc, "");
+  await deck.configure();
+  await deck.render("demo");
+  await sleep(150);
+  assert.equal(fc.hits.length, 0);
+  assert.ok(!/Open canvas/.test(readFileSync(r.live, "utf8")));
+  deck.stop(); await fc.stop();
 });

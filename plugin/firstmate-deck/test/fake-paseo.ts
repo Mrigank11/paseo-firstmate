@@ -15,6 +15,8 @@ export type FakeAgent = {
   items?: TimelineItem[];
   /** The page reports older entries beyond the tail. */
   hasOlder?: boolean;
+  pendingPermissions?: unknown[];
+  cwd?: string;
 };
 
 export type FakeSent = { id: string; text: string; options: unknown };
@@ -26,6 +28,8 @@ export class FakeWorld {
   sent: FakeSent[] = [];
   rows: FakeRow[] = [];
   sendFails = false;
+  responded: { id: string; requestId: string; response: unknown }[] = [];
+  respondFails = false;
   refetchFails = new Set<string>();
   add(...as: FakeAgent[]) { for (const a of as) this.agents.set(a.id, a); return this; }
   count(prefix: string) { return this.calls.filter((c) => c.startsWith(prefix)).length; }
@@ -33,11 +37,11 @@ export class FakeWorld {
 
 export function snapshot(a: FakeAgent): PaseoAgent {
   return {
-    id: a.id, provider: "claude", cwd: "/tmp", model: a.model === undefined ? "claude-sonnet-5-5" : a.model,
+    id: a.id, provider: "claude", cwd: a.cwd ?? "/tmp", model: a.model === undefined ? "claude-sonnet-5-5" : a.model,
     createdAt: a.createdAt ?? "2026-10-21T10:00:00.000Z", updatedAt: a.updatedAt ?? "2026-10-21T10:05:00.000Z", lastUserMessageAt: null,
     status: a.status ?? "idle",
     capabilities: { supportsStreaming: true, supportsSessionPersistence: true, supportsDynamicModes: true, supportsMcpServers: true, supportsReasoningStream: true, supportsToolInvocations: true },
-    currentModeId: null, availableModes: [], pendingPermissions: [], persistence: null,
+    currentModeId: null, availableModes: [], pendingPermissions: (a.pendingPermissions ?? []) as never[], persistence: null,
     title: a.title ?? null, labels: a.labels ?? {},
     effectiveThinkingOptionId: a.thinking ?? null, archivedAt: a.archivedAt ?? null,
   };
@@ -56,6 +60,11 @@ export function fakePaseo(world: FakeWorld): PaseoApi {
         world.calls.push(`send:${id}`);
         if (world.sendFails) throw new Error("daemon down");
         world.sent.push({ id, text, options });
+      },
+      respondToPermission: async (o: { requestId: string; response: unknown }) => {
+        world.calls.push(`respond:${id}`);
+        if (world.respondFails) throw new Error("no such request");
+        world.responded.push({ id, requestId: o.requestId, response: o.response });
       },
       timeline: {
         append: async (item: unknown) => { world.calls.push(`append:${id}`); world.rows.push({ agentId: id, item }); return { seq: 1, epoch: "e" }; },
@@ -76,11 +85,11 @@ export function fakePaseo(world: FakeWorld): PaseoApi {
   };
   const agents = {
     ref: (id: string | PaseoAgent) => handle(typeof id === "string" ? id : id.id),
-    list: async (o?: { filter?: { labels?: Record<string, string> } }) => {
+    list: async (o?: { filter?: { labels?: Record<string, string>; includeArchived?: boolean } }) => {
       world.calls.push(`list${o?.filter?.labels ? ":" + JSON.stringify(o.filter.labels) : ""}`);
       const want = Object.entries(o?.filter?.labels ?? {});
       const entries = [...world.agents.values()]
-        .filter((a) => !a.archivedAt && want.every(([k, v]) => a.labels?.[k] === v))
+        .filter((a) => (o?.filter?.includeArchived || !a.archivedAt) && want.every(([k, v]) => a.labels?.[k] === v))
         .map((a) => ({ agent: snapshot(a), project: null }));
       return { requestId: "r", entries, pageInfo: { nextCursor: null, prevCursor: null, hasMore: false } };
     },

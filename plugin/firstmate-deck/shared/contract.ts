@@ -18,6 +18,11 @@ export const deckSettings = defineSettings({
     readMarksPort: z.number().int().default(4398),
     // The tailnet IP (or host) to bind when `tailscale ip -4` finds none. Empty = loopback only.
     readMarksHost: z.string().default(""),
+    // agent-canvas on this machine: the deck pulls each crew agent's canvas from it (loopback, plugin-side) into the task cards.
+    // Live is 6790, the isolated daemon 6791. "off" turns the cards' canvas off.
+    canvasUrl: z.string().default("http://127.0.0.1:6790"),
+    // The agent-canvas checkout (its server/brief-snippet.ts feeds `bin/page canvas-snippet`; unused by the deck itself).
+    canvasDir: z.string().default(""),
   }),
 });
 

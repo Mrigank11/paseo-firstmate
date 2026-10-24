@@ -22,7 +22,7 @@ Re-read `decisions.md` every dispatch rather than trusting a remembered copy —
 
 Lanes are keyed by role; you infer the role (the captain can always override):
 
-- **planning / judgment** — you (the first mate) and any secondmate, plus tasks that need real reasoning: architecture, ambiguous debugging, design, final review, or a scout whose value is a judgment call.
+- **planning / judgment** — you (the first mate), plus tasks that need real reasoning: architecture, ambiguous debugging, design, final review, or a scout whose value is a judgment call.
 - **contributor / execution** — everything else: most scouts, well-specified ship implementations, fan-out research, scraping, bulk edits. This is the default lane.
 
 **Lane × shape guard:** the planning lane runs *plan-only scouts* — a planning-lane agent reads and outputs a plan, never a ship, and never edits code. Implementation is always a *contributor-lane ship*, briefed from that plan. Escalate to a planning-lane scout only when planning genuinely exceeds your own model's reach; otherwise plan in-house and dispatch a cheap ship directly.
@@ -42,9 +42,11 @@ The contributor lane is typically the cheap, high-context `opencode/opencode-go/
 
 ## 3. Materializing a lane or profile into create_agent
 
-A lane's raw spec maps straight onto the call: `provider/model` → `provider` (e.g. `claude-work/claude-opus-5-5`), its mode → `settings.modeId`, its thinking option → `settings.thinkingOptionId` (e.g. the planning lane sets `"medium"`), its features → `settings.features`. A Paseo profile — a lane value of `profile:<name>`, or the section-1 fallback — materializes the same way: there is no `profile` param on `mcp__paseo__create_agent`, so map profile `provider`/`model` → `provider`, `modeId` → `settings.modeId`, `thinkingOptionId` → `settings.thinkingOptionId`, `featureValues` → `settings.features`.
+A lane is normally a Paseo profile (`profile:fm-planning`, `profile:fm-contributor`, `profile:fm-fallback`; the repo's `config/paseo-profiles.json` is their source, installed with `bin/page profiles --apply`). Call `mcp__paseo__list_profiles`, find the profile by `id`, and copy its fields: there is no `profile` param on `mcp__paseo__create_agent`, so the profile's `provider` + `model` → `provider` (`<provider>/<model>`, e.g. `claude-work/claude-opus-5-5`), `modeId` → `settings.modeId`, `thinkingOptionId` → `settings.thinkingOptionId`, `featureValues` → `settings.features`. `notes` says when to use it. A lane written as a raw spec (`provider/model · mode · features`) maps the same way. If `list_profiles` does not have the profile, fall back to the raw spec in `decisions.md`, or tell the captain the profiles are not installed.
 
-Given a profile `{ "provider": "claude/opus", "modeId": "build", "thinkingOptionId": "think-hard", "featureValues": { "auto_accept": true } }`, the call becomes:
+**Contributor fallback.** If the `fm-contributor` agent cannot start (the provider errors on launch, e.g. OpenCode too old for `muse-spark-1.3-contributor`), relaunch once with `profile:fm-fallback` and say so in one line to the captain; do not retry the failing profile.
+
+Given a profile `{ "provider": "claude", "model": "opus", "modeId": "build", "thinkingOptionId": "think-hard", "featureValues": { "auto_accept": true } }`, the call becomes:
 
 ```json
 {
@@ -54,11 +56,17 @@ Given a profile `{ "provider": "claude/opus", "modeId": "build", "thinkingOption
   "initialPrompt": "<brief>",
   "notifyOnFinish": true,
   "settings": { "modeId": "build", "thinkingOptionId": "think-hard", "features": { "auto_accept": true } },
-  "labels": { "task": "<id>", "shape": "ship" }
+  "labels": { "fm.task": "<id>", "fm.project": "<project>", "fm.shape": "ship", "canvas": "on", "canvas.relay": "<your own agent id>" }
 }
 ```
 
+Stamp the labels on every `create_agent`: `fm.task` (the task id, the join key from an agent to its task), `fm.project` (the project page the task belongs to; omit it for a task with no project) and `fm.shape` (`scout` or `ship`). The legacy `task` / `shape` labels are no longer read by anything; old agents may still carry them, new ones don't need them. A crew agent with no `fm.task` label is invisible to the stage engine (the page shows its task as Dispatching, then Lost). Re-tasking an existing agent: `mcp__paseo__update_agent { labels: { "fm.task": "<new-id>" } }` (plus `fm.project` / `fm.shape` if they changed) before `send_agent_prompt`, so the label always names the agent's current task.
+
+**Canvas labels.** Every firstmate crew member gets a live canvas, from its first step: stamp `"canvas": "on"` and `"canvas.relay": "<your own $PASEO_AGENT_ID>"` with the other labels. `canvas=on` is the per-agent switch (it beats agent-canvas's global one, so the captain's own agents stay untouched); `canvas.relay` makes a captain's pick on the canvas come to *you* first (a `## Canvas answer · …` message), not straight to the crew, so the guardrail check in `project-page` always runs. The agent only has the canvas recipe because its brief carries the `## Your canvas` section (`writing-briefs`): the two always go together. The exception is a one-shot chore (a quick lookup, a single command): label it `"canvas": "off"` instead, leave out `canvas.relay`, and leave the section out of its brief. Re-tasking (`update_agent`) keeps both labels, and tells the crew to `set` a fresh canvas (an old task's content would otherwise stay on it). A relaunch from `stuck-crew-recovery` copies them. When a new first mate takes over (`bin/page claim`), the claim re-points `canvas.relay` on the open crews itself; the page flags `relay-target-gone` for any it could not reach.
+
 Required fields on `mcp__paseo__create_agent` are `title`, `provider`, `initialPrompt`; `workspaceId` selects the workspace (below), `notifyOnFinish` stays true unless the captain says otherwise.
+
+**Plugin-gated wake.** Only when `state/decisions.md` has the line `notify: plugin` (absent = off, the default until the gate is validated in shadow mode): also stamp `"fm.notify": "plugin"` and set `notifyOnFinish: false`. The deck plugin then wakes you with `## Crew <VERDICT> · <task>` only on a real `DONE:`/`BLOCKED:` first line (a narration-only first finish no longer uses up the one Paseo notification). With the switch off, never set `fm.notify` and leave `notifyOnFinish` true; the plugin still audits every crew turn in `state/gate-log.jsonl`.
 
 ## 4. Refresh the base before dispatch
 
@@ -81,7 +89,7 @@ A `scout` task never touches project code and gets no worktree: omit `workspaceI
 
 ## 6. After spawning
 
-Record `{ id, agentId, workspaceId, provider, shape, status: "dispatched" }` into `state/fleet.json`, then end the turn — do not follow the agent, poll it, or start reviewing output in this turn.
+Record the task with `bin/fleet add <id> intent="…" shape=<scout|ship> state=active [project=<p>] [title="…"]` — nothing about the agent goes into the registry: its id, workspace and model are Paseo's, found through the `fm.task` label (`bin/fleet stage <id>` shows them). Then end the turn — do not follow the agent, poll it, or start reviewing output in this turn.
 
 ## 7. Never guess IDs
 

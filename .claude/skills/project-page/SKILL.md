@@ -22,11 +22,11 @@ If it exits 2, the captain ended this page's session. Don't reopen it; run `bin/
 | When | Run |
 |---|---|
 | Dispatching a task for the project | `bin/fleet add <id> ... project=<project> title="<short title>"`. A task added with `depends_on=a,b` and no `project=` inherits the project of its first dependency that has one (and `bin/fleet depend` does the same for a task that has none), but say `project=` explicitly anyway |
-| Planned but not dispatched yet | `status=queued`, then `status=parked` when the captain shelves it |
-| A task waits on an outside dependency (not the captain, not crew) | `bin/fleet set <id> status=blocked blocked_on="<what/who>"`: it lands in the Blocked group with a "Blocked on:" line; `status=running` (or any other) clears it. `parked` stays for what the captain paused |
+| Planned but not dispatched yet | `state=queued`, then `state=parked` when the captain shelves it; `state=active` once dispatched |
+| A task waits on an outside dependency (not the captain, not crew) | `bin/fleet set <id> state=blocked blocked_on="<what/who>"`: it lands in the Blocked group with a "Blocked on:" line; `state=active` (or any other) clears it. `parked` stays for what the captain paused |
 | A task waits on another | `bin/fleet depend <id> <other-id>` |
 | You need the captain's decision | `bin/fleet ask <id> "<BLUF question, ≤200 chars>" --context-file <md>` |
-| A crew member finishes | `bin/fleet finish <id> [--branch <b>] [--card -]` (`--failed` for a failure). It sets the status, writes `tasks/<id>/card.md` (from the card you pipe in with `--card -`: 3–6 lines of what changed, where to look, what's untested; with no card it makes one from the task's notes plus branch/PR), and for a project task appends the branch's commits (`git log --oneline <base>..<branch>`, `--base` defaults to `main`) to the project's code section, dated and without repeating commits. It needs `repo` in the project's `project.json` (`bin/page start --repo`). Write a card yourself only when you have more to say than the notes |
+| A crew member finishes | `bin/fleet finish <id> [--branch <b>] [--card -]` (`--failed` for a failure). It refuses while the task has open asks unless the same command answers them (`--close-asks`, or `--answer a1`), sets the state, records the task's agents, writes `tasks/<id>/card.md` (from the card you pipe in with `--card -`: 3–6 lines of what changed, where to look, what's untested; with no card it makes one from the task's intent plus branch/PR), and for a project task appends the branch's commits (`git log --oneline <base>..<branch>`, `--base` defaults to `main`) to the project's code section, dated and without repeating commits. It needs `repo` in the project's `project.json` (`bin/page start --repo`). Write a card yourself only when you have more to say than the intent |
 | The captain decides something | `bin/page note <project> decisions "<decision>"` |
 | An endpoint, flag or run step changes | edit `state/projects/<project>/sections/<name>.md` (endpoints, flags and how it runs are hand-written) |
 
@@ -65,6 +65,17 @@ Delivery is at least once, so the same comment can arrive twice. De-dup by comme
 A comment on an ask moves it to "With the first mate" the moment the captain sends it, with no action from you. Comments on a card's steps or body only show in the card's comment trail; they do not move an ask.
 
 The captain's Lavish panel shows "Working" until your reply, so always reply, even if the reply is "noted, nothing to change".
+
+## Canvas questions from the crew
+
+Every crew member has a live canvas (`dispatch-routing` §3, `writing-briefs`). It asks the captain by putting an `<Ask>` on that canvas and ending its turn with `BLOCKED: canvas ask <id>`, so a wake with that first line is a canvas question. The deck already shows the question raw on the task card ("uncurated · from the crew"), with buttons.
+
+1. **Curate it** (optional but better): `bin/fleet ask <task> "<BLUF question>" --options "a|b" --ref '{"kind":"canvas","agentId":"<crew agent>","block":"<ask id>"}'`. The curated ask replaces the raw one on the card. The registry stores only the `ref`: text and options are read live from the canvas. When the canvas ask is answered, the card shows "resolved on canvas" and `bin/fleet stages` reports `ref-closed`: run `bin/fleet answer` then.
+2. **A pick comes to you** two ways: as a page option click (`## Page comments · …`, target `t-<task>#c-<askId>` for a raw ask), or from the canvas itself in Paseo as `## Canvas answer · <task> · ask <id>: <value> (<label>)`. Either way the crew has been told nothing yet: the pick waits for you.
+3. **Guardrail check** (your judgement, guided by `state/decisions.md` and the task's brief): is the pick inside the brief's scope, and read-only on external systems and not production? Then deliver it: `bin/page canvas-answer <task> <askId> <value>`. agent-canvas marks the Ask answered and sends the crew the answer. If it is not safe or in scope, refuse and ask the captain to confirm: `bin/page canvas-answer <task> <askId> --decline "<why>"` closes the Ask with your note and tells the crew why, and `bin/page reply` tells the captain what you need.
+4. Close the curated ask, if there is one (`bin/fleet answer <task> <askId>`; `bin/page reply` does it for a page pick). A second pick on the same ask is harmless: agent-canvas reports "already pending".
+
+`bin/page claim` re-points every open crew's `canvas.relay` to you. If a crew's relay agent is gone and nobody re-claimed, the card carries the `relay-target-gone` flag: run `bin/page claim <project>` from the first mate's own session.
 
 ## When something's wrong
 

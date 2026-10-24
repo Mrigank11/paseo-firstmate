@@ -78,9 +78,13 @@ test("SdkPort.listAgents: label filter goes to the daemon, archived agents are n
   const some = await port.listAgents({ label: "firstmate=true" });
   assert.deepEqual(some.map((a) => a.id), ["fm-1"]);
   assert.deepEqual(w.calls, ['list:{"firstmate":"true"}']);
-  assert.deepEqual(some[0], { id: "fm-1", status: "idle", labels: { firstmate: "true" }, createdAt: "2026-10-21T08:00:00Z", updatedAt: "2026-10-21T10:05:00.000Z", model: "m1", thinking: "high", title: "First mate", archived: false });
+  assert.deepEqual(some[0], { id: "fm-1", status: "idle", labels: { firstmate: "true" }, createdAt: "2026-10-21T08:00:00Z", updatedAt: "2026-10-21T10:05:00.000Z", model: "m1", thinking: "high", title: "First mate", archived: false, lastActivityAt: "2026-10-21T10:05:00.000Z", pendingPermissions: 0 });
   assert.deepEqual((await port.listAgents()).map((a) => a.id), ["fm-1", "crew"]);
   assert.deepEqual((await port.listAgents({ label: "firstmate" })).map((a) => a.id), ["fm-1"], "a bare key matches any value");
+  const all = await port.listAgents({ label: "firstmate", includeArchived: true });
+  assert.deepEqual(all.map((x) => [x.id, x.archived]), [["fm-1", false], ["gone", true]], "includeArchived lists archived agents, flagged");
+  w.add({ id: "perm", status: "running", pendingPermissions: [{ id: "p1" }, { id: "p2" }] });
+  assert.equal((await port.listAgents()).find((x) => x.id === "perm")!.pendingPermissions, 2);
 });
 
 test("SdkPort.send steers instead of interrupting; appendTimelineRow writes the plugin row", async () => {
@@ -115,7 +119,7 @@ test("SdkPort.agentView: status, times, model, thinking and the steps from a bou
 test("first mate resolution through the SDK: claim first, then newest live labelled non-crew agent", async () => {
   const root = mkdtempSync(join(tmpdir(), "deck-sdkfm-"));
   mkdirSync(join(root, "state"), { recursive: true });
-  writeFileSync(join(root, "state", "fleet.json"), JSON.stringify({ tasks: [{ id: "t", agentId: "scout" }] }));
+  writeFileSync(join(root, "state", "fleet.json"), JSON.stringify({ version: 2, tasks: [{ id: "t", agentId: "scout" }] }));
   const w = new FakeWorld().add(
     { id: "scout", status: "idle", labels: { firstmate: "true" }, createdAt: "2026-10-21T12:00:00Z" },
     { id: "fm-a", status: "idle", labels: { firstmate: "true" }, createdAt: "2026-10-21T08:00:00Z" },
