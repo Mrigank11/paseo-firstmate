@@ -46,6 +46,7 @@ details[open]>summary::before{transform:rotate(45deg)}
 .p-you{background:#fde6cf;color:var(--you)}.p-done{background:#dcfce7;color:var(--ok)}.p-error{background:#fee2e2;color:#b91c1c}
 @keyframes pulse{50%{opacity:.3}}@media (prefers-reduced-motion:reduce){.p-running .dot{animation:none}}
 .facts{font-variant-numeric:tabular-nums}.open{margin-left:auto;font-weight:500}
+.stg{font-weight:600;color:var(--fg)}.fl{font-size:11.5px;padding:1px 7px;border-radius:5px;background:var(--soft);color:var(--mut)}.fl-d{background:#fee2e2;color:#b91c1c;font-weight:600}
 .cur{font-size:13px;color:#3d3a34;margin-top:6px;max-width:80ch}
 details.stp>summary.cur{display:block}
 details.stp>summary.cur::before{width:5px;height:5px;margin:0 8px 2px 1px}

@@ -8,6 +8,7 @@ import { navScript } from "./nav-script.ts";
 import { pageScript } from "./page-script.ts";
 import { CSS } from "./style.ts";
 import type { ProjectModel, Task, TrailComment } from "./state.ts";
+import { computeStage, stageAgentsFor, type GroupKey, type LabeledAgent, type Stage, type StageFlag } from "./stage.ts";
 
 export type AgentView = {
   status: "initializing" | "idle" | "running" | "error" | "closed" | "archived" | "unknown";
@@ -41,6 +42,8 @@ export type RenderOpts = {
   pageFile?: string;
   /** Where the page syncs its read marks (the plugin's marks endpoint, e.g. http://host:4398/<project>/state). Without it the marks live in the browser only. */
   marksUrl?: string;
+  /** Paseo agents found by their `fm.task` label, per task id (runtime.ts). Without them a v1 task's `agentId` stands in. */
+  labeled?: Record<string, LabeledAgent[]>;
 };
 
 export type Rendered = { page: string; live: string; signature: string };
@@ -54,7 +57,6 @@ const GROUPS = [
   ["parked", "Parked"],
   ["done", "Done"],
 ] as const;
-type GroupKey = (typeof GROUPS)[number][0];
 
 /** Each stage's navigator icon. A Record over GroupKey, so a new stage cannot ship without one. */
 const STAGE_ICON: Record<GroupKey, string> = {
@@ -97,14 +99,14 @@ const stampShort = (d: Date) => `${pad(d.getHours())}:${pad(d.getMinutes())}:${p
 
 const titleCase = (s: string) => s.replace(/[-_]+/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
 
-export function groupOf(t: Task, live: boolean): GroupKey {
-  if (live && t.asks.length > 0) return t.asks.some((a) => !a.repliedAt) ? "you" : "fm";
-  if (live && t.status === "needs-captain") return "you";
-  if (t.status === "dispatched" || t.status === "running") return "running";
-  if (t.status === "done" || t.status === "failed") return "done";
-  if (t.status === "parked") return "parked";
-  if (t.status === "blocked") return "blocked";
-  return "next"; // queued and anything unrecognised
+/** The task's computed stage (stage.ts): from the registry's intent, its asks, and the Paseo agents carrying its label. */
+export function stageOf(t: Task, live: boolean, o: { now: Date; labeled?: RenderOpts["labeled"] }, view: (id: string) => AgentView | undefined = () => undefined): Stage {
+  if (!live) return computeStage(t, t.agentId ? [{ id: t.agentId, status: "idle", archived: false, pendingPermissions: 0 }] : [], o.now, { archived: true });
+  return computeStage(t, stageAgentsFor(t, o.labeled?.[t.id], view), o.now);
+}
+
+export function groupOf(t: Task, live: boolean, now = new Date(), labeled?: RenderOpts["labeled"], view?: (id: string) => AgentView | undefined): GroupKey {
+  return stageOf(t, live, { now, labeled }, view).group;
 }
 
 function pill(group: GroupKey, ast: string): [string, string] {
@@ -115,13 +117,19 @@ function pill(group: GroupKey, ast: string): [string, string] {
   return ["idle", ast || "idle"];
 }
 
-function agentBlock(t: Task, group: GroupKey, view: AgentView | undefined, o: RenderOpts): string {
-  const aid = t.agentId as string;
+const flagBadges = (flags: StageFlag[]) => flags.map((f) => `<span class="fl${f.drift ? " fl-d" : ""}" title="${esc(f.key)}">${esc(f.text)}</span>`).join("");
+
+function agentBlock(t: Task, group: GroupKey, view: AgentView | undefined, o: RenderOpts, st: Stage): string {
+  const aid = st.agentId ?? t.agentId;
+  if (!aid) { // no agent to show: Dispatching and Lost still say where the task stands, and so does any drift flag
+    if (!st.flags.length && group !== "running" && group !== "fm") return "";
+    return `<div class="ag"><span class="pill p-idle"><span class="dot"></span>${esc(st.stage)}</span>${flagBadges(st.flags)}</div>`;
+  }
   const url = esc(o.paseoAgentUrl(aid));
   if (group === "done") { // frozen: the agent id may be reused later, so show none of its live state
-    const [cls, label] = t.status === "failed" ? ["error", "failed"] : ["done", "done"];
+    const [cls, label] = st.failed ? ["error", "failed"] : ["done", "done"];
     const who = t.provider ? `<span class="facts">${esc(t.provider)}</span>` : "";
-    return `<div class="ag"><span class="pill p-${cls}"><span class="dot"></span>${label}</span>${who}<a class="open" href="${url}">Open in Paseo</a></div>`;
+    return `<div class="ag"><span class="pill p-${cls}"><span class="dot"></span>${label}</span>${who}${flagBadges(st.flags)}<a class="open" href="${url}">Open in Paseo</a></div>`;
   }
   const a: AgentView = view ?? { status: "unknown", stepCount: 0, recent: [] };
   const ast = a.stale ? "unknown" : a.status;
@@ -138,7 +146,7 @@ function agentBlock(t: Task, group: GroupKey, view: AgentView | undefined, o: Re
   const cur = ACTIVE.has(ast) && a.recent.length ? a.recent[a.recent.length - 1] : a.final || a.recent[a.recent.length - 1] || "";
   const head =
     `<div class="ag"><span class="pill p-${cls}"><span class="dot"></span>${esc(label)}</span>` +
-    `<span class="facts">${esc(facts)}</span><a class="open" href="${url}">Open in Paseo</a></div>`;
+    `<span class="stg">${esc(st.stage)}</span>${flagBadges(st.flags)}<span class="facts">${esc(facts)}</span><a class="open" href="${url}">Open in Paseo</a></div>`;
   if (!cur) return head;
   if (!a.recent.length) return head + `<div class="cur">${esc(cut(cur, 160))}</div>`;
   const lis = a.recent.map((s) => `<li>${esc(s)}</li>`).join("");
@@ -178,7 +186,7 @@ export function trailHtml(all: TrailComment[], target: string, now: Date, also?:
   return `<div class="trail"><span class="tr-who">💬 You${hm}</span><span class="tr-txt">${said}</span>${n}${chipHtml(last, now)}</div>`;
 }
 
-type Ctx = { byId: Map<string, Task>; unblocks: Map<string, string[]>; agents: Record<string, AgentView>; o: RenderOpts; comments: TrailComment[] };
+type Ctx = { byId: Map<string, Task>; unblocks: Map<string, string[]>; agents: Record<string, AgentView>; o: RenderOpts; comments: TrailComment[]; stages: Map<string, Stage> };
 
 /**
  * An ask's context repeats the ask text when it came from a longer text (the first sentence, bold or not). Show it once:
@@ -214,8 +222,10 @@ export const markable = (t: Task): boolean => t.card.trim() !== "";
 
 function row(t: Task, group: GroupKey, ctx: Ctx, idx = 0): string {
   const name = esc(t.title || t.intent || t.id);
-  const title = t.agentId ? `<a href="${esc(ctx.o.paseoAgentUrl(t.agentId))}">${name}</a>` : name;
-  const failed = t.status === "failed";
+  const st = ctx.stages.get(t.id)!;
+  const aid = st.agentId ?? t.agentId;
+  const title = aid ? `<a href="${esc(ctx.o.paseoAgentUrl(aid))}">${name}</a>` : name;
+  const failed = st.failed;
   const chip = failed ? `<span class="chip c-fail">failed</span>` : "";
   // Done cards carry their position (data-i) so the page can put a card back in order when it moves it between the
   // unread and read groups, and (when they have a card) the hash the read mark is keyed by (data-h) and a button.
@@ -276,7 +286,7 @@ function row(t: Task, group: GroupKey, ctx: Ctx, idx = 0): string {
     const detail = ctxMd.trim() ? `<details class="actx" id="x-${esc(t.id)}-${esc(a.id)}"><summary>Context</summary><div>${markdown(ctxMd)}</div></details>` : "";
     if (ans || detail) out.push(`<div class="askbox answered" id="a-${esc(t.id)}-${esc(a.id)}"><div class="ask-tag">Answered</div>${ans}${detail}</div>`);
   }
-  if (t.agentId) out.push(agentBlock(t, group, ctx.agents[t.agentId], ctx.o));
+  out.push(agentBlock(t, group, aid ? ctx.agents[aid] : undefined, ctx.o, st));
   if (group === "blocked") out.push(`<div class="bo"><b>Blocked on:</b> ${esc(t.blocked_on || "an outside dependency")}</div>`);
   const body = t.card.trim() ? cardHtml(t) : esc(t.notes);
   if (body) out.push(`<div class="nt">${body}</div>`);
@@ -309,7 +319,7 @@ export function navHtml(buckets: Record<GroupKey, { t: Task }[]>): string {
     const cap = items.length > NAV_CAP;
     const lis = items.map(({ t }) => {
       const name = esc(t.title || t.intent || t.id);
-      const fail = t.status === "failed" ? ` class="fail"` : "";
+      const fail = t.state === "failed" ? ` class="fail"` : "";
       return `<li${fail}><a class="tn-a" href="#t-${esc(t.id)}" data-t="t-${esc(t.id)}" title="${name}">${name}</a></li>`;
     }).join("");
     const more = cap ? `<button class="tn-more" type="button" aria-expanded="false" data-more="${items.length - NAV_SHOW} more">${svg(ICON.more)}<span>${items.length - NAV_SHOW} more</span></button>` : "";
@@ -326,6 +336,14 @@ export function byOrder<T extends { order?: number }>(items: T[]): T[] {
     .map(([x]) => x);
 }
 
+/** Stage of every task the page shows (live ones from Paseo + intent, archive lines frozen), keyed by task id. */
+export function stagesOf(model: ProjectModel, agents: Record<string, AgentView>, o: { now: Date; labeled?: RenderOpts["labeled"] }): Map<string, Stage> {
+  const out = new Map<string, Stage>();
+  for (const t of model.archive) out.set(t.id, stageOf(t, false, o));
+  for (const t of model.tasks) out.set(t.id, stageOf(t, true, o, (id) => agents[id]));
+  return out;
+}
+
 function renderLive(model: ProjectModel, agents: Record<string, AgentView>, o: RenderOpts): string {
   const liveIds = new Set(model.tasks.map((t) => t.id));
   const archive = model.archive.filter((t) => !liveIds.has(t.id)).reverse(); // newest first
@@ -333,22 +351,23 @@ function renderLive(model: ProjectModel, agents: Record<string, AgentView>, o: R
   const byId = new Map(all.map((t) => [t.id, t]));
   const unblocks = new Map<string, string[]>();
   for (const t of all) for (const d of t.depends_on) unblocks.set(d, [...(unblocks.get(d) ?? []), t.id]);
-  const ctx: Ctx = { byId, unblocks, agents, o, comments: model.comments };
+  const stages = stagesOf(model, agents, o);
+  const ctx: Ctx = { byId, unblocks, agents, o, comments: model.comments, stages };
 
   const buckets: Record<GroupKey, { t: Task; g: GroupKey }[]> = { you: [], fm: [], running: [], blocked: [], next: [], parked: [], done: [] };
-  for (const t of model.tasks) buckets[groupOf(t, true)].push({ t, g: groupOf(t, true) });
+  for (const t of model.tasks) buckets[stages.get(t.id)!.group].push({ t, g: stages.get(t.id)!.group });
   for (const t of archive) buckets.done.push({ t, g: "done" });
   // Done: most recently updated (lastEvent) first, live and archived together. An explicit `order` still pins a task ahead of the rest in any group.
   buckets.done.sort((a, b) => b.t.updatedMs - a.t.updatedMs);
   for (const k of Object.keys(buckets) as GroupKey[]) buckets[k] = byOrder(buckets[k].map((x) => ({ ...x, order: x.t.order }))).map(({ t, g }) => ({ t, g }));
 
   const busy = GROUPS.filter(([k]) => k !== "done").flatMap(([k]) => buckets[k])
-    .filter(({ t }) => t.agentId && ACTIVE.has(agents[t.agentId]?.status ?? "")).length;
-  const failedN = buckets.done.filter(({ t }) => t.status === "failed").length;
+    .filter(({ t }) => { const a = stages.get(t.id)?.agentId; return a && ACTIVE.has(agents[a]?.status ?? ""); }).length;
+  const failedN = buckets.done.filter(({ t }) => stages.get(t.id)?.failed ?? t.state === "failed").length;
   const countOf = (k: GroupKey) => (k === "done" ? buckets.done.length - failedN : buckets[k].length); // a failed task is not "done"
   // Done cards with a card.md start "unread" (the page moves the ones the captain has marked read into the Done group)
   // The captain's marks (state/projects/<p>/ui-state.json) are applied here too, so the first paint already has the right split.
-  const cands = buckets.done.filter(({ t }) => markable(t) && t.status !== "failed");
+  const cands = buckets.done.filter(({ t }) => markable(t) && !(stages.get(t.id)?.failed ?? t.state === "failed"));
   const isRead = (t: Task) => model.marks?.[`t-${t.id}`] === cardHash(t.card);
   const unread = cands.filter(({ t }) => !isRead(t));
   const unreadIds = new Set(unread.map(({ t }) => t.id));
@@ -428,6 +447,7 @@ export function renderProject(model: ProjectModel, agents: Record<string, AgentV
       opts.banner ?? null,
       opts.marksUrl ?? null,
       Object.keys(agents).sort().map((id) => [id, agents[id].status]),
+      [...stagesOf(model, agents, opts)].map(([id, st]) => [id, st.stage, st.agentId, st.flags.map((f) => f.key)]),
     ]))
     .digest("hex");
 

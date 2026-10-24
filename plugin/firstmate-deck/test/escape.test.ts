@@ -3,6 +3,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { stateOf } from "../server/stage.ts";
 import { loadProject, type ProjectModel, type Task } from "../server/state.ts";
 import { renderProject, trailHtml } from "../server/render.ts";
 
@@ -22,7 +23,7 @@ function evilModel(): ProjectModel {
     { name: "endpoints", kind: "md", content: MD_EVIL },
     { name: "decisions", kind: "md", content: "[x](javascript:alert(1))" },
   ];
-  const task = (over: Partial<Task>): Task => ({ id: "e", intent: "", status: "queued", depends_on: [], asks: [], notes: "", card: "", answered: [], hasReport: false, updatedMs: 0, ...over });
+  const task = (over: Partial<Task>): Task => ({ id: "e", intent: "", status: "queued", state: stateOf(over), depends_on: [], asks: [], notes: "", card: "", answered: [], hasReport: false, updatedMs: 0, ...over });
   m.tasks = [
     task({ id: "e-title", title: EVIL, status: "needs-captain", notes: EVIL,
       asks: [{ id: "a1", text: EVIL, since: "2026-10-21T09:00:00Z", contextMd: MD_EVIL, options: [EVIL, "B"] }] }),

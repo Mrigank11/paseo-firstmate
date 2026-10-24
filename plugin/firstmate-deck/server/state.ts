@@ -4,6 +4,7 @@ import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { basename, join, resolve, sep } from "node:path";
 import { cleanUi } from "./marks.ts";
 import { askIdOf } from "./store.ts";
+import { stateOf, type TaskState } from "./stage.ts";
 
 export type Ask = {
   /** bin/fleet's stable ask id ("a2"). An ask written before ids existed is "a<its 1-based index>". */
@@ -45,7 +46,13 @@ export type Task = {
   legacyId?: string;
   /** What a `blocked` task waits on (bin/fleet set blocked_on=...): an outside dependency, not the captain or the crew. */
   blocked_on?: string;
+  /** Legacy v1 run status, kept only so old registries load; the stage is computed (stage.ts), never read from here. */
   status: string;
+  /** The first mate's intent: v2 `state`, else the v1 `status` mapped (dispatched/running/needs-captain -> active). */
+  state: TaskState;
+  /** When `state` last changed (v2 `since`, else the v1 `lastEvent`). */
+  since?: string;
+  /** v1 only: used as a hint when Paseo has no agent labelled fm.task=<id>. Deleted with the v1 registry in S3. */
   agentId?: string;
   depends_on: string[];
   asks: Ask[];
@@ -232,7 +239,9 @@ function toTask(raw: any, root: string, label: string, inbox: Comment[] = []): T
     order: orderOf(raw.order),
     legacyId: typeof raw.legacyId === "string" && raw.legacyId ? raw.legacyId : undefined,
     blocked_on: typeof raw.blocked_on === "string" && raw.blocked_on ? raw.blocked_on : undefined,
-    status: String(raw.status ?? "queued"),
+    status: String(raw.status ?? raw.state ?? "queued"),
+    state: stateOf(raw),
+    since: raw.since || raw.lastEvent || undefined,
     agentId: raw.agentId || undefined,
     depends_on: Array.isArray(raw.depends_on) ? raw.depends_on.map(String) : [],
     asks,
@@ -243,8 +252,21 @@ function toTask(raw: any, root: string, label: string, inbox: Comment[] = []): T
     card: slug ? readText(join(root, "state", "tasks", raw.id, "card.md")) : "",
     answered: loadAnswered(root, raw.id).filter((a) => !answeredIds.has(a.id)),
     hasReport: slug && existsSync(join(root, "state", "tasks", raw.id, "report.md")),
-    updatedMs: Date.parse(raw.lastEvent ?? "") || 0,
+    updatedMs: Date.parse(raw.since ?? raw.lastEvent ?? "") || 0,
   };
+}
+
+/** Every live task of every project (and those without one), for the CLI: the same Task model the page renders. */
+export function loadAllLive(root: string): Task[] {
+  let live: any[] = [];
+  try { live = JSON.parse(readText(join(root, "state", "fleet.json")) || "{}")?.tasks ?? []; } catch { return []; }
+  const inboxes = new Map<string, Comment[]>();
+  const inboxOf = (p: unknown) => {
+    if (typeof p !== "string" || !/^[a-z0-9][a-z0-9-]*$/.test(p)) return [];
+    if (!inboxes.has(p)) inboxes.set(p, readInbox(join(root, "state", "projects", p, "inbox.jsonl")));
+    return inboxes.get(p)!;
+  };
+  return live.filter((t) => t && typeof t.id === "string").map((t) => toTask(t, root, "fleet.json", inboxOf(t.project)));
 }
 
 export function loadProject(root: string, project: string): ProjectModel {

@@ -10,6 +10,7 @@ export FAKE_LOG="$T/fake.log"
 export FAKE_PLUGIN_STATUS=running
 export PASEO_AGENT_ID=agent-fm-1
 export PAGE_VERIFY_SECS=3 PAGE_INSTALL_WAIT=6
+export STAGE_AGENTS_JSON="$T/no-agents.json"; echo "[]" >"$T/no-agents.json"
 unset PASEO_HOME LAVISH_AXI_PORT LAVISH_AXI_STATE_DIR FIRSTMATE_LABEL
 pass=0; fail=0
 ok()  { echo "PASS $1"; pass=$((pass+1)); }
@@ -134,8 +135,15 @@ grep -q "second line" "$FAKE_LOG" && ok "reply - reads stdin" || bad "reply - re
 jq '.lastRender=(now-45|todate) | .banner="First mate unreachable, 1 comment queued" | .listener="ok" | .pluginRoot=$r' --arg r "$T/root" "$PROJ/page.json" >"$PROJ/p.tmp" && mv "$PROJ/p.tmp" "$PROJ/page.json"
 st="$("$P" status)"
 grep -q "^PROJECT" <<<"$st" && ok "status has a header" || bad "status has a header"
-for col in LISTENER BANNER RENDERED "PLUGIN ROOT" UNDELIVERED; do grep -q "$col" <<<"$st" && ok "status column $col" || bad "status column $col" "$st"; done
-grep -E "^demo +[^ ]+ +open +ok +First mate unreachable, 1 comment queued +[0-9]+s ago +$T/root +1 +- +running +http://fake.test:4390/session/abc123" <<<"$st" >/dev/null && ok "status row: session, listener, banner, age, root, undelivered, plugin, url" || bad "status row" "$st"
+for col in LISTENER BANNER RENDERED "PLUGIN ROOT" UNDELIVERED DRIFT; do grep -q "$col" <<<"$st" && ok "status column $col" || bad "status column $col" "$st"; done
+grep -E "^demo +[^ ]+ +open +ok +First mate unreachable, 1 comment queued +[0-9]+s ago +$T/root +1 +0 +- +running +http://fake.test:4390/session/abc123" <<<"$st" >/dev/null && ok "status row: session, listener, banner, age, root, undelivered, plugin, url" || bad "status row" "$st"
+cp "$T/root/state/fleet.json" "$T/fleet.pre-drift" 2>/dev/null || echo '{"tasks":[]}' >"$T/fleet.pre-drift"
+echo '{"tasks":[{"id":"drifted","intent":"x","shape":"ship","state":"queued","project":"demo","asks":[]}]}' >"$T/root/state/fleet.json"
+echo '[{"id":"ag-d","task":"drifted","status":"running","archived":false,"createdAt":"2026-10-24T10:00:00Z","lastActivityAt":null,"pending":0}]' >"$T/agents-drift.json"
+dst="$(STAGE_AGENTS_JSON="$T/agents-drift.json" "$P" status demo 2>"$T/drift.err")"
+grep -E "^demo .* +1 +- +running" <<<"$dst" >/dev/null && ok "status: DRIFT counts a queued task that has a running agent" || bad "status DRIFT" "$dst"
+grep -q "drift: drifted" "$T/drift.err" && ok "...and names the drifted task on stderr" || bad "drift stderr" "$(cat "$T/drift.err")"
+cp "$T/fleet.pre-drift" "$T/root/state/fleet.json"
 grep -q "^other" <<<"$st" && ok "status lists every project" || bad "status lists every project"
 eq "$("$P" status demo | wc -l)" 2 "status <project> shows one row"
 jq '.pluginRoot="/somewhere/else"' "$PROJ/page.json" >"$PROJ/p.tmp" && mv "$PROJ/p.tmp" "$PROJ/page.json"
@@ -212,6 +220,14 @@ msg="$(PASEO_AGENT_ID=crew-archived "$P" claim 2>&1)"; rc=$?
 printf '{garbage\n{"id":"old-crew2","agentId":"crew-after-garbage"}\n' >"$T/root/state/fleet-archive.jsonl"
 msg="$(PASEO_AGENT_ID=crew-after-garbage "$P" claim 2>&1)"; rc=$?
 [[ $rc -ne 0 ]] && grep -q "is crew on task old-crew2" <<<"$msg" && ok "...a malformed archive line does not hide later crew" || bad "archive with a bad line" "$msg"
+# Paseo is the source of truth: an agent carrying an fm.task label is crew even when fleet.json never recorded it
+echo '{"tasks":[]}' >"$T/root/state/fleet.json"
+echo '[{"id":"crew-labelled","task":"some-task","status":"running","archived":false,"createdAt":null,"lastActivityAt":null,"pending":0}]' >"$T/agents.json"
+msg="$(STAGE_AGENTS_JSON="$T/agents.json" PASEO_AGENT_ID=crew-labelled "$P" claim 2>&1)"; rc=$?
+[[ $rc -ne 0 ]] && grep -q "agent crew-labelled is crew on task some-task" <<<"$msg" && ok "claim refuses an agent labelled fm.task (no fleet.json record)" || bad "claim refuses a labelled agent" "$msg"
+cat >"$T/root/state/fleet.json" <<'J'
+{"tasks":[{"id":"scout-1","intent":"x","shape":"scout","status":"running","agentId":"crew-9"}]}
+J
 rm -f "$T/root/state/firstmate.json"
 PASEO_AGENT_ID=crew-9 go claimcrew >/dev/null 2>&1 && bad "start by a crew agent with no live claim is refused" || ok "start by a crew agent with no live claim is refused"
 rm -f "$T/root/state/fleet-archive.jsonl"

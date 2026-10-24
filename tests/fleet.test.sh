@@ -351,5 +351,42 @@ else
   bad "archive o1 for the card/archive-update tests" "$(ls "$(dirname "$FLEET_FILE")")"
 fi
 
+# ---- computed stages: bin/fleet stage / stages (read-only; Paseo's agents via a stub agent list) ----
+SD="$T/stagehome"; mkdir -p "$SD/state"
+FLEET_FILE_MAIN="$FLEET_FILE"
+{
+  export FLEET_FILE="$SD/state/fleet.json" STAGE_AGENTS_JSON="$SD/agents.json"
+  NOW="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  cat >"$FLEET_FILE" <<J
+{"version":2,"tasks":[
+ {"id":"run-a","intent":"x","shape":"ship","state":"active","since":"$NOW","project":"p1","asks":[]},
+ {"id":"que-b","intent":"x","shape":"ship","state":"queued","project":"p1","asks":[]},
+ {"id":"ask-c","intent":"x","shape":"scout","state":"active","since":"$NOW","project":"p2","asks":[{"id":"a1","text":"?","since":"$NOW"}]},
+ {"id":"old-d","intent":"x","shape":"ship","status":"needs-captain","lastEvent":"2026-01-01T00:00:00Z","project":"p2","asks":[]},
+ {"id":"v1-e","intent":"x","shape":"ship","status":"running","agentId":"ag-hint","project":"p2","asks":[]}
+]}
+J
+  echo '{"id":"x1","project":"p1","status":"done","agentId":"ag-old"}' >"$SD/state/fleet-archive.jsonl"
+  cat >"$STAGE_AGENTS_JSON" <<J
+[{"id":"ag-a","task":"run-a","status":"running","archived":false,"createdAt":"2026-10-24T10:00:00Z","lastActivityAt":"$NOW","pending":0},
+ {"id":"ag-b","task":"que-b","status":"running","archived":false,"createdAt":"2026-10-24T10:00:00Z","lastActivityAt":"$NOW","pending":0},
+ {"id":"ag-c","task":"ask-c","status":"running","archived":false,"createdAt":"2026-10-24T10:00:00Z","lastActivityAt":"$NOW","pending":0}]
+J
+  S() { "$F" stage "$1" | jq -r "$2"; }
+  eq "$(S run-a '.stage+"|"+.group+"|"+.agentId')" "Running|running|ag-a"; check "stage: a labelled running agent is Running" $?
+  eq "$(S que-b '.stage+"|"+(.flags|map(.key)|join(","))')" "Next up|queued-but-has-agent"; check "stage: a queued task with an agent shows drift" $?
+  eq "$(S que-b '.flags[0].drift')" true; check "stage: ...marked drift:true" $?
+  eq "$(S ask-c '.group')" you; check "stage: an open ask is Needs you even with a running agent" $?
+  eq "$(S old-d '.stage+"|"+(.flags|map(.key)|join(","))')" "Lost|no-agent"; check "stage: v1 needs-captain with no agent is Lost, not Needs you" $?
+  eq "$(S v1-e '.stage+"|"+(.flags|map(.key)|join(","))')" "Running|status-unknown"; check "stage: a v1 agentId is only a hint" $?
+  eq "$(S x1 '.stage+"|"+.group')" "Done|done"; check "stage: an archived task is frozen Done" $?
+  eq "$("$F" stages | jq 'length')" 5; check "stages: every live task, one pass" $?
+  eq "$("$F" stages --project p2 | jq -r 'map(.id)|join(",")')" "ask-c,old-d,v1-e"; check "stages --project filters" $?
+  "$F" stages --table | grep -q '!queued-but-has-agent'; check "stages --table marks drift with !" $?
+  "$F" stage nope >/dev/null 2>&1; [[ $? -ne 0 ]]; check "stage: unknown task is an error" $?
+  before="$(cat "$FLEET_FILE")"; "$F" stages >/dev/null; eq "$(cat "$FLEET_FILE")" "$before"; check "stages never writes fleet.json" $?
+}
+export FLEET_FILE="$FLEET_FILE_MAIN"; unset STAGE_AGENTS_JSON
+
 echo "---- $pass passed, $fail failed"
 [[ $fail -eq 0 ]]

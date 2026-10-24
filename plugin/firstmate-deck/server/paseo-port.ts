@@ -24,14 +24,17 @@ export type PortAgent = {
   thinking: string | null;
   title: string | null;
   archived: boolean;
+  lastActivityAt?: string | null;
+  /** Open permission requests (0 when unknown, as on the CLI). */
+  pendingPermissions?: number;
 };
 
 export type CommentRowData = { project: string; pageUrl: string | null; at: string; comments: { target: string; text: string }[]; replied: boolean };
 
 export interface PaseoPort {
   readonly kind: "sdk" | "cli";
-  /** Live (non-archived) agents, optionally only those carrying `label` ("key=value"). */
-  listAgents(o?: { label?: string }): Promise<PortAgent[]>;
+  /** Live (non-archived) agents, optionally only those carrying `label` ("key=value", or just "key"), archived ones too with `includeArchived`. */
+  listAgents(o?: { label?: string; includeArchived?: boolean }): Promise<PortAgent[]>;
   agentView(id: string): Promise<AgentView>;
   /** Send `text` to the agent, steering it if it is mid-turn (never interrupting). */
   send(id: string, text: string): Promise<void>;
@@ -144,13 +147,13 @@ export class SdkPort implements PaseoPort {
     this.api = api;
   }
 
-  async listAgents(o: { label?: string } = {}): Promise<PortAgent[]> {
+  async listAgents(o: { label?: string; includeArchived?: boolean } = {}): Promise<PortAgent[]> {
     const [key, value] = o.label ? parseLabel(o.label) : ["", null];
     const out: PortAgent[] = [];
     let cursor: string | undefined;
     for (let page = 0; page < MAX_PAGES; page++) {
       const r = await this.api.agents.list({
-        filter: key && value !== null ? { labels: { [key]: value } } : undefined,
+        filter: { ...(key && value !== null ? { labels: { [key]: value } } : {}), ...(o.includeArchived ? { includeArchived: true } : {}) },
         page: { limit: PAGE_LIMIT, ...(cursor ? { cursor } : {}) },
       });
       for (const { agent: a } of r.entries) {
@@ -158,6 +161,7 @@ export class SdkPort implements PaseoPort {
         out.push({
           id: a.id, status: a.status, labels: a.labels, createdAt: a.createdAt, updatedAt: a.updatedAt,
           model: a.model, thinking: a.effectiveThinkingOptionId ?? a.thinkingOptionId ?? null, title: a.title, archived: !!a.archivedAt,
+          lastActivityAt: a.updatedAt, pendingPermissions: a.pendingPermissions?.length ?? 0,
         });
       }
       if (!r.pageInfo.hasMore || !r.pageInfo.nextCursor) break;

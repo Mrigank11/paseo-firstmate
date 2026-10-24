@@ -690,3 +690,81 @@ test("per-project claims: a comment on each page reaches only that page's first 
   assert.equal((await r.deck.summary("demo")).firstmateAgentId, "fm-1");
   r.deck.stop();
 });
+
+// ---------- computed stages: Paseo + the fm.task label decide, the registry only holds intent ----------
+
+import { assistant } from "./fake-paseo.ts";
+
+const taskCard = (live: string, id: string) => {
+  const i = live.indexOf(`id=\\"t-${id}\\"`);
+  return i < 0 ? "" : live.slice(i, live.indexOf("</article>", i) > 0 ? live.indexOf("</article>", i) : undefined);
+};
+const groupOfCard = (live: string, id: string) => {
+  const m = [...live.matchAll(/id=\\"g-(\w+)\\"/g)].map((x) => [x[1], x.index!] as const);
+  const at = live.indexOf(`id=\\"t-${id}\\"`);
+  return m.filter(([, i]) => i < at).pop()?.[0];
+};
+
+test("stage: a running agent found by its fm.task label is Running, not whatever the registry last said", async () => {
+  // v1 registry still says needs-captain (no ask) with no agentId: the old page put this in Needs you
+  const r = rig({ tasks: [{ id: "t2", intent: "stale", status: "needs-captain", project: "demo", shape: "ship" }] });
+  r.fw.add({ id: "ag-2", status: "running", labels: { "fm.task": "t2", "fm.project": "demo" }, createdAt: "2026-10-24T10:00:00Z", items: [shell("npm test")] });
+  await r.deck.configure();
+  await r.deck.render("demo");
+  const live = readFileSync(r.live, "utf8");
+  assert.equal(groupOfCard(live, "t2"), "running");
+  assert.match(taskCard(live, "t2"), /class=\\"stg\\">Running</);
+  const sum = await r.deck.summary("demo");
+  assert.deepEqual([sum.projects[0].counts.needsYou, sum.projects[0].counts.running, sum.projects[0].running[0].agentId], [0, 1, "ag-2"]);
+  r.deck.stop();
+});
+
+test("stage: follows the agent: DONE: line -> Review; archived -> drift badge; ask-free", async () => {
+  const r = rig({ tasks: [{ id: "t2", intent: "x", state: "active", since: "2026-10-24T09:00:00Z", project: "demo", shape: "scout" }] });
+  r.fw.add({ id: "ag-2", status: "running", labels: { "fm.task": "t2" }, createdAt: "2026-10-24T10:00:00Z", items: [shell("ls")] });
+  await r.deck.configure();
+  await r.deck.render("demo");
+  assert.equal(groupOfCard(readFileSync(r.live, "utf8"), "t2"), "running");
+
+  const a = r.fw.agents.get("ag-2")!;
+  a.status = "idle"; a.items = [shell("ls"), assistant("DONE: report written")];
+  r.deck.onAgentEvent("ag-2");
+  await r.deck.render("demo");
+  let live = readFileSync(r.live, "utf8");
+  assert.equal(groupOfCard(live, "t2"), "fm");
+  assert.match(taskCard(live, "t2"), /class=\\"stg\\">Review</);
+
+  a.archivedAt = "2026-10-24T11:00:00Z";
+  r.deck.onAgentEvent("ag-2");
+  await r.deck.render("demo");
+  live = readFileSync(r.live, "utf8");
+  assert.match(taskCard(live, "t2"), /fl fl-d\\" title=\\"archived-agent-open-task\\"/);
+  r.deck.stop();
+});
+
+test("stage: drift is shown, not hidden: a queued task with a running agent; a task with no agent after the grace window", async () => {
+  const r = rig({ tasks: [
+    { id: "q1", intent: "queued", state: "queued", project: "demo", shape: "ship" },
+    { id: "l1", intent: "lost", state: "active", since: "2026-10-24T00:00:00Z", project: "demo", shape: "ship" },
+  ] });
+  r.fw.add({ id: "ag-q", status: "running", labels: { "fm.task": "q1" }, createdAt: "2026-10-24T10:00:00Z", items: [shell("ls")] });
+  await r.deck.configure();
+  await r.deck.render("demo");
+  const live = readFileSync(r.live, "utf8");
+  assert.equal(groupOfCard(live, "q1"), "next");
+  assert.match(taskCard(live, "q1"), /title=\\"queued-but-has-agent\\"/);
+  assert.equal(groupOfCard(live, "l1"), "fm");
+  assert.match(taskCard(live, "l1"), /title=\\"no-agent\\"/);
+  r.deck.stop();
+});
+
+test("stage: a new labelled agent seen on an event is picked up once", async () => {
+  const r = rig({ tasks: [{ id: "t3", intent: "x", state: "active", since: new Date().toISOString(), project: "demo", shape: "ship" }] });
+  await r.deck.configure();
+  await r.deck.render("demo");
+  assert.match(taskCard(readFileSync(r.live, "utf8"), "t3"), /Dispatching/);
+  r.fw.add({ id: "ag-3", status: "running", labels: { "fm.task": "t3" }, items: [shell("ls")] });
+  r.deck.onAgentEvent("ag-3");
+  await until(() => /class=\\"stg\\">Running</.test(taskCard(readFileSync(r.live, "utf8"), "t3")), 2000);
+  r.deck.stop();
+});

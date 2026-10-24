@@ -15,6 +15,7 @@ export type FakeAgent = {
   items?: TimelineItem[];
   /** The page reports older entries beyond the tail. */
   hasOlder?: boolean;
+  pendingPermissions?: unknown[];
 };
 
 export type FakeSent = { id: string; text: string; options: unknown };
@@ -37,7 +38,7 @@ export function snapshot(a: FakeAgent): PaseoAgent {
     createdAt: a.createdAt ?? "2026-10-21T10:00:00.000Z", updatedAt: a.updatedAt ?? "2026-10-21T10:05:00.000Z", lastUserMessageAt: null,
     status: a.status ?? "idle",
     capabilities: { supportsStreaming: true, supportsSessionPersistence: true, supportsDynamicModes: true, supportsMcpServers: true, supportsReasoningStream: true, supportsToolInvocations: true },
-    currentModeId: null, availableModes: [], pendingPermissions: [], persistence: null,
+    currentModeId: null, availableModes: [], pendingPermissions: (a.pendingPermissions ?? []) as never[], persistence: null,
     title: a.title ?? null, labels: a.labels ?? {},
     effectiveThinkingOptionId: a.thinking ?? null, archivedAt: a.archivedAt ?? null,
   };
@@ -76,11 +77,11 @@ export function fakePaseo(world: FakeWorld): PaseoApi {
   };
   const agents = {
     ref: (id: string | PaseoAgent) => handle(typeof id === "string" ? id : id.id),
-    list: async (o?: { filter?: { labels?: Record<string, string> } }) => {
+    list: async (o?: { filter?: { labels?: Record<string, string>; includeArchived?: boolean } }) => {
       world.calls.push(`list${o?.filter?.labels ? ":" + JSON.stringify(o.filter.labels) : ""}`);
       const want = Object.entries(o?.filter?.labels ?? {});
       const entries = [...world.agents.values()]
-        .filter((a) => !a.archivedAt && want.every(([k, v]) => a.labels?.[k] === v))
+        .filter((a) => (o?.filter?.includeArchived || !a.archivedAt) && want.every(([k, v]) => a.labels?.[k] === v))
         .map((a) => ({ agent: snapshot(a), project: null }));
       return { requestId: "r", entries, pageInfo: { nextCursor: null, prevCursor: null, hasMore: false } };
     },

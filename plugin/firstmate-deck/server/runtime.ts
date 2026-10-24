@@ -8,9 +8,10 @@ import { hasLivePoll, killAllPolls, killStalePoll, lavishEnv, PagePoller, remove
 import { decodePoll } from "./toon.ts";
 import { AgentViews } from "./agent-views.ts";
 import { CliPort, type Exec } from "./paseo-cli.ts";
-import { NO_CLAIM_MESSAGE, NoFirstMateError, PortSelector, resolveFirstMate, sendToFirstMate, type CommentRowData, type FirstMate } from "./paseo-port.ts";
+import { NO_CLAIM_MESSAGE, NoFirstMateError, PortSelector, resolveFirstMate, sendToFirstMate, type CommentRowData, type FirstMate, type PortAgent } from "./paseo-port.ts";
 import { Relay, newEntries, parseTarget, type AskLookup, type TargetInfo } from "./relay.ts";
-import { groupOf, liveJs, renderProject, type AgentView, type Banner } from "./render.ts";
+import { liveJs, renderProject, stagesOf, type AgentView, type Banner } from "./render.ts";
+import { currentAgent, type LabeledAgent } from "./stage.ts";
 import { MarksServer } from "./marks-server.ts";
 import { loadProject, type ProjectModel, type Task } from "./state.ts";
 import { appendInbox, inboxPath, pageJsonPath, patchPageJson, pidPath, projectDir, readInbox, readPageJson, updateInbox, writeAtomic, type InboxEntry, type PageJson } from "./store.ts";
@@ -123,6 +124,13 @@ export class Deck {
   private tailnetIp = "";
   /** Per project: a first-mate lookup started while the batch window is open (two pages must not share one). */
   private early = new Map<string, { at: number; p: Promise<FirstMate | null> }>();
+
+  /** Paseo agents by the task they carry in their `fm.task` label (archived ones included): what the stage engine reads. */
+  private labeled = new Map<string, PortAgent[]>();
+  private labeledKey = "";
+  private labeledFlight: { at: number; p: Promise<boolean> } | null = null;
+  /** Agents seen on an event that no page tracks: asked about once (a new crew agent), not on every turn of the first mate. */
+  private unknownAgents = new Set<string>();
 
   private o: DeckOpts;
 
@@ -380,7 +388,41 @@ export class Deck {
   /** Agent lifecycle event: that agent's view is refreshed (SDK) by the next render, which these projects get now. Re-render the projects whose tasks use that agent. */
   onAgentEvent(agentId: string): void {
     this.agents.markDirty(agentId);
-    for (const p of this.agentProjects.get(agentId) ?? []) this.scheduleRender(p, DEBOUNCE_MS, "agent");
+    this.labeledFlight = null; // something moved: the next render asks Paseo again
+    const projects = this.agentProjects.get(agentId);
+    if (projects?.size) { for (const p of projects) this.scheduleRender(p, DEBOUNCE_MS, "agent"); return; }
+    // not tracked by any page: it may be a crew agent that just got its fm.task label, so look once
+    if (!this.unknownAgents.has(agentId)) { this.unknownAgents.add(agentId); this.scheduleAll("new-agent", DEBOUNCE_MS); }
+  }
+
+  /**
+   * Re-read which Paseo agents carry an `fm.task` label (SDK only; the CLI shows no labels). True when anything a stage
+   * depends on changed. Calls within half a second share one read: every project's render asks.
+   */
+  private refreshLabeled(): Promise<boolean> {
+    const sdk = this.ports.sdkPort();
+    if (!sdk) return Promise.resolve(false);
+    if (this.labeledFlight && Date.now() - this.labeledFlight.at < 500) return this.labeledFlight.p;
+    const p = (async () => {
+      let list: PortAgent[];
+      try { list = await sdk.listAgents({ label: "fm.task", includeArchived: true }); }
+      catch (e) { this.log(`listing agents by fm.task label failed: ${(e as Error).message}`); return false; }
+      const by = new Map<string, PortAgent[]>();
+      for (const a of list) { const t = a.labels["fm.task"]; if (t) by.set(t, [...(by.get(t) ?? []), a]); }
+      const key = JSON.stringify([...by].sort(([x], [y]) => x.localeCompare(y)).map(([t, as]) => [t, as.map((a) => [a.id, a.status, a.archived, a.createdAt, a.pendingPermissions])]));
+      this.labeled = by;
+      const changed = key !== this.labeledKey;
+      this.labeledKey = key;
+      return changed;
+    })();
+    this.labeledFlight = { at: Date.now(), p };
+    return p;
+  }
+
+  private labeledFor(model: ProjectModel): Record<string, LabeledAgent[]> {
+    const out: Record<string, LabeledAgent[]> = {};
+    for (const t of model.tasks) { const as = this.labeled.get(t.id); if (as?.length) out[t.id] = as; }
+    return out;
   }
 
   pagePath(project: string): string {
@@ -426,11 +468,12 @@ export class Deck {
         const model = this.load(project);
         if (!model) break;
         this.writePage(project, model);
-        const ids = this.trackedAgents(project, model);
-        if (!ids.length) continue;
+        if (!this.trackedAgents(project, model).length && !this.ports.hasHandle) continue;
+        await this.refreshLabeled(); // who is working on which task, straight from Paseo
+        const ids2 = this.trackedAgents(project, this.load(project) ?? model);
         const sdk = this.ports.sdkPort();
-        if (sdk) await this.agents.refresh(ids, sdk); // only the agents that are running, dirty or unseen
-        const key = this.viewsKey(ids);
+        if (sdk) await this.agents.refresh(ids2, sdk); // only the agents that are running, dirty or unseen
+        const key = this.viewsKey(project, ids2);
         if (key !== this.usedViews.get(project)) this.writePage(project, this.load(project) ?? model);
       } while (state.again && !this.stopped);
     } finally {
@@ -444,8 +487,9 @@ export class Deck {
     return false;
   }
 
-  private viewsKey(ids: string[]): string {
-    return JSON.stringify(ids.map((id) => this.agents.peek(id) ?? null));
+  private viewsKey(project: string, ids: string[]): string {
+    const model = this.lastGood.get(project);
+    return JSON.stringify([ids.map((id) => this.agents.peek(id) ?? null), model ? Object.entries(this.labeledFor(model)).map(([t, as]) => [t, as.map((a) => [a.id, a.status, a.archived, a.pendingPermissions])]) : null]);
   }
 
   /**
@@ -485,12 +529,19 @@ export class Deck {
     if (existsSync(join(projectDir(this.cfg.root, project), "project.json"))) patchPageJson(pageJsonPath(this.cfg.root, project), { loadError: problem });
   }
 
+  /** The agents whose views the page needs: each live, unfinished task's current agent (label-found, else its v1 hint). */
   private trackedAgents(project: string, model: ProjectModel): string[] {
-    const ids = model.tasks.filter((t) => t.agentId && groupOf(t, true) !== "done").map((t) => t.agentId as string);
-    for (const t of model.tasks) if (t.agentId) {
-      const set = this.agentProjects.get(t.agentId) ?? new Set();
-      set.add(project);
-      this.agentProjects.set(t.agentId, set);
+    const ids: string[] = [];
+    for (const t of model.tasks) {
+      const found = this.labeled.get(t.id) ?? [];
+      for (const id of [...found.map((a) => a.id), ...(t.agentId ? [t.agentId] : [])]) {
+        const set = this.agentProjects.get(id) ?? new Set();
+        set.add(project);
+        this.agentProjects.set(id, set);
+      }
+      if ((t.state === "done" || t.state === "failed") && !t.asks.length) continue;
+      const cur = currentAgent(found)?.id ?? t.agentId;
+      if (cur) ids.push(cur);
     }
     return [...new Set(ids)];
   }
@@ -505,14 +556,14 @@ export class Deck {
     }
     const views: Record<string, AgentView> = {};
     for (const id of ids) views[id] = this.agents.peek(id) ?? STALE_UNKNOWN;
-    this.usedViews.set(project, this.viewsKey(ids));
+    this.usedViews.set(project, this.viewsKey(project, ids));
     const pj = readPageJson(pageJsonPath(this.cfg.root, project));
     const target = this.pagePath(project);
     const now = new Date();
     const banner = this.bannerFor(project, pj.session);
     const r = renderProject(model, views, {
       now, tickSeconds: 1, refreshSeconds: Math.round((this.o.tickMs ?? TICK_MS) / 1000), paseoAgentUrl: this.agentUrl, banner, pageFile: basename(target),
-      marksUrl: this.marksUrl(project, pj),
+      marksUrl: this.marksUrl(project, pj), labeled: this.labeledFor(model),
     });
     const p2 = (n: number) => String(n).padStart(2, "0");
     const ts = `${p2(now.getHours())}:${p2(now.getMinutes())}:${p2(now.getSeconds())}`;
@@ -782,11 +833,15 @@ export class Deck {
       try { repo = JSON.parse(readFileSync(join(projectDir(this.cfg.root, p), "project.json"), "utf8")).repo ?? null; } catch {}
       const pj = readPageJson(pageJsonPath(this.cfg.root, p));
       const archived = model.archive.filter((a) => !model.tasks.some((t) => t.id === a.id));
-      const counts = { needsYou: 0, withFirstMate: 0, running: 0, blocked: 0, next: 0, parked: 0, done: archived.filter((a) => a.status !== "failed").length, failed: archived.filter((a) => a.status === "failed").length };
+      const counts = { needsYou: 0, withFirstMate: 0, running: 0, blocked: 0, next: 0, parked: 0, done: archived.filter((a) => a.state !== "failed").length, failed: archived.filter((a) => a.state === "failed").length };
+      await this.refreshLabeled();
+      const views = Object.fromEntries(this.trackedAgents(p, model).map((id) => [id, this.agents.peek(id)]).filter(([, v]) => v)) as Record<string, AgentView>;
+      const stages = stagesOf({ ...model, archive: [] }, views, { now: new Date(), labeled: this.labeledFor(model) });
       const needsYou: Summary["needsYou"] = [];
       const running: Summary["running"] = [];
       for (const t of model.tasks) {
-        const g = groupOf(t, true);
+        const st = stages.get(t.id)!;
+        const g = st.group;
         if (g === "you") {
           counts.needsYou++;
           if (t.asks.length) for (const a of t.asks.filter((a) => !a.repliedAt)) needsYou.push({ taskId: t.id, askId: a.id, taskTitle: plainTitle(t), text: a.text, since: a.since ?? "" });
@@ -795,13 +850,14 @@ export class Deck {
           counts.withFirstMate++; // the next move is the first mate's, so it does not count as needing the captain
         } else if (g === "running") {
           counts.running++;
-          const v = t.agentId ? this.agents.peek(t.agentId) : undefined;
+          const aid = st.agentId ?? t.agentId;
+          const v = aid ? this.agents.peek(aid) : undefined;
           running.push({
-            taskId: t.id, taskTitle: plainTitle(t), agentId: t.agentId ?? null,
-            agentStatus: t.agentId ? (this.agents.status(t.agentId)) : "unknown",
+            taskId: t.id, taskTitle: plainTitle(t), agentId: aid ?? null,
+            agentStatus: aid ? (this.agents.status(aid)) : st.stage.toLowerCase(),
             current: v ? (v.recent[v.recent.length - 1] ?? v.final ?? "") : "", startedAt: v?.createdAt ?? null,
           });
-        } else if (g === "done") { if (t.status === "failed") counts.failed++; else counts.done++; }
+        } else if (g === "done") { if (st.failed) counts.failed++; else counts.done++; }
         else if (g === "parked") counts.parked++;
         else if (g === "blocked") counts.blocked++;
         else counts.next++;

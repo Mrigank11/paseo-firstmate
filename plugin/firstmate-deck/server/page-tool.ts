@@ -21,6 +21,7 @@ import { join } from "node:path";
 import { updateUi } from "./marks-server.ts";
 import { cleanUi } from "./marks.ts";
 import { claimedId, projectClaimedId } from "./claims.ts";
+import { stages } from "./stage-data.ts";
 import { askIdOf, inboxPath, pageJsonPath, patchPageJson, projectDir, readInbox, readPageJson, updateInbox, writeAtomic } from "./store.ts";
 
 const SECTIONS: Record<string, string> = {
@@ -104,18 +105,36 @@ function claimLabel(root: string, project: string): string {
   return wide ? `${wide} (checkout)` : "-";
 }
 
+/** Drift flags per project (tasks with no project under ""), from the same stage engine the page uses. null when Paseo cannot be asked. */
+function driftByProject(root: string): Map<string, number> | null {
+  try {
+    const out = new Map<string, number>();
+    for (const r of stages(root)) {
+      const bad = r.flags.filter((f) => f.drift);
+      if (!bad.length) continue;
+      out.set(r.project ?? "", (out.get(r.project ?? "") ?? 0) + bad.length);
+      console.error(`drift: ${r.id}${r.project ? ` (${r.project})` : ""} is ${r.stage}: ${bad.map((f) => f.text).join("; ")}`);
+    }
+    return out;
+  } catch (e) {
+    console.error(`warning: drift not computed: ${(e as Error).message}`);
+    return null;
+  }
+}
+
 function status(root: string, only?: string): void {
   const base = join(root, "state", "projects");
   const names = (only ? [only] : existsSync(base) ? readdirSync(base) : []).filter((n) => existsSync(join(base, n, "project.json")));
   const plugin = process.env.PAGE_PLUGIN_STATUS || "unknown";
   const mine = real(root);
-  const rows = [["PROJECT", "CLAIM", "SESSION", "LISTENER", "BANNER", "RENDERED", "PLUGIN ROOT", "UNDELIVERED", "LAST DELIVERY", "PLUGIN", "URL", "LOAD ERROR"]];
+  const drift = names.length ? driftByProject(root) : null;
+  const rows = [["PROJECT", "CLAIM", "SESSION", "LISTENER", "BANNER", "RENDERED", "PLUGIN ROOT", "UNDELIVERED", "DRIFT", "LAST DELIVERY", "PLUGIN", "URL", "LOAD ERROR"]];
   for (const n of names) {
     const pj = readPageJson(pageJsonPath(root, n));
     const und = readInbox(inboxPath(root, n)).filter((e) => !e.delivered).length;
     const banner = pj.banner ? (pj.banner.length > 48 ? pj.banner.slice(0, 47) + "…" : pj.banner) : "-";
     const pr = pj.pluginRoot ? (real(pj.pluginRoot) === mine ? pj.pluginRoot : `${pj.pluginRoot} (NOT this checkout)`) : "-";
-    rows.push([n, claimLabel(root, n), pj.session, pj.listener || "-", banner, ago(pj.lastRender), pr, String(und), pj.lastDelivery ?? "-", plugin, pj.lavishUrl ?? "-", pj.loadError ? `state file problem: ${pj.loadError}` : "-"]);
+    rows.push([n, claimLabel(root, n), pj.session, pj.listener || "-", banner, ago(pj.lastRender), pr, String(und), drift ? String(drift.get(n) ?? 0) : "?", pj.lastDelivery ?? "-", plugin, pj.lavishUrl ?? "-", pj.loadError ? `state file problem: ${pj.loadError}` : "-"]);
   }
   if (rows.length === 1) { console.log(only ? `no such project '${only}'` : "no projects"); return; }
   const w = rows[0].map((_, i) => Math.max(...rows.map((r) => r[i].length)));

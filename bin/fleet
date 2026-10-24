@@ -8,6 +8,10 @@
 #
 #   bin/fleet get <id>                print one task entry (compact JSON)
 #   bin/fleet by-agent <agentId>      print the entry holding an agentId
+#   bin/fleet stage <id>              the task's COMPUTED stage (JSON): {stage, group, agentId, flags}. Decided by the same
+#                                     function the page uses, from the task's intent + its asks + the Paseo agents carrying
+#                                     label fm.task=<id>; a flag with drift:true means the registry and Paseo disagree
+#   bin/fleet stages [--project <p>] [--table]   the same for every live task, in one pass
 #   bin/fleet active [--project <p>]  live entries: id, status, agentId (dispatched/running/needs-captain only)
 #   bin/fleet project <p>             every LIVE task of project <p>, any status (compact JSON, one per line)
 #   bin/fleet project <p> --archive [N]   last N (default 30) archive lines for project <p>
@@ -148,6 +152,12 @@ check_blocked() { # obj status blocked_on
 
 cmd_get() { jq -c --arg id "$1" '.tasks | map(select(.id == $id))[0] // empty' "$FLEET"; }
 cmd_by_agent() { jq -c --arg a "$1" '.tasks | map(select(.agentId == $a))[0] // empty' "$FLEET"; }
+# stage / stages: read-only, computed by plugin/firstmate-deck/server/stage-cli.ts (needs node and the paseo CLI)
+cmd_stage() {
+  command -v node >/dev/null || die "node is required for stage"
+  [[ "$(basename "$STATE_DIR")" == "state" ]] || die "stage needs the fleet at <root>/state/fleet.json (FLEET_FILE is $FLEET)"
+  NODE_NO_WARNINGS=1 node "$ROOT/plugin/firstmate-deck/server/stage-cli.ts" "$1" "$(dirname "$STATE_DIR")" "${@:2}"
+}
 cmd_active() {
   local proj=""
   if [[ $# -gt 0 ]]; then
@@ -591,6 +601,8 @@ case "$cmd" in
 case "$cmd" in
   get)           [[ $# -eq 1 ]] || die "usage: fleet get <id>"; cmd_get "$1";;
   by-agent)      [[ $# -eq 1 ]] || die "usage: fleet by-agent <agentId>"; cmd_by_agent "$1";;
+  stage)         [[ $# -eq 1 ]] || die "usage: fleet stage <id>"; cmd_stage stage "$1";;
+  stages)        cmd_stage stages "$@";;
   active)        cmd_active "$@";;
   project)       [[ $# -ge 1 && $# -le 3 ]] || die "usage: fleet project <p> [--archive [N]]"; cmd_project "$@";;
   asks)          cmd_asks;;

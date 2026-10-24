@@ -51,8 +51,10 @@ export class CliPort implements PaseoPort {
     this.exec = exec;
   }
 
-  async listAgents(o: { label?: string } = {}): Promise<PortAgent[]> {
-    const args = o.label ? ["ls", "-g", "--label", o.label, "--json"] : ["ls", "-g", "--json"]; // archived agents are not listed
+  async listAgents(o: { label?: string; includeArchived?: boolean } = {}): Promise<PortAgent[]> {
+    // The CLI cannot filter by a bare key, nor show labels or archive state, so label-based lookups come back unfiltered and unlabelled
+    // (the deck then falls back to each task's recorded agent): archived agents are not listed.
+    const args = o.label && o.label.includes("=") ? ["ls", "-g", "--label", o.label, "--json"] : ["ls", "-g", "--json"];
     const rows: any[] = JSON.parse((await this.exec(args)) || "[]");
     return Promise.all(rows.map(async (a): Promise<PortAgent> => {
       let createdAt: string | null = null;

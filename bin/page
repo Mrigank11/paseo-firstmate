@@ -89,10 +89,14 @@ real() { (cd "$1" 2>/dev/null && pwd -P) || echo "$1"; }
 
 # ---------- claim ----------
 
-# The task (in fleet.json or the archive) whose agentId is $1, or "" when $1 is not crew.
+# The task whose agent is $1, or "" when $1 is not crew: the agent's fm.task label first (Paseo is the source of truth),
+# then fleet.json's agentId, then the archive's.
 crew_task_of() {
   local id="$1" t=""
-  [[ -f "$ROOT/state/fleet.json" ]] && t="$(jq -r --arg a "$id" '[.tasks[]? | select(.agentId == $a) | .id][0] // empty' "$ROOT/state/fleet.json" 2>/dev/null || true)"
+  if command -v node >/dev/null 2>&1; then
+    t="$(NODE_NO_WARNINGS=1 node "$REPO/plugin/firstmate-deck/server/stage-cli.ts" task-of "$ROOT" "$id" 2>/dev/null || true)"
+  fi
+  [[ -z "$t" && -f "$ROOT/state/fleet.json" ]] && t="$(jq -r --arg a "$id" '[.tasks[]? | select(.agentId == $a) | .id][0] // empty' "$ROOT/state/fleet.json" 2>/dev/null || true)"
   if [[ -z "$t" && -f "$ROOT/state/fleet-archive.jsonl" ]]; then
     t="$(jq -R -r --arg a "$id" 'fromjson? | select(.agentId? == $a) | .id' "$ROOT/state/fleet-archive.jsonl" 2>/dev/null | head -n 1 || true)"
   fi
