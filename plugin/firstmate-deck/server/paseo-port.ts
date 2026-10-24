@@ -190,6 +190,19 @@ export class SdkPort implements PaseoPort {
     };
   }
 
+  /** Status and labels of one agent, fresh from the daemon (hook events carry no labels). Null when it is gone. */
+  async agentInfo(id: string): Promise<{ id: string; status: string; labels: Record<string, string>; archived: boolean; updatedAt: string | null } | null> {
+    const r = await this.api.agents.ref(id).refresh();
+    const a = r?.agent;
+    return a ? { id: a.id, status: a.status, labels: a.labels, archived: !!a.archivedAt, updatedAt: a.updatedAt } : null;
+  }
+
+  /** The newest timeline items (oldest first), for the gate's sweep. */
+  async tailItems(id: string): Promise<TimelineItem[]> {
+    const page = await this.api.agents.ref(id).timeline.refetch({ direction: "tail", limit: TAIL_LIMIT, projection: "projected" });
+    return [...page.entries].sort((x, y) => x.seqStart - y.seqStart).map((e) => e.item);
+  }
+
   async send(id: string, text: string): Promise<void> {
     await this.api.agents.ref(id).send(text, { activeTurnBehavior: "steer" });
   }

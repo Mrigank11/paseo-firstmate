@@ -96,6 +96,16 @@ Rules:
 - `bin/fleet answer` first appends the ask (id, text, `since`, context path, options, `answeredAt`) to `state/tasks/<id>/asks.jsonl`, so a finished card keeps showing it with its context file; `fleet.json` stays small. The Done group sorts by `since`, newest first (an explicit `order` still pins ahead), and a done card also shows a pointer to `report.md`.
 - A `done`/`failed` task with no open asks leaves the index: `bin/fleet archive <id>` appends it to `fleet-archive.jsonl` (adding `agents:[ids]` and `outcome: done|failed`) and removes it. Never delete a task any other way. Archive lines are history and stay append-only; old v1 lines (`status`, `agentId`, `notes`, `lastEvent`) are never rewritten and stay readable.
 
+## The finish gate (`state/gate-log.jsonl`)
+
+The deck plugin's `agent.turn_ended` hook (`plugin/firstmate-deck/server/gate.ts`) audits every turn of an agent carrying `fm.task`. Plugin-owned and append-only; the registry is never written. One JSON line per decision: `{at, agentId, task, turnId, verdict, line, acted, result, note}`.
+
+- `verdict`: `DONE`/`BLOCKED` (first non-empty line of the final message starts with it), `NARRATION` (anything else; a later `DONE:` line is a `near-miss`, logged and ignored), `ERROR` (turn failed), `CANCELED`, `CLOSED`.
+- `result`: `shadow` (logged only), `woke` (the `## Crew <VERDICT> · <task>` message was delivered; `note` = recipient), `deferred` (DONE/BLOCKED while the agent was still running; re-checked after 60 s and on the next turn end), `failed` (3 send attempts), `no-target`, `narration`, `near-miss`. `shadow` and `woke` dedupe on (agent, turn, verdict) across restarts.
+- It wakes only when the agent has `fm.notify=plugin` **and** `state/decisions.md` has `notify: plugin`; otherwise it is shadow. Recipient: the agent's parent (`paseo.parent-agent-id`) while live, else the project claim, else the checkout claim.
+- Startup sweep: when the plugin gets its first SDK handle (CLI shows no labels) and every 10 min, idle `fm.task` agents updated in the last 6 h whose final message is `DONE:`/`BLOCKED:` and not yet in the log are handled the same way. This covers a finish while the plugin was down.
+- Rollback: delete the `notify: plugin` line (new dispatches use Paseo notifications again; agents already launched with `notifyOnFinish:false` stay plugin-only, so heartbeat `bin/fleet stages` still catches them).
+
 ## Reading on a wake (token budget)
 
 - Map the event's `agentId` to its task with `bin/fleet by-agent <agentId>` (reads the agent's `fm.task` label, then the archive), then read that ONE entry (`bin/fleet get <id>`) plus its brief. That is the whole state read for most wakes.

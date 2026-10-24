@@ -64,6 +64,8 @@ Stamp the labels on every `create_agent`: `fm.task` (the task id, the join key f
 
 Required fields on `mcp__paseo__create_agent` are `title`, `provider`, `initialPrompt`; `workspaceId` selects the workspace (below), `notifyOnFinish` stays true unless the captain says otherwise.
 
+**Plugin-gated wake.** Only when `state/decisions.md` has the line `notify: plugin` (absent = off, the default until the gate is validated in shadow mode): also stamp `"fm.notify": "plugin"` and set `notifyOnFinish: false`. The deck plugin then wakes you with `## Crew <VERDICT> · <task>` only on a real `DONE:`/`BLOCKED:` first line (a narration-only first finish no longer uses up the one Paseo notification). With the switch off, never set `fm.notify` and leave `notifyOnFinish` true; the plugin still audits every crew turn in `state/gate-log.jsonl`.
+
 ## 4. Refresh the base before dispatch
 
 Never branch a ship worktree, or point a scout at a checkout, off a stale base:

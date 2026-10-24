@@ -21,6 +21,10 @@ Named lanes map a task's role to an exact launch config. The first mate infers e
 
 **Per-task overrides** — e.g. "use the planning lane for this scout", or "always use planning for anything touching the sales-infra repo".
 
+## Notifications
+
+- `notify: plugin` — **off by default** (delete or change the line to turn it off). When on, new crew are launched with `fm.notify=plugin` + `notifyOnFinish: false` and the deck plugin wakes the first mate with `## Crew <VERDICT> · <task>`. Leave it off until `state/gate-log.jsonl` (shadow mode) agrees with the Paseo notifications over several finishes.
+
 ## Permission policy
 
 Default posture: auto-approve safe classes, escalate the rest.

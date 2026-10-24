@@ -191,6 +191,10 @@ export class Deck {
 
   // ---------- lifecycle ----------
 
+  /** The effective first-mate checkout root and label (for the finish gate). */
+  root(): string { return this.cfg.root; }
+  firstmateLabel(): string { return this.cfg.firstmateLabel; }
+
   async start(): Promise<void> {
     await this.configure();
     this.timers.push(setInterval(() => void this.configure().catch((e) => this.log(`rescan failed: ${e}`)), this.o.rescanMs ?? RESCAN_MS));

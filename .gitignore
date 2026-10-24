@@ -1,6 +1,7 @@
 # Runtime fleet state — not source
 state/fleet.json
 state/fleet-archive.jsonl
+state/gate-log.jsonl
 state/decisions.md
 state/tasks/
 state/projects/
