@@ -755,3 +755,87 @@ test("stage: a new labelled agent seen on an event is picked up once", async () 
   await until(() => /class=\\"stg\\">Running</.test(taskCard(readFileSync(r.live, "utf8"), "t3")), 2000);
   r.deck.stop();
 });
+
+// ---- the crew's canvas in the card (F1), against a fake agent-canvas on loopback ----
+import { FakeCanvas, summary as canvasSummary } from "./fake-canvas.ts";
+
+const canvasDeck = (r: ReturnType<typeof rig>, fc: FakeCanvas, url = fc.url) =>
+  new Deck({ exec: async () => "", ports: r.ports, batchMs: 30, canvasPollMs: 30, readConfig: async () => ({ root: r.root, firstmateLabel: "firstmate=true", canvasUrl: url }) });
+const CV_FLEET = { version: 2, tasks: [{ id: "t2", intent: "build", title: "Build it", state: "active", since: "2026-10-24T09:00:00Z", project: "demo", shape: "ship" }] };
+const cvRig = () => {
+  const r = rig(CV_FLEET);
+  r.fw.add({ id: "ag-2", status: "running", labels: { "fm.task": "t2" }, createdAt: "2026-10-24T10:00:00Z", items: [shell("npm test")] });
+  return r;
+};
+
+test("canvas: the live page shows the agent's canvas, follows its changes, and records the canvas URL for the CLI", async () => {
+  const fc = await new FakeCanvas().start();
+  fc.set(canvasSummary("ag-2", { bluf: "Wiring the routes" }));
+  const r = cvRig();
+  const deck = canvasDeck(r, fc);
+  await deck.configure();
+  await deck.render("demo");
+  await until(() => /Wiring the routes/.test(readFileSync(r.live, "utf8")), 3000);
+  assert.match(taskCard(readFileSync(r.live, "utf8"), "t2"), /Open canvas ↗/);
+  assert.match(readFileSync(r.page, "utf8"), /\.acv \.blk\{color:red\}/);
+  assert.equal(readPageJson(join(r.pdir, "page.json")).canvasUrl, fc.url);
+  // the canvas moves: the page follows without any agent event
+  fc.set(canvasSummary("ag-2", { rev: 2, bluf: "Routes done, tests next" }));
+  await until(() => /Routes done, tests next/.test(readFileSync(r.live, "utf8")), 3000);
+  // a raw question lands in the stage
+  fc.set(canvasSummary("ag-2", { rev: 3, openAsks: [{ id: "db", question: "pg or sqlite?", blocking: true, options: [{ value: "pg", label: "pg" }, { value: "sqlite", label: "sqlite" }] }] }));
+  await until(() => /Running · 1 question/.test(readFileSync(r.live, "utf8")), 3000);
+  const sum = await deck.summary("demo");
+  assert.equal(sum.projects[0].counts.running, 1);
+  deck.stop(); await fc.stop();
+});
+
+test("canvas: a click on a raw ask is validated against the live canvas and reaches the first mate as a canvas ask", async () => {
+  const fc = await new FakeCanvas().start();
+  fc.set(canvasSummary("ag-2", { openAsks: [{ id: "db", question: "pg or sqlite?", blocking: true, options: [{ value: "pg", label: "pg" }, { value: "sqlite", label: "sqlite" }] }] }));
+  const r = cvRig();
+  const deck = canvasDeck(r, fc);
+  await deck.configure();
+  await deck.render("demo");
+  await until(() => /Uncurated/.test(readFileSync(r.live, "utf8")), 3000);
+  const pick = (opt: string) => ({ prompt: `Picked: ${opt}\n\nContext data:\n${JSON.stringify({ kind: "ask-choice", task: "t2", ask: "c-db", option: opt })}`, selector: "#o-t2-c-db-1" });
+  deck.ingest("demo", [pick("pg"), pick("mysql")]);
+  await until(() => r.world.sent.length > 0, 3000);
+  const msg = r.world.sent.join("\n");
+  assert.match(msg, /picked option "pg" for canvas ask db \("pg or sqlite\?"\)/);
+  assert.match(msg, /option "mysql" for canvas ask db .* no longer open, ignored|no longer open, ignored: option "mysql" for canvas ask db/);
+  const inbox = readInbox(join(r.pdir, "inbox.jsonl"));
+  assert.deepEqual(inbox.map((e) => [e.target, !!e.stale]), [["t-t2#c-db", false], ["t-t2#c-db", true]]);
+  // the pick moves the card to "sent to the first mate" and the stage to With the first mate
+  await until(() => /Sent to the first mate/.test(readFileSync(r.live, "utf8")), 3000);
+  assert.match(taskCard(readFileSync(r.live, "utf8"), "t2"), /class=\\"stg\\">With the first mate</);
+  deck.stop(); await fc.stop();
+});
+
+test("canvas: agent-canvas down is a soft badge and the page keeps working; it heals when the canvas returns", async () => {
+  const fc = await new FakeCanvas().start();
+  fc.set(canvasSummary("ag-2", { bluf: "Up" }));
+  fc.down = true;
+  const r = cvRig();
+  const deck = canvasDeck(r, fc);
+  await deck.configure();
+  await deck.render("demo");
+  await until(() => /canvas unavailable/.test(readFileSync(r.live, "utf8")), 3000);
+  assert.match(taskCard(readFileSync(r.live, "utf8"), "t2"), /class=\\"stg\\">Running</);
+  fc.down = false;
+  await until(() => /Up/.test(readFileSync(r.live, "utf8")) && !/canvas unavailable/.test(readFileSync(r.live, "utf8")), 3000);
+  deck.stop(); await fc.stop();
+});
+
+test("canvas: 'off' in settings means no requests at all", async () => {
+  const fc = await new FakeCanvas().start();
+  fc.set(canvasSummary("ag-2"));
+  const r = cvRig();
+  const deck = canvasDeck(r, fc, "");
+  await deck.configure();
+  await deck.render("demo");
+  await sleep(150);
+  assert.equal(fc.hits.length, 0);
+  assert.ok(!/Open canvas/.test(readFileSync(r.live, "utf8")));
+  deck.stop(); await fc.stop();
+});

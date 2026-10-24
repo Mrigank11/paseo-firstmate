@@ -22,6 +22,8 @@ export function extractTarget(selector: string | undefined, known: Known = {}): 
     m = /^s-(.+)$/.exec(id);
     if (m && (!tasks || tasks.has(m[1]))) return "t-" + m[1];
     // a-<task>-<askId>: the ask block; x-<task>-<askId>: its context expander (a bare number is an older page: ask "a<n>")
+    m = /^[ax]-(.+)-(c-[A-Za-z0-9_]+)$/.exec(id); // a question on the crew's canvas
+    if (m && (!tasks || tasks.has(m[1]))) return `t-${m[1]}#${m[2]}`;
     m = /^[ax]-(.+)-(a?[1-9][0-9]*)$/.exec(id);
     if (m && (!tasks || tasks.has(m[1]))) return `t-${m[1]}#${m[2].startsWith("a") ? m[2] : "a" + m[2]}`;
     return null;

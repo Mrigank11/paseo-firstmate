@@ -109,3 +109,66 @@ test("state is the registry's intent; the v1 status and agentId are not read any
   assert.deepEqual([labeled.map((a) => a.id), labeled[0].final], [["lab"], "DONE: ok"]);
   assert.deepEqual(stageAgentsFor(undefined, view), []);
 });
+
+// ---- the crew's canvas (F1): asks, verdict flags, curated asks that resolve themselves ----
+const cv = (asks: { id: string; pending?: boolean }[] = [], verdict = "Working") => ({ asks: asks.map((a) => ({ id: a.id, pending: !!a.pending })), verdict });
+
+test("canvas: an open canvas ask on an idle agent is Needs you", () => {
+  const s = stage(task(), [agent({ status: "idle", final: "BLOCKED: canvas ask db" })], { canvas: cv([{ id: "db" }]) });
+  assert.deepEqual([s.stage, s.group], ["Needs you", "you"]);
+});
+
+test("canvas: a running agent with an open canvas ask is 'Running · 1 question' (agent-canvas's own rule)", () => {
+  const one = stage(task(), [agent()], { canvas: cv([{ id: "db" }]) });
+  assert.deepEqual([one.stage, one.group], ["Running · 1 question", "running"]);
+  assert.equal(stage(task(), [agent()], { canvas: cv([{ id: "a" }, { id: "b" }]) }).stage, "Running · 2 questions");
+});
+
+test("canvas: a captain pick waiting on the first mate is With the first mate (running or idle)", () => {
+  for (const status of ["running", "idle"]) {
+    const s = stage(task(), [agent({ status })], { canvas: cv([{ id: "db", pending: true }]) });
+    assert.deepEqual([s.stage, s.group], ["With the first mate", "fm"], status);
+  }
+  // an unanswered second question still wins over a pending first
+  assert.equal(stage(task(), [agent({ status: "idle" })], { canvas: cv([{ id: "db", pending: true }, { id: "x" }]) }).group, "you");
+});
+
+test("canvas: no open ask changes nothing; a canvas that was not read changes nothing", () => {
+  assert.equal(stage(task(), [agent()], { canvas: cv([]) }).stage, "Running");
+  assert.equal(stage(task(), [agent()], {}).stage, "Running");
+});
+
+test("canvas: registry asks, permissions and an errored agent keep their precedence", () => {
+  assert.equal(stage(task({ asks: [{ repliedAt: "x" }] }), [agent()], { canvas: cv([{ id: "db" }]) }).group, "fm");
+  assert.equal(stage(task(), [agent({ pendingPermissions: 1 })], { canvas: cv([{ id: "db" }]) }).stage, "Needs you · permission");
+  assert.equal(stage(task(), [agent({ status: "error" })], { canvas: cv([{ id: "db" }]) }).stage, "Failed (agent errored)");
+});
+
+test("canvas: only an active task listens to its canvas (parked, queued, done are the registry's)", () => {
+  for (const state of ["parked", "queued", "blocked", "done"] as const) {
+    assert.ok(!/question|Needs you/.test(stage(task({ state }), [agent({ status: "idle" })], { canvas: cv([{ id: "db" }]) }).stage), state);
+  }
+});
+
+test("canvas: a Disputed or Stale verdict is a non-drift flag", () => {
+  const d = stage(task(), [agent()], { canvas: cv([], "Disputed") });
+  assert.deepEqual([keys(d), d.flags[0].drift], [["canvas-disputed"], false]);
+  assert.deepEqual(keys(stage(task(), [agent({ status: "idle", final: "DONE: x" })], { canvas: cv([], "Stale") })), ["canvas-stale"]);
+  assert.deepEqual(keys(stage(task(), [agent()], { canvas: cv([], "Needs you") })), []);
+  // an archived current agent's canvas is a snapshot: no flag
+  assert.deepEqual(keys(stage(task(), [agent({ archived: true, status: "idle" })], { canvas: cv([], "Disputed") })), ["archived-agent-open-task"]);
+});
+
+test("canvas: a curated ask whose canvas question is answered or gone closes itself: ref-closed, With the first mate", () => {
+  const ref = { kind: "canvas", agentId: "ag-1", block: "db" };
+  const closed = stage(task({ asks: [{ ref }] }), [agent()], { canvas: cv([]) });
+  assert.deepEqual([closed.stage, closed.group, keys(closed), closed.flags[0].drift], ["With the first mate", "fm", ["ref-closed"], true]);
+  // still open on the canvas: the curated ask stands, the captain's call
+  assert.deepEqual([stage(task({ asks: [{ ref }] }), [agent()], { canvas: cv([{ id: "db" }]) }).group, keys(stage(task({ asks: [{ ref }] }), [agent()], { canvas: cv([{ id: "db" }]) }))], ["you", []]);
+  // a registry ask with no ref is never closed by the canvas; and with the canvas unread nothing closes
+  assert.equal(stage(task({ asks: [{}] }), [agent()], { canvas: cv([]) }).group, "you");
+  assert.equal(stage(task({ asks: [{ ref }] }), [agent()], {}).group, "you");
+  // another curated ask is still open next to the closed one: the open one decides, the flag still tells the first mate
+  const two = stage(task({ asks: [{ ref }, {}] }), [agent()], { canvas: cv([]) });
+  assert.deepEqual([two.group, keys(two)], ["you", ["ref-closed"]]);
+});

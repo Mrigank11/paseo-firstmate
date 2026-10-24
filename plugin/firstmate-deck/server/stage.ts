@@ -38,8 +38,18 @@ export type StageTask = {
   /** When `state` last changed (ISO). Used only for the Dispatching -> Lost grace window. */
   since?: string;
   blocked_on?: string;
-  asks: { repliedAt?: string }[];
+  asks: { repliedAt?: string; ref?: AskRef }[];
 };
+
+/** A curated (registry) ask that mirrors a question on the crew's canvas: `bin/fleet ask --ref`. The text and options are read live from the canvas. */
+export type AskRef = { kind?: string; agentId?: string; block?: string };
+
+/**
+ * What the current agent's canvas says (agent-canvas `/api/fm/summary`), reduced to what a stage depends on.
+ * `asks` are the canvas asks still open; `pending` is a captain pick waiting on the first mate. Absent = the canvas was not
+ * read (no canvas, or agent-canvas unreachable), which changes nothing.
+ */
+export type CanvasInput = { asks: { id: string; pending: boolean }[]; verdict?: string };
 
 export const SILENT_MS = 30 * 60_000;
 export const DISPATCH_GRACE_MS = 10 * 60_000;
@@ -71,9 +81,11 @@ const flag = (key: string, text: string, drift = false): StageFlag => ({ key, te
  * `opts.finalKnown` false: the caller cannot read agents' last message (the CLI): an idle agent is reported as idle
  * without guessing "no DONE:".
  */
-export function computeStage(task: StageTask, agents: readonly StageAgent[], now: Date, opts: { archived?: boolean; finalKnown?: boolean } = {}): Stage {
+export function computeStage(task: StageTask, agents: readonly StageAgent[], now: Date, opts: { archived?: boolean; finalKnown?: boolean; canvas?: CanvasInput } = {}): Stage {
   const cur = currentAgent(agents);
-  const out = (stage: string, group: GroupKey, flags: StageFlag[] = [], failed = false): Stage => ({ stage, group, agentId: cur?.id ?? null, flags, failed });
+  // flags every live stage carries (a canvas verdict, a curated ask the canvas already resolved); set below, after the done branch
+  let extra: StageFlag[] = [];
+  const out = (stage: string, group: GroupKey, flags: StageFlag[] = [], failed = false): Stage => ({ stage, group, agentId: cur?.id ?? null, flags: [...flags, ...extra], failed });
 
   if (opts.archived || task.state === "done" || task.state === "failed") {
     const failed = task.state === "failed";
@@ -86,8 +98,18 @@ export function computeStage(task: StageTask, agents: readonly StageAgent[], now
     return out(label, "done", [], failed);
   }
 
+  const canvas = !cur || cur.archived ? undefined : opts.canvas;
+  if (canvas?.verdict === "Disputed") extra.push(flag("canvas-disputed", "canvas: status disputed"));
+  if (canvas?.verdict === "Stale") extra.push(flag("canvas-stale", "canvas: out of date"));
+  // A curated ask whose canvas question is answered or gone has resolved itself: the first mate only has to close it.
+  const open = new Set(opts.canvas?.asks.map((a) => a.id));
+  const closed = opts.canvas ? task.asks.filter((a) => a.ref?.kind === "canvas" && a.ref.block && !open.has(a.ref.block)) : [];
+  if (closed.length) extra.push(flag("ref-closed", "resolved on canvas: run bin/fleet answer", true));
+
   // An open ask is the captain's (or the first mate's follow-up), whatever the registry state and the agent are doing.
-  if (task.asks.length) return task.asks.some((a) => !a.repliedAt) ? out("Needs you", "you") : out("With the first mate", "fm");
+  const asks = task.asks.filter((a) => !closed.includes(a));
+  if (asks.length) return asks.some((a) => !a.repliedAt) ? out("Needs you", "you") : out("With the first mate", "fm");
+  if (closed.length) return out("With the first mate", "fm");
 
   const running = !!cur && !cur.archived && RUNNING.has(cur.status);
   if (task.state === "parked") return out("Parked", "parked", running ? [flag("parked-but-running", "parked, but an agent is running", true)] : []);
@@ -96,6 +118,15 @@ export function computeStage(task: StageTask, agents: readonly StageAgent[], now
 
   // state === "active": Paseo decides what is happening
   if (cur && !cur.archived && cur.pendingPermissions > 0) return out("Needs you · permission", "you");
+  // The crew's own canvas questions: Needs you once the agent is idle, "Running · 1 question" while it works on (agent-canvas's rule).
+  if (canvas && cur && cur.status !== "error") {
+    const raw = canvas.asks.filter((a) => !a.pending).length;
+    if (raw) {
+      if (RUNNING.has(cur.status)) return out(`Running · ${raw} question${raw > 1 ? "s" : ""}`, "running");
+      return out("Needs you", "you");
+    }
+    if (canvas.asks.length) return out("With the first mate", "fm"); // a captain pick waiting for the first mate to deliver it
+  }
   if (!cur) {
     const age = now.getTime() - ms(task.since);
     return task.since && age >= DISPATCH_GRACE_MS ? out("Lost", "fm", [flag("no-agent", "no agent found for this task", true)]) : out("Dispatching", "running");

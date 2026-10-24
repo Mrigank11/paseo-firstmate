@@ -37,3 +37,13 @@ test("normalizeRoot: ~ expanded, symlinks resolved, a missing state/ is reported
   const bare = realpathSync(mkdtempSync(join(tmpdir(), "deck-bare-")));
   assert.match(normalizeRoot(bare).problem!, /no state\/ directory/);
 });
+
+test("canvasUrl: the default, an explicit setting, the environment while the setting is the default, and 'off'", () => {
+  const url = (s: object, env: Record<string, string> = {}) => resolveConfig(s as any, env).canvasUrl;
+  assert.equal(url({}), "http://127.0.0.1:6790");
+  assert.equal(url({ canvasUrl: "http://127.0.0.1:6790" }), "http://127.0.0.1:6790");
+  assert.equal(url({ canvasUrl: "http://127.0.0.1:6791" }, { AGENT_CANVAS_URL: "http://x:1" }), "http://127.0.0.1:6791");
+  assert.equal(url({ canvasUrl: "http://127.0.0.1:6790" }, { AGENT_CANVAS_URL: "http://127.0.0.1:6791" }), "http://127.0.0.1:6791");
+  assert.equal(url({ canvasUrl: "off" }, { AGENT_CANVAS_URL: "http://x:1" }), "");
+  assert.equal(resolveConfig({ canvasDir: "/c" } as any, {}).canvasDir, "/c");
+});

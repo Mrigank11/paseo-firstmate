@@ -3,7 +3,7 @@
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { basename, join, resolve, sep } from "node:path";
 import { cleanUi } from "./marks.ts";
-import { askIdOf } from "./store.ts";
+import { askIdOf, canvasAskIdOf } from "./store.ts";
 import { archiveStateOf, stateOf, type TaskState } from "./stage.ts";
 
 export type Ask = {
@@ -30,6 +30,8 @@ export type Ask = {
   pendingSince?: string;
   /** The reply was a click on one of the options. */
   replyChoice?: string;
+  /** Set when this ask mirrors a question on the crew's canvas (`bin/fleet ask --ref`): the canvas holds the live text and options. */
+  ref?: { kind: "canvas"; agentId?: string; block: string };
 };
 
 export type Task = {
@@ -140,7 +142,7 @@ function readInbox(path: string): Comment[] {
       const atMs = Date.parse(c?.at);
       if (c && typeof c.target === "string" && typeof c.text === "string" && !isNaN(atMs)) {
         const ch = c.choice;
-        const askId = ch ? askIdOf(ch.ask) : null;
+        const askId = ch ? askIdOf(ch.ask) ?? canvasAskIdOf(ch.ask) : null;
         const choice = ch && typeof ch.option === "string" && askId ? { ask: askId, option: ch.option } : undefined;
         out.push({ id: String(c.id ?? ""), at: c.at, atMs, target: c.target, text: c.text, delivered: c.delivered === true, answered: c.answered === true, ...(choice ? { choice } : {}), ...(c.stale === true ? { stale: true } : {}) });
       }
@@ -202,6 +204,8 @@ function toTask(raw: any, root: string, label: string, inbox: Comment[] = [], ar
       const opts = a.options.filter((o: unknown) => typeof o === "string" && o.length > 0).slice(0, 6) as string[];
       if (opts.length >= 2) ask.options = opts;
     }
+    const r = a?.ref;
+    if (r && r.kind === "canvas" && typeof r.block === "string" && r.block) ask.ref = { kind: "canvas", block: r.block, ...(typeof r.agentId === "string" ? { agentId: r.agentId } : {}) };
     const since = Date.parse(a?.since ?? "");
     if (typeof a?.pendingSince === "string" && a.pendingSince) ask.pendingSince = a.pendingSince;
     // Only comments on THIS ask (its block, option buttons or context expander: target "t-<task>#<askId>") move it.

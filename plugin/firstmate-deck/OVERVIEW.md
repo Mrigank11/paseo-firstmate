@@ -31,3 +31,11 @@ Every project page has a task navigator, reachable from anywhere on the page. On
 
 - The plugin serves a small CORS endpoint (`readMarksPort`, default 4398; `readMarksHost` is the tailnet fallback) for the page's "Done, unread" marks, stored in `state/projects/<p>/ui-state.json`. It never writes `fleet.json`.
 - A task's optional `order` sorts it within its group; `provider` labels it when Paseo has no record of its agent; project.json `collapsedSections`, `sectionSubtitles` and `archiveLimit` shape long hand-written pages. `bin/page stop`/`start` pause and resume one page. See `docs/STATE.md`, "Read marks, ordering and long pages".
+
+## The crew's canvas in the card
+
+Each live task card shows its agent's agent-canvas canvas: verdict, BLUF, a steps strip with the Now row, and an "Open canvas ↗" link (no iframe: Lavish's sandbox makes it cross-origin). The deck pulls it itself, on loopback, from agent-canvas's `/api/fm/{summary,card,css}` (`server/canvas-port.ts`): every ~3 s while a page tracks an agent, a card fetched only when its `rev` moved, backoff while the canvas is unreachable. Unreachable or `canvasUrl` = `off` means a small "canvas unavailable" badge and the old card; nothing blocks. The full embed card rides along hidden and replaces the compact fragment in the focus view.
+
+Canvas asks feed the stage engine (`computeStage`'s `canvas` input): idle agent + open ask = Needs you, running agent = "Running · N question(s)", a captain pick waiting for the first mate = With the first mate; a Disputed or Stale verdict is a flag. A canvas ask no curated ask mirrors shows raw ("Uncurated · from the crew") with buttons on the normal option-click path (`t-<task>#c-<id>`); the first mate is told it is a canvas ask. A curated ask carrying `ref {kind:"canvas", block}` whose canvas ask is answered or gone is shown "Resolved on canvas" and flagged `ref-closed` (drift: run `bin/fleet answer`). `bin/fleet stage(s)` read the same canvases (`AGENT_CANVAS_URL`, else the `canvasUrl` the deck stamps into `page.json`).
+
+Settings: `canvasUrl` (default `http://127.0.0.1:6790`; isolated is 6791; `off` disables), `canvasDir` (the agent-canvas checkout, for later snippet tooling).

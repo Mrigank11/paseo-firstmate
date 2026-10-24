@@ -4,7 +4,7 @@
 //   stage-cli.ts drift <root> [project]                  "<n>" drift flags across live tasks; each flagged task on stderr
 //   stage-cli.ts agents <root> <taskId>                  JSON array of the ids of every agent labelled fm.task=<taskId>, oldest first
 //   stage-cli.ts task-of <root> <agentId>                the fm.task label of that agent ("" when it has none)
-import { archiveRow, labelledAgents, rowOf, stages, table } from "./stage-data.ts";
+import { archiveRow, canvasSummaries, labelledAgents, rowOf, stages, table } from "./stage-data.ts";
 import { loadAllLive } from "./state.ts";
 
 function die(msg: string): never {
@@ -21,7 +21,8 @@ switch (cmd) {
     const id = rest[0];
     if (!id) die("stage needs a task id");
     const live = loadAllLive(root).find((t) => t.id === id);
-    const row = live ? rowOf(live, labelledAgents([id]), new Date()) : archiveRow(root, id);
+    const recs = live ? labelledAgents([id]) : [];
+    const row = live ? rowOf(live, recs, new Date(), canvasSummaries(root, recs.filter((r) => !r.archived).map((r) => r.id))) : archiveRow(root, id);
     if (!row) die(`no such task '${id}'`);
     console.log(JSON.stringify(row));
     break;

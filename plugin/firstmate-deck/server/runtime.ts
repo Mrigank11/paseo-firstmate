@@ -10,6 +10,7 @@ import { AgentViews } from "./agent-views.ts";
 import { CliPort, type Exec } from "./paseo-cli.ts";
 import { NO_CLAIM_MESSAGE, NoFirstMateError, PortSelector, resolveFirstMate, sendToFirstMate, type CommentRowData, type FirstMate, type PortAgent } from "./paseo-port.ts";
 import { Relay, newEntries, parseTarget, type AskLookup, type TargetInfo } from "./relay.ts";
+import { CanvasPort, type FmSummary } from "./canvas-port.ts";
 import { liveJs, renderProject, stagesOf, type AgentView, type Banner } from "./render.ts";
 import { currentAgent, type LabeledAgent } from "./stage.ts";
 import { MarksServer } from "./marks-server.ts";
@@ -38,6 +39,9 @@ export type DeckOpts = {
   rescanMs?: number;
   /** The host's Tailscale IPv4 address ("" when there is none). Defaults to `tailscale ip -4`. */
   tailnetIp?: () => Promise<string>;
+  /** Tests: the fetch used for agent-canvas, and the poll interval. */
+  canvasFetch?: ConstructorParameters<typeof CanvasPort>[0]["fetch"];
+  canvasPollMs?: number;
 };
 
 /** `tailscale ip -4`, the way a hand-run page found its tailnet address. "" when tailscale is absent or down. */
@@ -67,6 +71,9 @@ const IGNORED = /(^|\/)(\.[^/]*|[^/]*\.tmp|[^/]*\.lock|page\.html|[^/]*\.live\.j
 const STALE_UNKNOWN: AgentView = { status: "unknown", stepCount: 0, recent: [], stale: true };
 
 const plainTitle = (t: Task) => t.title || t.intent || t.id;
+
+/** The first question still open on a crew canvas, for a Needs-you line that has no registry ask behind it. */
+const canvasQuestion = (s: FmSummary | undefined): string => s?.openAsks.find((a) => !a.pending)?.question ?? "";
 
 type PollerEntry = { poller: PagePoller; child: ChildProcess | null; last: ChildProcess | null };
 const killEntry = (e: PollerEntry) => { e.poller.stop(); try { e.child?.kill("SIGTERM"); } catch {} };
@@ -133,9 +140,21 @@ export class Deck {
   private unknownAgents = new Set<string>();
 
   private o: DeckOpts;
+  /** The crew agents' canvases (agent-canvas, loopback), pulled for the agents the pages show. */
+  private canvas: CanvasPort;
 
   constructor(o: DeckOpts) {
     this.o = o;
+    this.canvas = new CanvasPort({
+      url: () => this.cfg.canvasUrl ?? "",
+      fetch: o.canvasFetch,
+      pollMs: o.canvasPollMs,
+      log: (m) => this.log(m),
+      onChange: (ids) => {
+        const projects = new Set(ids.flatMap((id) => [...(this.agentProjects.get(id) ?? [])]));
+        for (const p of projects) this.scheduleRender(p, 0, "canvas");
+      },
+    });
     this.log = o.log ?? (() => {});
     this.agents = new AgentViews((m) => this.log(m));
     this.marks = new MarksServer(() => this.cfg.root, (m) => this.log(m));
@@ -179,6 +198,7 @@ export class Deck {
     for (const t of this.debounce.values()) clearTimeout(t);
     for (const t of this.late) clearTimeout(t);
     this.relay.stop();
+    this.canvas.stop();
     for (const w of this.watchers.values()) w.close();
     this.watchers.clear();
     for (const e of this.pollers.values()) killEntry(e);
@@ -550,6 +570,7 @@ export class Deck {
     // a project exists only while its project.json does; never resurrect a deleted project's dir
     if (!existsSync(join(projectDir(this.cfg.root, project), "project.json"))) return;
     const ids = this.trackedAgents(project, model);
+    this.canvas.want(project, ids);
     if (!this.viewsHydrated.has(project)) {
       this.viewsHydrated.add(project);
       this.agents.hydrate(readPageJson(pageJsonPath(this.cfg.root, project)).agentViews);
@@ -563,7 +584,7 @@ export class Deck {
     const banner = this.bannerFor(project, pj.session);
     const r = renderProject(model, views, {
       now, tickSeconds: 1, refreshSeconds: Math.round((this.o.tickMs ?? TICK_MS) / 1000), paseoAgentUrl: this.agentUrl, banner, pageFile: basename(target),
-      marksUrl: this.marksUrl(project, pj), labeled: this.labeledFor(model),
+      marksUrl: this.marksUrl(project, pj), labeled: this.labeledFor(model), canvas: this.canvas.data(ids),
     });
     const p2 = (n: number) => String(n).padStart(2, "0");
     const ts = `${p2(now.getHours())}:${p2(now.getMinutes())}:${p2(now.getSeconds())}`;
@@ -586,6 +607,7 @@ export class Deck {
       pluginRoot: this.cfg.root,
       lavishPort: this.cfg.lavishPort ?? process.env.LAVISH_AXI_PORT ?? null,
       lavishStateDir: this.cfg.lavishStateDir ?? process.env.LAVISH_AXI_STATE_DIR ?? null,
+      canvasUrl: this.cfg.canvasUrl || null,
     };
     // `bin/page start` resets the listener to "pending"; a poll that is already healthy re-asserts what it last said
     const l = this.listener.get(project);
@@ -701,6 +723,12 @@ export class Deck {
     if (model) known = { tasks: [...model.tasks, ...model.archive].map((t) => t.id), sections: model.sections.map((s) => s.name) };
     // a click is checked against the ask as it is NOW: the ask must still be open and the option one of its own
     const lookup: AskLookup = (task, ask) => {
+      if (ask.startsWith("c-")) { // a question on the crew's canvas: its live text and option values
+        const t = model?.tasks.find((x) => x.id === task);
+        const aid = currentAgent(this.labeled.get(task) ?? [])?.id;
+        const c = aid ? this.canvas.summary(aid)?.openAsks.find((x) => x.id === ask.slice(2)) : undefined;
+        return c && { text: c.question, options: c.options.map((o) => o.value) };
+      }
       const a = model?.tasks.find((t) => t.id === task)?.asks.find((x) => x.id === ask);
       return a && { text: a.text, options: a.options };
     };
@@ -836,7 +864,10 @@ export class Deck {
       const counts = { needsYou: 0, withFirstMate: 0, running: 0, blocked: 0, next: 0, parked: 0, done: archived.filter((a) => a.state !== "failed").length, failed: archived.filter((a) => a.state === "failed").length };
       await this.refreshLabeled();
       const views = Object.fromEntries(this.trackedAgents(p, model).map((id) => [id, this.agents.peek(id)]).filter(([, v]) => v)) as Record<string, AgentView>;
-      const stages = stagesOf({ ...model, archive: [] }, views, { now: new Date(), labeled: this.labeledFor(model) });
+      const tracked = this.trackedAgents(p, model);
+      this.canvas.want(p, tracked);
+      const canvas = this.canvas.data(tracked);
+      const stages = stagesOf({ ...model, archive: [] }, views, { now: new Date(), labeled: this.labeledFor(model), canvas });
       const needsYou: Summary["needsYou"] = [];
       const running: Summary["running"] = [];
       for (const t of model.tasks) {
@@ -845,7 +876,7 @@ export class Deck {
         if (g === "you") {
           counts.needsYou++;
           if (t.asks.length) for (const a of t.asks.filter((a) => !a.repliedAt)) needsYou.push({ taskId: t.id, askId: a.id, taskTitle: plainTitle(t), text: a.text, since: a.since ?? "" });
-          else needsYou.push({ taskId: t.id, askId: null, taskTitle: plainTitle(t), text: t.notes || "Needs your call", since: "" });
+          else needsYou.push({ taskId: t.id, askId: null, taskTitle: plainTitle(t), text: canvasQuestion(canvas.summaries[st.agentId ?? ""]) || t.notes || "Needs your call", since: "" });
         } else if (g === "fm") {
           counts.withFirstMate++; // the next move is the first mate's, so it does not count as needing the captain
         } else if (g === "running") {

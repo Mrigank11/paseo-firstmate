@@ -1,7 +1,7 @@
 // Delivery of page comments to the first mate. Entries are already in inbox.jsonl when they reach the relay.
 // Batches arriving within BATCH_MS (300 ms: Lavish already hands over one Send as one poll result) become one message; a failed send retries at 2 s, 10 s, 30 s, then every 60 s.
 import { randomBytes } from "node:crypto";
-import { askIdOf, type Choice, type InboxEntry } from "./store.ts";
+import { askIdOf, canvasAskIdOf, type Choice, type InboxEntry } from "./store.ts";
 import type { Prompt } from "./toon.ts";
 import { extractTarget, type Known } from "./target.ts";
 
@@ -26,7 +26,7 @@ export function parseChoice(p: Prompt): { choice: Choice; text: string } | null 
   }
   if (!data || typeof data !== "object" || data.kind !== "ask-choice") return null;
   const { task, option } = data;
-  const ask = askIdOf(data.ask); // the ask's stable id; a bare number comes from a page loaded before ids existed
+  const ask = askIdOf(data.ask) ?? canvasAskIdOf(data.ask); // the ask's stable id; a bare number comes from a page loaded before ids existed
   if (typeof task !== "string" || !/^[a-z0-9][a-z0-9-]*$/.test(task)) return null;
   if (!ask || typeof option !== "string" || !option.trim()) return null;
   return { choice: { task, ask, option }, text };
@@ -71,11 +71,13 @@ export type Describe = (target: string) => TargetInfo | undefined;
 
 /** `t-<task>` or `t-<task>#<askId>` -> the task id and, for an ask target, the ask id ("a2"). */
 export function parseTarget(target: string): { task: string; ask?: string } | null {
-  const m = /^t-(.+?)(?:#(a[1-9][0-9]*))?$/.exec(target);
+  const m = /^t-(.+?)(?:#(a[1-9][0-9]*|c-[A-Za-z0-9_]+))?$/.exec(target);
   return m ? { task: m[1], ask: m[2] } : null;
 }
 
 export const CHOICES_APPLIED_LINE = "Option picks are applied automatically when you reply; use --keep-open <task>#<askId> to keep an ask open.";
+
+export const CANVAS_PICK_LINE = "A canvas ask is a question on the crew's own canvas: replying does not apply the pick, deliver it to the crew's canvas.";
 
 /**
  * One line per comment, self-contained and traceable:
@@ -85,7 +87,9 @@ export const CHOICES_APPLIED_LINE = "Option picks are applied automatically when
 type Line = Pick<InboxEntry, "target" | "text" | "choice" | "stale"> & { id?: string };
 
 export function formatMessage(project: string, entries: Line[], describe?: Describe): string {
-  const live = entries.some((e) => e.choice && !e.stale);
+  const onCanvas = (e: Line) => !!e.choice && e.choice.ask.startsWith("c-");
+  const live = entries.some((e) => e.choice && !e.stale && !onCanvas(e));
+  const canvasPick = entries.some((e) => onCanvas(e) && !e.stale);
   const line = (e: Line) => {
     const parts = [e.target];
     const info = describe?.(e.target);
@@ -99,7 +103,8 @@ export function formatMessage(project: string, entries: Line[], describe?: Descr
     }
     const id = e.id ? ` (${e.id})` : "";
     if (!e.choice) return `- [${parts.join(" · ")}]${id} "${oneLine(e.text)}"`;
-    const what = `option "${oneLine(e.choice.option)}" for ask ${e.choice.ask}${e.choice.askText ? ` ("${oneLine(e.choice.askText)}")` : ""}`;
+    // a question the crew put on its canvas (not a registry ask): named by its canvas id so it can be delivered without curating first
+    const what = `option "${oneLine(e.choice.option)}" for ${onCanvas(e) ? `canvas ask ${e.choice.ask.slice(2)}` : `ask ${e.choice.ask}`}${e.choice.askText ? ` ("${oneLine(e.choice.askText)}")` : ""}`;
     return e.stale
       ? `- [${parts.join(" · ")}]${id} option click on an ask that is no longer open, ignored: ${what}`
       : `- [${parts.join(" · ")}]${id} picked ${what}`;
@@ -109,6 +114,7 @@ export function formatMessage(project: string, entries: Line[], describe?: Descr
     ...entries.map(line),
     `Reply with: bin/page reply ${project} "<your reply>"`,
     ...(live ? [CHOICES_APPLIED_LINE] : []),
+    ...(canvasPick ? [CANVAS_PICK_LINE] : []),
   ].join("\n");
 }
 

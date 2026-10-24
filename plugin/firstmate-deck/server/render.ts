@@ -8,7 +8,9 @@ import { navScript } from "./nav-script.ts";
 import { pageScript } from "./page-script.ts";
 import { CSS } from "./style.ts";
 import type { ProjectModel, Task, TrailComment } from "./state.ts";
-import { computeStage, stageAgentsFor, type GroupKey, type LabeledAgent, type Stage, type StageFlag } from "./stage.ts";
+import { computeStage, currentAgent, stageAgentsFor, type GroupKey, type LabeledAgent, type Stage, type StageFlag } from "./stage.ts";
+import { canvasInput, clickedPick, SAFE_ASK } from "./canvas-view.ts";
+import type { CanvasData, FmSummary } from "./canvas-port.ts";
 
 export type AgentView = {
   status: "initializing" | "idle" | "running" | "error" | "closed" | "archived" | "unknown";
@@ -44,6 +46,8 @@ export type RenderOpts = {
   marksUrl?: string;
   /** Paseo agents found by their `fm.task` label, per task id (runtime.ts). Without them a v1 task's `agentId` stands in. */
   labeled?: Record<string, LabeledAgent[]>;
+  /** What agent-canvas says about those agents (canvas-port.ts). Absent = no canvas: cards and stages are the registry's and Paseo's alone. */
+  canvas?: CanvasData;
 };
 
 export type Rendered = { page: string; live: string; signature: string };
@@ -100,9 +104,12 @@ const stampShort = (d: Date) => `${pad(d.getHours())}:${pad(d.getMinutes())}:${p
 const titleCase = (s: string) => s.replace(/[-_]+/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
 
 /** The task's computed stage (stage.ts): from the registry's intent, its asks, and the Paseo agents carrying its label. */
-export function stageOf(t: Task, live: boolean, o: { now: Date; labeled?: RenderOpts["labeled"] }, view: (id: string) => AgentView | undefined = () => undefined): Stage {
+export function stageOf(t: Task, live: boolean, o: { now: Date; labeled?: RenderOpts["labeled"]; canvas?: CanvasData; comments?: TrailComment[] }, view: (id: string) => AgentView | undefined = () => undefined): Stage {
   if (!live) return computeStage(t, t.agents?.length ? [{ id: t.agents[t.agents.length - 1], status: "idle", archived: false, pendingPermissions: 0 }] : [], o.now, { archived: true });
-  return computeStage(t, stageAgentsFor(o.labeled?.[t.id], view), o.now);
+  const agents = stageAgentsFor(o.labeled?.[t.id], view);
+  const cur = currentAgent(agents);
+  const canvas = cur && o.canvas?.status === "ok" ? canvasInput(o.canvas.summaries[cur.id], t.id, o.comments ?? []) : undefined;
+  return computeStage(t, agents, o.now, { canvas });
 }
 
 export function groupOf(t: Task, live: boolean, now = new Date(), labeled?: RenderOpts["labeled"], view?: (id: string) => AgentView | undefined): GroupKey {
@@ -119,7 +126,7 @@ function pill(group: GroupKey, ast: string): [string, string] {
 
 const flagBadges = (flags: StageFlag[]) => flags.map((f) => `<span class="fl${f.drift ? " fl-d" : ""}" title="${esc(f.key)}">${esc(f.text)}</span>`).join("");
 
-function agentBlock(t: Task, group: GroupKey, view: AgentView | undefined, o: RenderOpts, st: Stage): string {
+function agentBlock(t: Task, group: GroupKey, view: AgentView | undefined, o: RenderOpts, st: Stage, withCanvas = false): string {
   const aid = st.agentId;
   if (!aid) { // no agent to show: Dispatching and Lost still say where the task stands, and so does any drift flag
     if (!st.flags.length && group !== "running" && group !== "fm") return "";
@@ -144,10 +151,11 @@ function agentBlock(t: Task, group: GroupKey, view: AgentView | undefined, o: Re
   const model = [a.model || t.provider, a.thinking].filter(Boolean).join(" ");
   const facts = [a.stepCount ? `${a.stepCount}${a.stepsAtLeast ? "+" : ""} steps` : "", el, model, ast === "archived" ? "archived" : ""].filter(Boolean).join(" · ");
   const cur = ACTIVE.has(ast) && a.recent.length ? a.recent[a.recent.length - 1] : a.final || a.recent[a.recent.length - 1] || "";
+  // with a canvas fragment the links move below it (cvLinks) and the canvas's BLUF/steps/Now replace the recent-steps block
   const head =
     `<div class="ag"><span class="pill p-${cls}"><span class="dot"></span>${esc(label)}</span>` +
-    `<span class="stg">${esc(st.stage)}</span>${flagBadges(st.flags)}<span class="facts">${esc(facts)}</span><a class="open" href="${url}">Open in Paseo</a></div>`;
-  if (!cur) return head;
+    `<span class="stg">${esc(st.stage)}</span>${flagBadges(st.flags)}<span class="facts">${esc(facts)}</span>${withCanvas ? "" : `<a class="open" href="${url}">Open in Paseo</a>`}</div>`;
+  if (withCanvas || !cur) return head;
   if (!a.recent.length) return head + `<div class="cur">${esc(cut(cur, 160))}</div>`;
   const lis = a.recent.map((s) => `<li>${esc(s)}</li>`).join("");
   return (
@@ -155,6 +163,61 @@ function agentBlock(t: Task, group: GroupKey, view: AgentView | undefined, o: Re
     `<details class="stp" id="s-${esc(t.id)}"><summary class="cur">${esc(cut(cur, 160))}</summary>` +
     `<ol start="${Math.max(1, a.stepCount - a.recent.length + 1)}">${lis}</ol></details>`
   );
+}
+
+
+const verdictTone = (label: string) => (label === "Error" ? "bad" : label === "Needs you" || label === "Disputed" || label === "Stale" ? "warn" : label === "Done" ? "ok" : "mut");
+
+/**
+ * The agent's canvas inside its card: verdict, BLUF, steps strip with the Now row. `compact` is what a grouped list shows;
+ * the full embed card (agent-canvas `/api/fm/card`) rides along hidden and replaces it in the focus view (style.ts).
+ */
+export function canvasFragment(s: FmSummary, card?: string): string {
+  const flags = s.verdict.flags.map((f) => `<span class="fl" title="${esc(f.signal)}">${esc(f.text)}</span>`).join("");
+  const total = Math.min(s.steps.total, 24);
+  const done = s.steps.total > 24 ? Math.round((s.steps.done / s.steps.total) * 24) : s.steps.done;
+  const segs = Array.from({ length: total }, (_, i) => `<i class="${i < done ? "on" : i === done && s.steps.current ? "now" : ""}"></i>`).join("");
+  const steps = s.steps.total
+    ? `<div class="cv-steps"><span class="cv-bar" aria-hidden="true">${segs}</span><span class="cv-n">${s.steps.done}/${s.steps.total} steps</span>${s.steps.current ? `<span class="cv-now"><b>Now</b> ${esc(cut(s.steps.current, 100))}</span>` : ""}</div>`
+    : "";
+  const compact =
+    `<div class="cv-c"><div class="cv-top"><span class="cv-v cv-${verdictTone(s.verdict.label)}">${esc(s.verdict.label)}</span>${flags}${s.auto ? `<span class="fl" title="no canvas was written: this is the one agent-canvas drew from the agent's timeline">auto canvas</span>` : ""}</div>` +
+    `${s.bluf ? `<div class="cv-bluf">${esc(cut(s.bluf, 280))}</div>` : ""}${steps}</div>`;
+  return `<div class="cv${card ? " has-full" : ""}" data-rev="${s.rev}">${compact}${card ? `<div class="cv-f acv">${card}</div>` : ""}</div>`;
+}
+
+/**
+ * The crew's own canvas questions that no curated ask mirrors yet: raw, clickable at once, and still delivered through the
+ * first mate (their buttons use the option-click path, target `t-<task>#c-<id>`). A pick waits as "sent to the first mate".
+ */
+function rawAsks(t: Task, s: FmSummary, comments: TrailComment[], now: Date): string[] {
+  const out: string[] = [];
+  for (const a of s.openAsks) {
+    if (t.asks.some((x) => x.ref?.block === a.id)) continue; // curated: the registry ask above is the one to answer
+    const key = `ask-${t.id}-c-${a.id}`;
+    const clicked = clickedPick(t.id, a.id, comments);
+    const picked = a.pending ?? clicked;
+    const name = esc(t.title || t.intent || t.id);
+    const tag = picked !== undefined ? "Sent to the first mate" : "Uncurated · from the crew";
+    const q = `<div class="ask"><b>Your call:</b> ${inline(a.question)}${a.blocking ? ` <span class="fl">blocking</span>` : ""}</div>`;
+    let body: string;
+    if (!SAFE_ASK.test(a.id) || a.options.length < 2) {
+      body = `${q}<div class="m">Answer this one on the canvas (“Open canvas”).</div>`;
+    } else {
+      const btns = a.options.map((o, k) => {
+        const on = picked !== undefined && o.value === picked;
+        return `<button type="button" class="opt${on ? " on" : ""}" id="o-${esc(t.id)}-c-${esc(a.id)}-${k + 1}" data-task="${esc(t.id)}" data-ask="c-${esc(a.id)}" data-opt="${esc(o.value)}" data-title="${name}" aria-pressed="${on}"${picked !== undefined && !on ? " disabled" : ""}>${esc(o.label)}</button>`;
+      }).join("");
+      const line = picked !== undefined
+        ? `<div class="pickline" role="status">You picked <b>${esc(cut(picked, 100))}</b> · the first mate is delivering it</div>`
+        : `<div class="pickline" role="status" hidden></div>`;
+      const hint = picked === undefined ? `<span class="hint">or comment on the card</span>` : "";
+      body = `${q}<div class="opts" data-key="${esc(key)}"><div class="opt-row">${btns}${hint}</div>${line}</div>`;
+    }
+    const trail = picked === undefined ? trailHtml(comments, `t-${t.id}#c-${a.id}`, now) : "";
+    out.push(`<div class="askbox raw" id="a-${esc(t.id)}-c-${esc(a.id)}"><div class="ask-tag">${tag}</div>${body}${trail}</div>`);
+  }
+  return out;
 }
 
 const DAY_MS = 24 * 3600 * 1000;
@@ -186,7 +249,7 @@ export function trailHtml(all: TrailComment[], target: string, now: Date, also?:
   return `<div class="trail"><span class="tr-who">💬 You${hm}</span><span class="tr-txt">${said}</span>${n}${chipHtml(last, now)}</div>`;
 }
 
-type Ctx = { byId: Map<string, Task>; unblocks: Map<string, string[]>; agents: Record<string, AgentView>; o: RenderOpts; comments: TrailComment[]; stages: Map<string, Stage> };
+type Ctx = { byId: Map<string, Task>; unblocks: Map<string, string[]>; agents: Record<string, AgentView>; o: RenderOpts; comments: TrailComment[]; stages: Map<string, Stage>; canvas?: CanvasData };
 
 /**
  * An ask's context repeats the ask text when it came from a longer text (the first sentence, bold or not). Show it once:
@@ -233,12 +296,17 @@ function row(t: Task, group: GroupKey, ctx: Ctx, idx = 0): string {
   const mark = done && markable(t);
   const data = done ? ` data-i="${idx}"${mark ? ` data-h="${cardHash(t.card)}"` : ""}` : "";
   const btn = mark ? `<button class="mr" type="button">Mark read</button>` : "";
+  // the agent's canvas, when agent-canvas has one for it: the card shows it under the stage line and answers its raw asks
+  const sum = group === "done" || !aid ? undefined : ctx.canvas?.summaries[aid];
+  const raw = sum ? rawAsks(t, sum, ctx.comments, ctx.o.now) : [];
+  const rawTargets = new Set((sum?.openAsks ?? []).filter((a) => !t.asks.some((x) => x.ref?.block === a.id)).map((a) => `t-${t.id}#c-${a.id}`));
   const out = [
     `<article class="task s-${group}${failed ? " s-failed" : ""}" id="t-${esc(t.id)}"${data}>`,
     `<div class="tt"><span class="ttl">${title}</span>${chip}${btn}</div>`,
     // card-level comments, plus comments on asks that are gone (an answered ask takes its own trail with it)
-    trailHtml(ctx.comments, `t-${t.id}`, ctx.o.now, (c) => c.target.startsWith(`t-${t.id}#`) && !t.asks.some((a) => c.target === `t-${t.id}#${a.id}`)),
+    trailHtml(ctx.comments, `t-${t.id}`, ctx.o.now, (c) => c.target.startsWith(`t-${t.id}#`) && !t.asks.some((a) => c.target === `t-${t.id}#${a.id}`) && !rawTargets.has(c.target)),
   ];
+  if (sum) out.push(agentBlock(t, group, aid ? ctx.agents[aid] : undefined, ctx.o, st, true), canvasFragment(sum, ctx.canvas?.cards[sum.agentId]));
   t.asks.forEach((a) => {
     const box: string[] = [];
     const asked = `<div class="ask asked">${inline(a.text)}</div>`;
@@ -261,6 +329,9 @@ function row(t: Task, group: GroupKey, ctx: Ctx, idx = 0): string {
       box.push(asked, `<div class="ask replied">You replied${hm}: “${esc(cut(a.replyText, 120))}” · the first mate is on it ${chipHtml(reply, ctx.o.now)}</div>`);
     } else if (a.repliedAt) { // marked pending by the first mate (bin/page reply --followup), no comment to quote
       box.push(asked, `<div class="ask replied">The first mate is working on a follow-up</div>`);
+    } else if (a.ref && sum && !sum.openAsks.some((x) => x.id === a.ref!.block)) {
+      // the crew's canvas question this ask mirrors was answered or removed: nothing left to click, the first mate closes it
+      box.push(asked, `<div class="ask replied">Resolved on canvas · the first mate will close this</div>`);
     } else {
       // a "BLUF: ..." text is its own label: no "Your call:" in front of it (no doubled colon), and it is the bold one-liner
       box.push(/^BLUF:/i.test(a.text) ? `<div class="ask"><b>${inline(a.text)}</b></div>` : `<div class="ask"><b>Your call:</b> ${inline(a.text)}</div>`);
@@ -286,7 +357,9 @@ function row(t: Task, group: GroupKey, ctx: Ctx, idx = 0): string {
     const detail = ctxMd.trim() ? `<details class="actx" id="x-${esc(t.id)}-${esc(a.id)}"><summary>Context</summary><div>${markdown(ctxMd)}</div></details>` : "";
     if (ans || detail) out.push(`<div class="askbox answered" id="a-${esc(t.id)}-${esc(a.id)}"><div class="ask-tag">Answered</div>${ans}${detail}</div>`);
   }
-  out.push(agentBlock(t, group, aid ? ctx.agents[aid] : undefined, ctx.o, st));
+  if (sum) {
+    out.push(...raw, `<div class="cv-links"><a class="cv-open" href="${esc(sum.url)}">Open canvas ↗</a><a class="open" href="${esc(ctx.o.paseoAgentUrl(sum.agentId))}">Open in Paseo</a></div>`);
+  } else out.push(agentBlock(t, group, aid ? ctx.agents[aid] : undefined, ctx.o, st));
   if (group === "blocked") out.push(`<div class="bo"><b>Blocked on:</b> ${esc(t.blocked_on || "an outside dependency")}</div>`);
   const body = t.card.trim() ? cardHtml(t) : esc(t.notes);
   if (body) out.push(`<div class="nt">${body}</div>`);
@@ -337,10 +410,11 @@ export function byOrder<T extends { order?: number }>(items: T[]): T[] {
 }
 
 /** Stage of every task the page shows (live ones from Paseo + intent, archive lines frozen), keyed by task id. */
-export function stagesOf(model: ProjectModel, agents: Record<string, AgentView>, o: { now: Date; labeled?: RenderOpts["labeled"] }): Map<string, Stage> {
+export function stagesOf(model: ProjectModel, agents: Record<string, AgentView>, o: { now: Date; labeled?: RenderOpts["labeled"]; canvas?: CanvasData }): Map<string, Stage> {
   const out = new Map<string, Stage>();
-  for (const t of model.archive) out.set(t.id, stageOf(t, false, o));
-  for (const t of model.tasks) out.set(t.id, stageOf(t, true, o, (id) => agents[id]));
+  const so = { ...o, comments: model.comments };
+  for (const t of model.archive) out.set(t.id, stageOf(t, false, so));
+  for (const t of model.tasks) out.set(t.id, stageOf(t, true, so, (id) => agents[id]));
   return out;
 }
 
@@ -352,7 +426,7 @@ function renderLive(model: ProjectModel, agents: Record<string, AgentView>, o: R
   const unblocks = new Map<string, string[]>();
   for (const t of all) for (const d of t.depends_on) unblocks.set(d, [...(unblocks.get(d) ?? []), t.id]);
   const stages = stagesOf(model, agents, o);
-  const ctx: Ctx = { byId, unblocks, agents, o, comments: model.comments, stages };
+  const ctx: Ctx = { byId, unblocks, agents, o, comments: model.comments, stages, canvas: o.canvas };
 
   const buckets: Record<GroupKey, { t: Task; g: GroupKey }[]> = { you: [], fm: [], running: [], blocked: [], next: [], parked: [], done: [] };
   for (const t of model.tasks) buckets[stages.get(t.id)!.group].push({ t, g: stages.get(t.id)!.group });
@@ -382,6 +456,7 @@ function renderLive(model: ProjectModel, agents: Record<string, AgentView>, o: R
     .join("");
   if (failedN) summary += `<a href="#g-done" class="sum c-fail">${failedN} failed</a>`;
   if (busy) summary += `<span class="sum c-running">${busy} agent${busy > 1 ? "s" : ""} working</span>`;
+  if (o.canvas?.status === "down") summary += `<span class="fl cv-down" title="agent-canvas could not be reached from the deck">canvas unavailable</span>`;
   const parts = [`<div class="summary">${summary}<span class="m">live: the page checks ${o.tickSeconds === 1 ? "every second" : `every ${o.tickSeconds} s`}; the plugin refreshes it on every change and at least every ${o.refreshSeconds ?? 20} s (last refresh {TS})</span></div>`];
   for (const [k, n] of GROUPS) {
     const items = buckets[k];
@@ -446,6 +521,7 @@ export function renderProject(model: ProjectModel, agents: Record<string, AgentV
       { ...model, comments: undefined },
       opts.banner ?? null,
       opts.marksUrl ?? null,
+      createHash("sha1").update(opts.canvas?.css ?? "").digest("hex"),
       Object.keys(agents).sort().map((id) => [id, agents[id].status]),
       [...stagesOf(model, agents, opts)].map(([id, st]) => [id, st.stage, st.agentId, st.flags.map((f) => f.key)]),
     ]))
@@ -464,7 +540,7 @@ export function renderProject(model: ProjectModel, agents: Record<string, AgentV
 <title>${esc(model.title)} · status</title>
 <style>
 ${CSS}
-</style>
+</style>${opts.canvas?.css ? `\n<style>\n${opts.canvas.css.replace(/<\/style/gi, "<\\/style")}\n</style>` : ""}
 </head><body>
 <!-- the task navigator: data-lavish-action keeps its clicks working in Lavish's annotate mode -->
 <aside class="tn" id="tn" aria-label="Tasks by stage" data-lavish-action hidden><div class="tn-spine"><button class="tn-tg" id="tn-open" type="button" aria-expanded="false" aria-controls="tn-full" aria-label="Show task titles" title="Show task titles">${svg(ICON.panelOpen)}</button><button class="tn-tg tn-fx" type="button" aria-pressed="false" aria-label="Focus view: show only the selected task" title="Focus view: show only the selected task">${svg(ICON.focus)}</button><div class="tn-bds" id="tn-bds"></div></div><div class="tn-full" id="tn-full"><div class="tn-top"><button class="tn-tg" id="tn-close" type="button" aria-expanded="true" aria-controls="tn-full" aria-label="Fold the task list" title="Fold the task list">${svg(ICON.panelClose)}</button><b>Tasks</b><button class="tn-tg tn-fx" type="button" aria-pressed="false" aria-label="Focus view: show only the selected task" title="Focus view: show only the selected task">${svg(ICON.focus)}</button></div><div class="tn-fl" id="tn-fl"></div></div></aside>
