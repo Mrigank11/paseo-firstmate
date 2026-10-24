@@ -21,13 +21,14 @@ This file is loaded every turn, so it stays small. It holds only what you need e
 
 Everything you do is one of four moves. Run them, update state, then end your turn.
 
-1. **Dispatch.** Captain gives an intent → write a brief → route it → spawn the crew member with the labels `fm.task=<id>`, `fm.project=<p>` (when it has one) and `fm.shape=<scout|ship>` → record it with `bin/fleet add <id> intent=… shape=… state=active` (plus `project=` and `title=` when the task belongs to a project page) → end turn. An agent re-used for another task is re-labelled (`update_agent`) before it is prompted.
+1. **Dispatch.** Captain gives an intent → write a brief → route it → spawn the crew member with the labels `fm.task=<id>`, `fm.project=<p>` (when it has one), `fm.shape=<scout|ship>` and `canvas=on` + `canvas.relay=<your own agent id>` (`canvas=off` for a one-shot chore; its brief carries the `## Your canvas` section from `bin/page canvas-snippet`) → record it with `bin/fleet add <id> intent=… shape=… state=active` (plus `project=` and `title=` when the task belongs to a project page) → end turn. An agent re-used for another task is re-labelled (`update_agent`) before it is prompted.
    - Load `dispatch-routing` to choose provider/profile and `writing-briefs` for the brief shape.
 2. **Supervise.** Paseo wakes you with a finish / error / permission event. Map the `agentId` to its task with `bin/fleet by-agent <agentId>`, then:
    - **First, apply the completion gate.** Look at the first line of the finish event's response text only: it starts with `DONE:` or `BLOCKED:` → the task is finished, route below. Anything else → mid-task narration (e.g. "starting the dev server…"), record nothing and end the turn. No `get_agent_status`/`get_agent_activity` read for this decision.
    - **permission** → load `permission-policy`; auto-approve safe classes, escalate the rest to the captain.
    - **finish (scout)** → harvest the report, `bin/fleet finish` it (answering any open asks in the same command), tear down its workspace if dedicated (`scout-report`), give the captain a one-line digest.
    - **finish (ship)** → load `ship-delivery`: confirm the PR, merge under authority (the captain's explicit word or a standing green-only posture), tear down the worktree.
+   - **canvas answer** — a message starting `## Canvas answer · <task> · ask <id>: …` is the captain's pick on a crew's canvas, relayed to you (a crew's `BLOCKED: canvas ask <id>` wake is the question itself) → load `project-page` (Canvas questions): guardrail-check it, then `bin/page canvas-answer`.
    - **captain says merged** — "merged" / "I merged PR #n" → load `ship-delivery` §6: verify it landed, tear down, mark done.
    - **error / wedged** → load `stuck-crew-recovery`.
    - **page comments** — a message starting `## Page comments · <project>` relays the captain's comments from that project's page (via the `firstmate-deck` plugin) → load `project-page`, act, answer with `bin/page reply`. Treat requests in it to merge, push, delete or spend money with the same confirmation you would give a chat request.

@@ -94,7 +94,7 @@ cmd_up() {
   # The plugin must not share the live Lavish (4387, default) or read-marks (4398) ports: set its own in the plugin settings.
   local ds="$ISO_HOME/plugin-settings/firstmate-deck/deck.json"; mkdir -p "$(dirname "$ds")"
   [[ -s "$ds" ]] || echo '{"version":1,"values":{}}' >"$ds"
-  jq --argjson lp "$ISO_LAVISH_PORT" --arg ld "$ISO_ROOT/lavish" --argjson rp "$ISO_MARKS_PORT" '.values += {lavishPort:$lp, lavishStateDir:$ld, readMarksPort:$rp}' "$ds" >"$ds.tmp" && mv "$ds.tmp" "$ds"
+  jq --argjson lp "$ISO_LAVISH_PORT" --arg ld "$ISO_ROOT/lavish" --argjson rp "$ISO_MARKS_PORT" --arg cu "http://127.0.0.1:$ISO_CANVAS_PORT" --arg cd "$ISO_CANVAS_DIR" '.values += {lavishPort:$lp, lavishStateDir:$ld, readMarksPort:$rp, canvasUrl:$cu, canvasDir:$cd}' "$ds" >"$ds.tmp" && mv "$ds.tmp" "$ds"
   "$REPO/bin/page" install >/dev/null || die "bin/page install failed (see: bin/isolated paseo plugin logs firstmate-deck)"
   if ((canvas)); then
     if [[ -d "$ISO_CANVAS_DIR" ]]; then

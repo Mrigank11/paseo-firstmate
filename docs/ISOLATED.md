@@ -9,6 +9,7 @@
 | Daemon + web UI | `http://manjaro.tail2e75.ts.net:6782/` (tailnet `100.101.33.17:6782`) |
 | agent-canvas | port 6791, installed from `/home/mrigank/projects/paseo-plugins/agent-canvas` |
 | Lavish / read-marks | 4411 / 4412 (set in the plugin settings, so the live 4387 / 4398 are not shared) |
+| Canvas settings | `canvasUrl` (127.0.0.1:6791) and `canvasDir` (the agent-canvas checkout) are written into the deck settings, so `bin/page canvas-snippet` / `canvas-answer` / `canvas-snapshot` find the isolated agent-canvas (relay key: `<home>/agent-canvas/relay.key`) |
 | Plugin | `firstmate-deck` from the checkout you run `bin/isolated` in |
 
 ## Use

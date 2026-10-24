@@ -20,6 +20,7 @@ state/
       report.md         # scout tasks only: the harvested result
       log.md            # narrative journal for the task (append-only); the only home of narrative
       card.md           # the Markdown card the page shows (bin/fleet card / finish)
+      canvas.final.html # the crew's final canvas, kept by bin/page canvas-snapshot before its agent is archived (+ canvas.final.tsx, its source)
       preview.json      # {"port","pid"} of a crew preview server (bin/fleet preview): a kill handle, not status
       asks/<n>.md       # optional long context for ask n (bin/fleet ask --context-file)
   projects/
@@ -143,6 +144,9 @@ A task's stage is never stored. `computeStage()` (`plugin/firstmate-deck/server/
 | 14 | `active`, agent idle/closed, its last message starts `DONE:` | Review | With the first mate |
 | 15 | same, starts `BLOCKED:` | Blocked by crew | With the first mate |
 | 16 | same, neither (flag `idle-no-done`) | Idle | With the first mate |
+| — | any live stage, the current agent's `canvas.relay` first mate no longer exists | (unchanged) + flag `relay-target-gone` | (unchanged) |
+
+**Canvas (Phase 5).** A crew member dispatched with the labels `canvas=on` and `canvas.relay=<first mate agent id>` has a live canvas in agent-canvas. The brief's `## Your canvas` section comes from `bin/page canvas-snippet <scout|ship>`; a captain's pick on a canvas ask reaches the first mate as `## Canvas answer · …` and goes to the crew only through `bin/page canvas-answer <task> <askId> <value>` (or `--decline "<why>"`). `bin/page claim` re-points `canvas.relay` on the open crews; when the relay agent is gone the task carries the drift flag `relay-target-gone`. Before a task's agent is archived, `bin/page canvas-snapshot <task>` writes `tasks/<id>/canvas.final.html` (+ `.tsx`): agent-canvas stops serving a canvas once its agent is archived. The canvas settings `canvasUrl` / `canvasDir` of the deck are stamped into `page.json`, which is how `bin/page` finds agent-canvas (`AGENT_CANVAS_URL`, `AGENT_CANVAS_DIR` and `AGENT_CANVAS_KEY_FILE` override; the relay key is `<paseo home>/agent-canvas/relay.key`).
 
 A flag with `drift: true` means the registry and Paseo disagree and the first mate should act. A *running* agent never lands in Needs you unless an ask or a permission puts it there. On the CLI path the agent's last message is unknown, so a finished agent reads "Idle (final line unknown on CLI)" rather than a guessed "no DONE:". Agents are found by label only: with no `fm.task` label there is no agent (the v1 `agentId` hint is gone), so label every crew agent at `create_agent`.
 

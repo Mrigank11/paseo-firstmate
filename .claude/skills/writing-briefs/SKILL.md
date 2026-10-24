@@ -29,6 +29,12 @@ A **planning** task is a scout in the `planning` lane: its brief says explicitly
 
 A `ship` is a code change in its own worktree: it opens a branch and PR, then stops — delivery (merge under authority, then teardown) is handled per the `ship-delivery` skill.
 
+## Your canvas
+
+Every crew member gets this section, **generated and never hand-written**: run `bin/page canvas-snippet <scout|ship>` (the task's shape) and paste its output after the Firstmate spec, before the footer. It carries the agent-canvas recipe for the right port (live and isolated differ), the starting canvas to `set` first for that shape, and the ask contract: a question for the captain goes on the canvas as an `<Ask … blocking>`, never only in chat, and the crew ends its turn with `BLOCKED: canvas ask <id>`. The crew must also have been dispatched with `canvas=on` and `canvas.relay` (`dispatch-routing`).
+
+Leave the section out only for a one-shot chore, and dispatch it with `canvas=off`.
+
 ## Base SHA
 
 Record the base SHA from the dispatch-time refresh (`dispatch-routing`) in the Firstmate spec: "You are on `<sha>` (`<baseBranch>`, fetched just now, includes …)." If the base checkout was dirty and could not be fast-forwarded, say so here instead. The crew member reports the SHA it actually worked on in its `DONE:` line, so a stale audit is visible from its SHA.
