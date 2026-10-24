@@ -220,6 +220,13 @@ msg="$(PASEO_AGENT_ID=crew-archived "$P" claim 2>&1)"; rc=$?
 printf '{garbage\n{"id":"old-crew2","agentId":"crew-after-garbage"}\n' >"$T/root/state/fleet-archive.jsonl"
 msg="$(PASEO_AGENT_ID=crew-after-garbage "$P" claim 2>&1)"; rc=$?
 [[ $rc -ne 0 ]] && grep -q "is crew on task old-crew2" <<<"$msg" && ok "...a malformed archive line does not hide later crew" || bad "archive with a bad line" "$msg"
+# ---- claim re-points the open crews' canvas relay ----
+echo '[{"id":"crew-9","task":"scout-1","status":"running","archived":false,"createdAt":null,"lastActivityAt":null,"pending":0,"labels":{"canvas.relay":"agent-fm-1"}},{"id":"crew-8","task":"scout-1","status":"running","archived":false,"createdAt":null,"lastActivityAt":null,"pending":0,"labels":{"canvas.relay":"agent-fm-2"}}]' >"$T/relay-agents.json"
+: >"$FAKE_LOG"
+PASEO_AGENT_ID=agent-fm-2 STAGE_AGENTS_JSON="$T/relay-agents.json" "$P" claim >"$T/relay.out" 2>&1
+grep -q "agent update crew-9 --label canvas.relay=agent-fm-2" "$FAKE_LOG" && ok "claim re-labels an open crew's canvas.relay to the new first mate" || bad "claim relabel" "$(cat "$FAKE_LOG")"
+grep -q "agent update crew-8 --label canvas.relay" "$FAKE_LOG" && bad "...but not a crew that already relays to it" || ok "...but not a crew that already relays to it"
+echo '{"agentId":"agent-fm-1","claimedAt":"2026-10-21T00:00:00Z"}' >"$T/root/state/firstmate.json"
 # Paseo is the source of truth: an agent carrying an fm.task label is crew even when fleet.json never recorded it
 echo '{"version":2,"tasks":[]}' >"$T/root/state/fleet.json"
 echo '[{"id":"crew-labelled","task":"some-task","status":"running","archived":false,"createdAt":null,"lastActivityAt":null,"pending":0}]' >"$T/agents.json"

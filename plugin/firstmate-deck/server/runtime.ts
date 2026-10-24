@@ -625,6 +625,7 @@ export class Deck {
       lavishPort: this.cfg.lavishPort ?? process.env.LAVISH_AXI_PORT ?? null,
       lavishStateDir: this.cfg.lavishStateDir ?? process.env.LAVISH_AXI_STATE_DIR ?? null,
       canvasUrl: this.cfg.canvasUrl || null,
+      canvasDir: this.cfg.canvasDir || null,
     };
     // `bin/page start` resets the listener to "pending"; a poll that is already healthy re-asserts what it last said
     const l = this.listener.get(project);

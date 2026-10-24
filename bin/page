@@ -12,6 +12,16 @@
 #                                     Does not label or demote anyone
 #   bin/page claim                    the checkout-wide claim (state/firstmate.json): the first mate of every page that has no
 #                                     claim of its own. Same refusals; also labels the agent and demotes older labels
+#                                     Either claim also re-points the canvas.relay label of the open tasks' live crews (the ones of
+#                                     that project, or of every page with no claim of its own) at the new first mate
+#   bin/page canvas-snippet <scout|ship>   print the "## Your canvas" brief section (agent-canvas recipe + the starting canvas for
+#                                     that shape + the ask contract); writing-briefs pastes it into every crew brief
+#   bin/page canvas-answer <task> <askId> <value>
+#   bin/page canvas-answer <task> <askId> --decline "<why>"
+#                                     deliver (or decline) a captain's pick on a crew canvas ask, through agent-canvas: it marks the
+#                                     Ask answered and tells the crew. Only the first mate (the relay key) can
+#   bin/page canvas-snapshot <task>   keep the crew's final canvas as state/tasks/<task>/canvas.final.html (+ .tsx) BEFORE the crew
+#                                     agent is archived (agent-canvas drops it then); the done card shows it
 #   bin/page start <project> [--repo <path>] [--title "<t>"] [--page <abs path>] [--reopen]
 #                                     claim the page for the caller (a NEW page with no live claim of its own; an existing page
 #                                     held by another live first mate, its own or the checkout-wide one, is warned about and NOT
@@ -119,6 +129,17 @@ agent_live() {
   ! jq -e '(.Archived // .archived // false) == true or ((.ArchivedAt // .archivedAt // "") != "")' <<<"$meta" >/dev/null 2>&1
 }
 
+# Open tasks' live crews were dispatched with canvas.relay=<the old first mate>; point them at the new one so a canvas pick reaches it.
+relabel_relay() { # new-agent-id [project]
+  command -v paseo >/dev/null 2>&1 || return 0
+  local crew home=() a; mapfile -t home < <(paseo_home_args)
+  crew="$(NODE_NO_WARNINGS=1 node "$REPO/plugin/firstmate-deck/server/canvas-cmd.ts" relabel "$ROOT" "$@" 2>/dev/null || true)"
+  for a in $crew; do
+    paseo agent update "$a" --label "canvas.relay=$1" "${home[@]}" >/dev/null 2>&1 \
+      && echo "claim: crew $a now relays canvas picks to $1" || echo "claim: could not re-point crew $a (best effort)"
+  done
+}
+
 cmd_claim() { # [project]
   local project="${1:-}"
   [[ -z "$project" || "$project" =~ ^[a-z0-9][a-z0-9-]*$ ]] || die "bad project '$project' (lowercase letters, digits, dashes)"
@@ -141,10 +162,12 @@ cmd_claim() { # [project]
   if [[ -n "$project" ]]; then
     "${TOOL[@]}" claim "$ROOT" "$id" "$project"
     echo "claimed: agent $id is the first mate of the $project page of $ROOT_REAL"
+    relabel_relay "$id" "$project"
     return 0  # a page claim never labels or demotes: the label belongs to the checkout-wide fallback
   fi
   "${TOOL[@]}" claim "$ROOT" "$id"
   echo "claimed: agent $id is the first mate of $ROOT_REAL (every page without a claim of its own)"
+  relabel_relay "$id"
   # Best effort: label it, and demote every other agent still carrying the label. The CLI can add or set a label but
   # not delete one, so a demoted agent gets <key>=superseded; the plugin never relies on the label while a claim exists.
   command -v paseo >/dev/null 2>&1 || { echo "claim: paseo not found; skipped labelling (the claim itself is enough)"; return 0; }
@@ -428,6 +451,10 @@ cmd_heal() {
   esac
 }
 
+cmd_canvas_snippet() { NODE_NO_WARNINGS=1 node "$REPO/plugin/firstmate-deck/server/canvas-cmd.ts" snippet "$ROOT" "${1:-}"; }
+cmd_canvas_answer() { NODE_NO_WARNINGS=1 node "$REPO/plugin/firstmate-deck/server/canvas-cmd.ts" answer "$ROOT" "$@"; }
+cmd_canvas_snapshot() { NODE_NO_WARNINGS=1 node "$REPO/plugin/firstmate-deck/server/canvas-cmd.ts" snapshot "$ROOT" "$@"; }
+
 cmd_render() {
   local project="${1:-}"; shift || true
   need_project "$project"
@@ -448,5 +475,8 @@ case "${1:-}" in
   status) shift; cmd_status "$@" ;;
   heal) shift; cmd_heal ;;
   render) shift; cmd_render "$@" ;;
+  canvas-snippet) shift; cmd_canvas_snippet "$@" ;;
+  canvas-answer) shift; cmd_canvas_answer "$@" ;;
+  canvas-snapshot) shift; cmd_canvas_snapshot "$@" ;;
   *) sed -n '2,/^set -euo/p' "$0" | sed '$d'; exit 1 ;;
 esac

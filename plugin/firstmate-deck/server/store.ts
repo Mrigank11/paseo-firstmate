@@ -52,6 +52,8 @@ export type PageJson = {
   lavishStateDir?: string | null;
   /** agent-canvas base URL the plugin pulls from (null = none); `bin/fleet stage(s)` reads the same canvases. */
   canvasUrl?: string | null;
+  /** The agent-canvas checkout (settings `canvasDir`): `bin/page canvas-snippet` runs its brief-snippet from here. */
+  canvasDir?: string | null;
   /** Timeline rows still saying "awaiting reply": row id -> the agent that got them and the inbox ids they carry. */
   openRows?: Record<string, { agentId: string; ids: string[] }>;
   /** Last-known agent pills (agent id -> view), shown marked stale when the daemon cannot be asked (e.g. right after a reload). */
