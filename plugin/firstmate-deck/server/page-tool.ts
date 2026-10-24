@@ -7,7 +7,8 @@
 //   page-tool.ts choices <root> <project> [ids]   (one line per delivered, unanswered, non-stale option click: "<task> <askId> <commentId>")
 //   page-tool.ts note <root> <project> <section> <text>
 //   page-tool.ts status <root> [project]          (env PAGE_PLUGIN_STATUS names the plugin state)
-//   page-tool.ts claim <root> <agentId>           (writes state/firstmate.json: THE first mate of this checkout)
+//   page-tool.ts claim <root> <agentId> [project] (writes state/projects/<project>/claim.json, or without a project state/firstmate.json, the checkout-wide fallback)
+//   page-tool.ts claimed <root> [project]         (prints the agent id holding the project claim, else the checkout claim; nothing when none)
 //   page-tool.ts stalled <root> <seconds>        (prints the open projects the plugin has not rendered for that long; not those with a load error)
 //   page-tool.ts load-errors <root>               (prints "<project>: <file>: <why>" for every project whose state files cannot be read)
 //   page-tool.ts stop <root> <project>            (page.json session -> "stopped": the plugin stops polling and rendering that page)
@@ -19,6 +20,7 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, unlinkS
 import { join } from "node:path";
 import { updateUi } from "./marks-server.ts";
 import { cleanUi } from "./marks.ts";
+import { claimedId, projectClaimedId } from "./claims.ts";
 import { askIdOf, inboxPath, pageJsonPath, patchPageJson, projectDir, readInbox, readPageJson, updateInbox, writeAtomic } from "./store.ts";
 
 const SECTIONS: Record<string, string> = {
@@ -94,18 +96,26 @@ const ago = (iso: string | null | undefined): string => {
 };
 const real = (p: string): string => { try { return realpathSync(p); } catch { return p; } };
 
+/** Who this page's comments go to by claim: "<agent>" (its own), "<agent> (checkout)" (the fallback) or "-" (label fallback / nobody). */
+function claimLabel(root: string, project: string): string {
+  const own = projectClaimedId(root, project);
+  if (own) return own;
+  const wide = claimedId(root);
+  return wide ? `${wide} (checkout)` : "-";
+}
+
 function status(root: string, only?: string): void {
   const base = join(root, "state", "projects");
   const names = (only ? [only] : existsSync(base) ? readdirSync(base) : []).filter((n) => existsSync(join(base, n, "project.json")));
   const plugin = process.env.PAGE_PLUGIN_STATUS || "unknown";
   const mine = real(root);
-  const rows = [["PROJECT", "SESSION", "LISTENER", "BANNER", "RENDERED", "PLUGIN ROOT", "UNDELIVERED", "LAST DELIVERY", "PLUGIN", "URL", "LOAD ERROR"]];
+  const rows = [["PROJECT", "CLAIM", "SESSION", "LISTENER", "BANNER", "RENDERED", "PLUGIN ROOT", "UNDELIVERED", "LAST DELIVERY", "PLUGIN", "URL", "LOAD ERROR"]];
   for (const n of names) {
     const pj = readPageJson(pageJsonPath(root, n));
     const und = readInbox(inboxPath(root, n)).filter((e) => !e.delivered).length;
     const banner = pj.banner ? (pj.banner.length > 48 ? pj.banner.slice(0, 47) + "…" : pj.banner) : "-";
     const pr = pj.pluginRoot ? (real(pj.pluginRoot) === mine ? pj.pluginRoot : `${pj.pluginRoot} (NOT this checkout)`) : "-";
-    rows.push([n, pj.session, pj.listener || "-", banner, ago(pj.lastRender), pr, String(und), pj.lastDelivery ?? "-", plugin, pj.lavishUrl ?? "-", pj.loadError ? `state file problem: ${pj.loadError}` : "-"]);
+    rows.push([n, claimLabel(root, n), pj.session, pj.listener || "-", banner, ago(pj.lastRender), pr, String(und), pj.lastDelivery ?? "-", plugin, pj.lavishUrl ?? "-", pj.loadError ? `state file problem: ${pj.loadError}` : "-"]);
   }
   if (rows.length === 1) { console.log(only ? `no such project '${only}'` : "no projects"); return; }
   const w = rows[0].map((_, i) => Math.max(...rows.map((r) => r[i].length)));
@@ -147,7 +157,7 @@ function loadErrors(root: string): string[] {
 }
 
 const [cmd, root, ...rest] = process.argv.slice(2);
-if (!cmd || !root) die("usage: page-tool.ts <scaffold|page-path|session|answered|delivered-ids|choices|note|status|stop|section-set|configure|marks-set|claim|stalled|load-errors|lavish-cfg> <root> ...");
+if (!cmd || !root) die("usage: page-tool.ts <scaffold|page-path|session|answered|delivered-ids|choices|note|status|stop|section-set|configure|marks-set|claim|claimed|stalled|load-errors|lavish-cfg> <root> ...");
 
 switch (cmd) {
   case "scaffold": {
@@ -276,7 +286,18 @@ switch (cmd) {
   case "claim": {
     const agentId = rest[0];
     if (!agentId) die("claim needs an agent id");
-    writeAtomic(join(root, "state", "firstmate.json"), JSON.stringify({ agentId, claimedAt: new Date().toISOString() }, null, 2) + "\n");
+    const body = JSON.stringify({ agentId, claimedAt: new Date().toISOString() }, null, 2) + "\n";
+    if (rest[1]) {
+      const project = slug(rest[1]);
+      writeAtomic(join(projectDir(root, project), "claim.json"), body);
+    } else {
+      writeAtomic(join(root, "state", "firstmate.json"), body);
+    }
+    break;
+  }
+  case "claimed": {
+    const id = (rest[0] ? projectClaimedId(root, rest[0]) : null) ?? claimedId(root);
+    if (id) console.log(id);
     break;
   }
   case "lavish-cfg": {

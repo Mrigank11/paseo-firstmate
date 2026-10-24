@@ -135,7 +135,7 @@ jq '.lastRender=(now-45|todate) | .banner="First mate unreachable, 1 comment que
 st="$("$P" status)"
 grep -q "^PROJECT" <<<"$st" && ok "status has a header" || bad "status has a header"
 for col in LISTENER BANNER RENDERED "PLUGIN ROOT" UNDELIVERED; do grep -q "$col" <<<"$st" && ok "status column $col" || bad "status column $col" "$st"; done
-grep -E "^demo +open +ok +First mate unreachable, 1 comment queued +[0-9]+s ago +$T/root +1 +- +running +http://fake.test:4390/session/abc123" <<<"$st" >/dev/null && ok "status row: session, listener, banner, age, root, undelivered, plugin, url" || bad "status row" "$st"
+grep -E "^demo +[^ ]+ +open +ok +First mate unreachable, 1 comment queued +[0-9]+s ago +$T/root +1 +- +running +http://fake.test:4390/session/abc123" <<<"$st" >/dev/null && ok "status row: session, listener, banner, age, root, undelivered, plugin, url" || bad "status row" "$st"
 grep -q "^other" <<<"$st" && ok "status lists every project" || bad "status lists every project"
 eq "$("$P" status demo | wc -l)" 2 "status <project> shows one row"
 jq '.pluginRoot="/somewhere/else"' "$PROJ/page.json" >"$PROJ/p.tmp" && mv "$PROJ/p.tmp" "$PROJ/page.json"
@@ -189,7 +189,8 @@ rm -f "$FAKE_LS"
 # ---- start claims first ----
 rm -f "$T/root/state/firstmate.json"
 PASEO_AGENT_ID=agent-fm-9 go claimdemo >/dev/null
-eq "$(jq -r .agentId "$T/root/state/firstmate.json")" agent-fm-9 "start claims first"
+eq "$(jq -r .agentId "$T/root/state/projects/claimdemo/claim.json")" agent-fm-9 "start claims the new page first"
+[[ ! -e "$T/root/state/firstmate.json" ]] && ok "...and leaves the checkout-wide claim alone" || bad "start wrote the checkout-wide claim"
 rm -f "$T/root/state/firstmate.json"
 PASEO_AGENT_ID= go refused >/dev/null 2>&1 && bad "start without PASEO_AGENT_ID refused" || ok "start without PASEO_AGENT_ID refused"
 [[ ! -d "$T/root/state/projects/refused" ]] && ok "...before scaffolding anything" || bad "refused start scaffolded"
@@ -215,21 +216,38 @@ rm -f "$T/root/state/firstmate.json"
 PASEO_AGENT_ID=crew-9 go claimcrew >/dev/null 2>&1 && bad "start by a crew agent with no live claim is refused" || ok "start by a crew agent with no live claim is refused"
 rm -f "$T/root/state/fleet-archive.jsonl"
 
-# ---- start does not steal a live claim ----
+# ---- per-project claims ----
+# the checkout-wide claim (agent-fm-1) is the fallback for every page without a claim of its own
 echo '{"agentId":"agent-fm-1","claimedAt":"2026-10-21T00:00:00Z"}' >"$T/root/state/firstmate.json"
+CK="$T/root/state/firstmate.json"
 sim_plugin stealdemo ok "$T/root" null
 msg="$(PASEO_AGENT_ID=agent-fm-2 "$P" start stealdemo 2>&1 >"$T/vout")"; rc=$?; end_sim
-eq "$rc" 0 "start by a second session still opens the page"
-eq "$(jq -r .agentId "$T/root/state/firstmate.json")" agent-fm-1 "...but does NOT steal the claim from a live first mate"
-grep -q "warning: agent agent-fm-1 is the live first mate of this checkout; start did NOT take over the claim" <<<"$msg" && ok "...and warns, naming the holder" || bad "start warns about the holder" "$msg"
-PASEO_AGENT_ID=agent-fm-2 "$P" claim >/dev/null 2>&1
-eq "$(jq -r .agentId "$T/root/state/firstmate.json")" agent-fm-2 "an explicit bin/page claim does take over"
-FAKE_UNKNOWN_AGENTS=agent-fm-2 sim_plugin stealdemo ok "$T/root" null
-FAKE_UNKNOWN_AGENTS=agent-fm-2 PASEO_AGENT_ID=agent-fm-3 "$P" start stealdemo >/dev/null 2>&1; end_sim
-eq "$(jq -r .agentId "$T/root/state/firstmate.json")" agent-fm-3 "start claims when the held claim is not a live agent any more"
-sim_plugin stealdemo ok "$T/root" null
-PASEO_AGENT_ID=agent-fm-3 "$P" start stealdemo >/dev/null 2>&1; end_sim
-eq "$(jq -r .agentId "$T/root/state/firstmate.json")" agent-fm-3 "start by the claim holder keeps the claim"
+eq "$rc" 0 "start by a second session on a NEW page works while another first mate holds the checkout claim"
+eq "$(jq -r .agentId "$T/root/state/projects/stealdemo/claim.json")" agent-fm-2 "...the new page is claimed by the caller"
+eq "$(jq -r .agentId "$CK")" agent-fm-1 "...and the other first mate's checkout-wide claim is untouched"
+"$P" scaffold fallbackdemo >/dev/null
+sim_plugin fallbackdemo ok "$T/root" null
+msg="$(PASEO_AGENT_ID=agent-fm-2 "$P" start fallbackdemo 2>&1 >"$T/vout")"; rc=$?; end_sim
+eq "$rc" 0 "start on an existing page held by the checkout-wide first mate still opens it"
+[[ ! -e "$T/root/state/projects/fallbackdemo/claim.json" ]] && ok "...but does NOT steal the page from the live checkout-wide first mate" || bad "start stole the fallback page"
+grep -q "warning: agent agent-fm-1 is the live first mate of fallbackdemo; start did NOT take over the claim" <<<"$msg" && ok "...and warns, naming the holder" || bad "start warns about the holder" "$msg"
+: >"$FAKE_LOG"
+PASEO_AGENT_ID=agent-fm-2 "$P" claim fallbackdemo >/dev/null 2>&1
+eq "$(jq -r .agentId "$T/root/state/projects/fallbackdemo/claim.json")" agent-fm-2 "an explicit bin/page claim <project> does take over that page"
+eq "$(jq -r .agentId "$CK")" agent-fm-1 "...and only that page: the checkout-wide claim stays"
+grep -q "agent update" "$FAKE_LOG" && bad "a page claim labels and demotes nobody" || ok "a page claim labels and demotes nobody"
+eq "$("$P" status | awk '$1=="fallbackdemo"{print $2}')" agent-fm-2 "status shows the page's own claimant"
+PASEO_AGENT_ID=agent-fm-2 "$P" claim nosuchpage >/dev/null 2>&1 && bad "claim <unknown project> refused" || ok "claim <unknown project> refused"
+PASEO_AGENT_ID=crew-9 "$P" claim fallbackdemo >/dev/null 2>&1 && bad "crew cannot claim a page" || ok "crew cannot claim a page (or the checkout)"
+eq "$(jq -r .agentId "$T/root/state/projects/fallbackdemo/claim.json")" agent-fm-2 "...and the page claim is untouched"
+FAKE_UNKNOWN_AGENTS=agent-fm-2 sim_plugin fallbackdemo ok "$T/root" null
+FAKE_UNKNOWN_AGENTS=agent-fm-2 PASEO_AGENT_ID=agent-fm-3 "$P" start fallbackdemo >/dev/null 2>&1; end_sim
+eq "$(jq -r .agentId "$T/root/state/projects/fallbackdemo/claim.json")" agent-fm-3 "start claims a page when its claimant is not a live agent any more"
+sim_plugin fallbackdemo ok "$T/root" null
+PASEO_AGENT_ID=agent-fm-3 "$P" start fallbackdemo >/dev/null 2>&1; end_sim
+eq "$(jq -r .agentId "$T/root/state/projects/fallbackdemo/claim.json")" agent-fm-3 "start by the page's claimant keeps the claim"
+rm -f "$T/root/state/projects/fallbackdemo/claim.json" "$T/root/state/projects/stealdemo/claim.json"
+eq "$("$P" status | awk '$1=="stealdemo"{print $2" "$3}')" "agent-fm-1 (checkout)" "status marks a page that falls back to the checkout claim"
 cp "$T/fleet.keep" "$T/root/state/fleet.json" 2>/dev/null || rm -f "$T/root/state/fleet.json"
 PASEO_AGENT_ID=agent-fm-1 "$P" claim >/dev/null 2>&1
 

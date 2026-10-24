@@ -10,7 +10,8 @@ One file used to do two jobs — lookup index and narrative journal — and grew
 state/
   fleet.json            # LIVE tasks only (small index)
   fleet-archive.jsonl   # one compact line per finished, ask-free task
-  firstmate.json        # {"agentId","claimedAt"}: THE first mate of this checkout, written by bin/page claim
+  firstmate.json        # {"agentId","claimedAt"}: the checkout-wide first mate (fallback for pages with no claim.json), written by plain bin/page claim
+  # projects/<project>/claim.json  {"agentId","claimedAt"}: that page's own first mate, written by bin/page claim <project> / start
   decisions.md          # captain prefs, routing lanes, permission + merge policy
   secondmates.md        # phase 3: roster of subordinate first mates (only if any)
   afk-log.md            # phase 3: running log while the captain is AFK (only if any)

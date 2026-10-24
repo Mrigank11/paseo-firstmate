@@ -5,13 +5,17 @@
 #                                     (npm ci --omit=dev, or npm install --omit=dev without a lockfile; --dev installs the
 #                                     dev dependencies too, for typechecking), write its settings (firstmateRoot = this
 #                                     checkout), install or reload it in Paseo
-#   bin/page claim                    record the CALLING agent ($PASEO_AGENT_ID) as THE first mate of this checkout
-#                                     (state/firstmate.json); the plugin delivers page comments to it. Run it from
-#                                     the first mate's own session. Refused for a crew agent (one fleet.json or its archive
-#                                     lists). Also labels the agent and demotes older labels
+#   bin/page claim <project>          record the CALLING agent ($PASEO_AGENT_ID) as the first mate of THAT page
+#                                     (state/projects/<project>/claim.json); the plugin delivers that page's comments to it and
+#                                     to nobody else, so two first-mate sessions can each run their own pages. Run it from the
+#                                     first mate's own session. Refused for a crew agent (one fleet.json or its archive lists).
+#                                     Does not label or demote anyone
+#   bin/page claim                    the checkout-wide claim (state/firstmate.json): the first mate of every page that has no
+#                                     claim of its own. Same refusals; also labels the agent and demotes older labels
 #   bin/page start <project> [--repo <path>] [--title "<t>"] [--page <abs path>] [--reopen]
-#                                     claim (only when no live agent holds the claim: it warns and does NOT steal it from
-#                                     another live first mate; use bin/page claim for that), scaffold (if new), render once, open in Lavish, record the URL, then
+#                                     claim the page for the caller (a NEW page with no live claim of its own; an existing page
+#                                     held by another live first mate, its own or the checkout-wide one, is warned about and NOT
+#                                     stolen: use bin/page claim <project> for that), scaffold (if new), render once, open in Lavish, record the URL, then
 #                                     VERIFY the plugin is polling this page (exit 3 with the reason if not).
 #                                     Idempotent. Prints {"project","page","url"}. Exit 2 when the captain ended the
 #                                     session and --reopen was not given
@@ -95,8 +99,14 @@ crew_task_of() {
   printf '%s' "$t"
 }
 
-# The agent state/firstmate.json names ("" when none).
-claimed_agent() { jq -r '.agentId // empty' "$ROOT/state/firstmate.json" 2>/dev/null || true; }
+# The agent that holds <project> ("" when none): its own state/projects/<project>/claim.json, else the checkout-wide
+# state/firstmate.json fallback. Without a project, only the checkout-wide claim.
+claimed_agent() { # [project]
+  local id=""
+  [[ -z "${1:-}" ]] || id="$(jq -r '.agentId // empty' "$ROOT/state/projects/$1/claim.json" 2>/dev/null || true)"
+  [[ -n "$id" ]] || id="$(jq -r '.agentId // empty' "$ROOT/state/firstmate.json" 2>/dev/null || true)"
+  printf '%s' "$id"
+}
 
 # Is $1 an agent that lives on this daemon and is not archived?
 agent_live() {
@@ -106,7 +116,9 @@ agent_live() {
   ! jq -e '(.Archived // .archived // false) == true or ((.ArchivedAt // .archivedAt // "") != "")' <<<"$meta" >/dev/null 2>&1
 }
 
-cmd_claim() {
+cmd_claim() { # [project]
+  local project="${1:-}"
+  [[ -z "$project" || "$project" =~ ^[a-z0-9][a-z0-9-]*$ ]] || die "bad project '$project' (lowercase letters, digits, dashes)"
   local id="${PASEO_AGENT_ID:-}"
   [[ -n "$id" ]] || die "PASEO_AGENT_ID is empty: run bin/page claim from inside the first mate's own Paseo session (a plain shell cannot say which agent it is)"
   # Crew never become the first mate: an agent that fleet.json (or its archive) lists as the agent of a task is crew.
@@ -123,8 +135,13 @@ cmd_claim() {
     die "agent $id is archived: run bin/page claim from a live first-mate session"
   fi
   mkdir -p "$ROOT/state"
+  if [[ -n "$project" ]]; then
+    "${TOOL[@]}" claim "$ROOT" "$id" "$project"
+    echo "claimed: agent $id is the first mate of the $project page of $ROOT_REAL"
+    return 0  # a page claim never labels or demotes: the label belongs to the checkout-wide fallback
+  fi
   "${TOOL[@]}" claim "$ROOT" "$id"
-  echo "claimed: agent $id is the first mate of $ROOT_REAL"
+  echo "claimed: agent $id is the first mate of $ROOT_REAL (every page without a claim of its own)"
   # Best effort: label it, and demote every other agent still carrying the label. The CLI can add or set a label but
   # not delete one, so a demoted agent gets <key>=superseded; the plugin never relies on the label while a claim exists.
   command -v paseo >/dev/null 2>&1 || { echo "claim: paseo not found; skipped labelling (the claim itself is enough)"; return 0; }
@@ -200,9 +217,10 @@ cmd_install() {
   cat <<EOM
 install: $PLUGIN_ID is running.
 Next:
-  1. In the first mate's own session:  bin/page claim
-  2. Per project:                      bin/page start <project> --repo <path> --title "<title>"
-  3. Check at any time:                bin/page status
+  1. Per project, in the first mate's own session:  bin/page start <project> --repo <path> --title "<title>"
+     (it claims a new page for you; bin/page claim <project> takes an existing one;
+      bin/page claim alone sets the checkout-wide fallback for pages with no claim of their own)
+  2. Check at any time:                bin/page status
 EOM
 }
 
@@ -263,14 +281,19 @@ cmd_start() {
     echo "page: the captain ended this page's session; pass --reopen only if the captain asked" >&2
     exit 2
   fi
-  # Claim only when nobody live holds the claim: a second session running `start` must not steal it from the real first mate.
-  local held; held="$(claimed_agent)"
+  # Claim the page only when nobody live holds it: a second session running `start` must not steal it from the real first
+  # mate. A page that already exists and has no claim of its own is held by the checkout-wide first mate (the fallback);
+  # a brand-new page is nobody's yet, so the caller takes it.
+  local own="" held="" fresh=0
+  [[ -f "$ROOT/state/projects/$project/project.json" ]] || fresh=1
+  own="$(jq -r '.agentId // empty' "$ROOT/state/projects/$project/claim.json" 2>/dev/null || true)"
+  if (( fresh )) && [[ -z "$own" ]]; then held=""; else held="$(claimed_agent "$project")"; fi
   if [[ -n "$held" && "$held" == "${PASEO_AGENT_ID:-}" ]]; then
     :  # already ours
   elif [[ -n "$held" ]] && agent_live "$held"; then
-    echo "page: warning: agent $held is the live first mate of this checkout; start did NOT take over the claim (run bin/page claim from the right session if that is what you want)" >&2
+    echo "page: warning: agent $held is the live first mate of $project; start did NOT take over the claim (run bin/page claim $project from the right session if that is what you want)" >&2
   else
-    cmd_claim >&2  # stdout stays the one JSON line
+    cmd_claim "$project" >&2  # stdout stays the one JSON line
   fi
   "${TOOL[@]}" scaffold "$ROOT" "$project" "${scaf[@]}"
   local page; page="$("${TOOL[@]}" page-path "$ROOT" "$project")"
@@ -410,7 +433,7 @@ cmd_render() {
 
 case "${1:-}" in
   install) shift; cmd_install "$@" ;;
-  claim) shift; cmd_claim ;;
+  claim) shift; [[ -z "${1:-}" ]] || need_project "$1"; cmd_claim "$@" ;;
   start) shift; cmd_start "$@" ;;
   reply) shift; cmd_reply "$@" ;;
   note) shift; cmd_note "$@" ;;

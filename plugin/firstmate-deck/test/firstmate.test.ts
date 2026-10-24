@@ -4,7 +4,7 @@ import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { CliPort } from "../server/paseo-cli.ts";
-import { NoFirstMateError, PortSelector, resolveFirstMate, sendToFirstMate } from "../server/paseo-port.ts";
+import { NoFirstMateError, PortSelector, projectClaimedId, resolveFirstMate, sendToFirstMate } from "../server/paseo-port.ts";
 
 // A checkout with optional claim, live fleet tasks and archive lines.
 function checkout(o: { claim?: string; crew?: string[]; archived?: string[] } = {}) {
@@ -77,4 +77,61 @@ test("sending with nobody to send to throws NoFirstMateError with the claim hint
   const f = fakeExec([], []);
   await assert.rejects(sendToFirstMate(new PortSelector(new CliPort(f.exec)), "firstmate=true", "hi", undefined, root), (e: Error) =>
     e instanceof NoFirstMateError && /No first mate claimed this checkout: run bin\/page claim in the first mate's session/.test(e.message));
+});
+
+// ---------- per-project claims ----------
+
+const claimPage = (root: string, project: string, agentId: string) => {
+  mkdirSync(join(root, "state", "projects", project), { recursive: true });
+  writeFileSync(join(root, "state", "projects", project, "claim.json"), JSON.stringify({ agentId, claimedAt: "2026-10-24T08:00:00Z" }));
+};
+const ALL = [{ id: "fm-lh", status: "idle" }, { id: "fm-self", status: "idle" }, { id: "fm-x", status: "idle" }];
+
+test("two projects, two owners: each page resolves to its own first mate, the checkout claim is the fallback", async () => {
+  const root = checkout({ claim: "fm-lh" }); // the legacy checkout-wide claim: longitudehealth's first mate
+  claimPage(root, "firstmate", "fm-self");
+  const port = new CliPort(fakeExec(ALL, []).exec);
+  assert.equal((await resolveFirstMate(port, "firstmate=true", root, undefined, "firstmate"))?.id, "fm-self");
+  assert.equal((await resolveFirstMate(port, "firstmate=true", root, undefined, "longitudehealth"))?.id, "fm-lh", "no claim of its own: the checkout claim");
+  assert.equal((await resolveFirstMate(port, "firstmate=true", root))?.id, "fm-lh", "no project: the checkout claim, as before");
+});
+
+test("migration: a checkout with only the old firstmate.json delivers every page to that agent", async () => {
+  const root = checkout({ claim: "fm-lh" });
+  mkdirSync(join(root, "state", "projects", "a"), { recursive: true });
+  const port = new CliPort(fakeExec(ALL, []).exec);
+  for (const p of ["a", "b", undefined]) assert.equal((await resolveFirstMate(port, "firstmate=true", root, undefined, p))?.id, "fm-lh");
+});
+
+test("a page claim whose agent is gone or archived falls through to the checkout claim, then the label", async () => {
+  const root = checkout({ claim: "fm-lh" });
+  claimPage(root, "p", "fm-gone");
+  assert.equal((await resolveFirstMate(new CliPort(fakeExec(ALL, []).exec), "firstmate=true", root, undefined, "p"))?.id, "fm-lh");
+  const root2 = checkout();
+  claimPage(root2, "p", "fm-gone");
+  assert.equal((await resolveFirstMate(new CliPort(fakeExec(ALL, ["fm-x"]).exec), "firstmate=true", root2, undefined, "p"))?.id, "fm-x");
+});
+
+test("a page claim held by a crew agent is ignored: the checkout claim serves the page", async () => {
+  const logs: string[] = [];
+  const root = checkout({ claim: "fm-lh", crew: ["fm-self"] });
+  claimPage(root, "p", "fm-self");
+  assert.equal((await resolveFirstMate(new CliPort(fakeExec(ALL, []).exec), "firstmate=true", root, (m) => logs.push(m), "p"))?.id, "fm-lh");
+  assert.ok(logs.some((l) => /ignoring the first-mate claim on fm-self/.test(l)));
+});
+
+test("sendToFirstMate delivers to the page's own first mate and never to the other page's", async () => {
+  const root = checkout({ claim: "fm-lh" });
+  claimPage(root, "firstmate", "fm-self");
+  const sent: string[] = [];
+  const ports = { current: () => new CliPort(fakeExec(ALL, []).exec), send: async (id: string) => { sent.push(id); } } as unknown as PortSelector;
+  assert.equal(await sendToFirstMate(ports, "firstmate=true", "hi", undefined, root, undefined, "firstmate"), "fm-self");
+  assert.equal(await sendToFirstMate(ports, "firstmate=true", "hi", undefined, root, undefined, "longitudehealth"), "fm-lh");
+  assert.deepEqual(sent, ["fm-self", "fm-lh"]);
+});
+
+test("a project name cannot walk out of state/projects", async () => {
+  const root = checkout();
+  assert.equal(projectClaimedId(root, "../.."), null);
+  assert.equal(projectClaimedId(root, "a/b"), null);
 });

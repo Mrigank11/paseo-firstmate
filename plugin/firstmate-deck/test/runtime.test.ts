@@ -667,3 +667,26 @@ test("cold start end to end: comment goes out through the CLI, the handle arrive
   assert.equal(r.rows[0].agentId, "fm-1");
   r.deck.stop();
 });
+
+test("per-project claims: a comment on each page reaches only that page's first mate", async () => {
+  const r = rig(FLEET);
+  // a second page, owned by its own first mate; "demo" falls back to the checkout-wide claim
+  const other = join(r.root, "state", "projects", "other");
+  mkdirSync(join(other, "sections"), { recursive: true });
+  writeFileSync(join(other, "project.json"), JSON.stringify({ title: "Other", sections: [] }));
+  writeFileSync(join(other, "claim.json"), JSON.stringify({ agentId: "fm-other", claimedAt: "2026-10-24T08:00:00Z" }));
+  writeFileSync(join(r.root, "state", "firstmate.json"), JSON.stringify({ agentId: "fm-1", claimedAt: "2026-10-21T08:00:00Z" }));
+  r.fw.add({ id: "fm-other", status: "idle" });
+  await r.deck.configure();
+  r.deck.ingest("demo", [{ prompt: "on demo", selector: "#t-t1" }]);
+  r.deck.ingest("other", [{ prompt: "on other", selector: "main" }]);
+  await until(() => r.fw.sent.length === 2);
+  const to = (id: string) => r.fw.sent.filter((s) => s.id === id).map((s) => s.text).join("\n");
+  assert.match(to("fm-1"), /on demo/);
+  assert.doesNotMatch(to("fm-1"), /on other/);
+  assert.match(to("fm-other"), /on other/);
+  assert.doesNotMatch(to("fm-other"), /on demo/);
+  assert.equal((await r.deck.summary("other")).firstmateAgentId, "fm-other");
+  assert.equal((await r.deck.summary("demo")).firstmateAgentId, "fm-1");
+  r.deck.stop();
+});

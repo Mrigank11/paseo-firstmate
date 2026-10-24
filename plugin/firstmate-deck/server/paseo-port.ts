@@ -10,6 +10,7 @@ import type { PluginHandlerContext } from "@getpaseo/plugin/server";
 type PaseoApi = PluginHandlerContext["paseo"];
 type PaseoAgentHandle = ReturnType<PaseoApi["agents"]["ref"]>;
 import { COMMENT_ROW_KIND, COMMENT_ROW_VERSION } from "../shared/contract.ts";
+import { claimedId, projectClaimedId } from "./claims.ts";
 import { human } from "./humanize.ts";
 import type { AgentView } from "./render.ts";
 
@@ -259,11 +260,12 @@ export class PortSelector {
 
 // ---------- the first mate ----------
 
+export { claimedId, projectClaimedId };
 export type FirstMate = { id: string; status: string };
 
 export const NO_CLAIM_MESSAGE = "No first mate claimed this checkout: run bin/page claim in the first mate's session";
 
-/** Thrown when there is nobody to deliver to: no claim and no usable label. The banner says how to fix it. */
+/** Thrown when there is nobody to deliver to: no project claim, no checkout claim and no usable label. The banner says how to fix it. */
 export class NoFirstMateError extends Error {
   constructor() { super(NO_CLAIM_MESSAGE); this.name = "NoFirstMateError"; }
 }
@@ -286,35 +288,28 @@ export function crewAgentIds(root: string): Set<string> {
 
 const warnedCrewClaims = new Set<string>();
 
-/** The agent id `bin/page claim` recorded in state/firstmate.json, if any. */
-export function claimedId(root: string): string | null {
-  try {
-    const id = JSON.parse(readFileSync(join(root, "state", "firstmate.json"), "utf8"))?.agentId;
-    return typeof id === "string" && id ? id : null;
-  } catch {
-    return null;
-  }
-}
-
 /**
- * The first mate, decided by explicit facts only (no guessing from working directories):
- *   1. the agent `bin/page claim` recorded in state/firstmate.json, if it still exists, is not archived and is not
- *      listed as crew (a claim held by a crew agent is ignored, with a log line);
- *   2. else the newest live agent carrying the first-mate label, EXCLUDING every agent id fleet.json or the
- *      archive lists as crew;
- *   3. else null.
- * Never writes a label. Re-resolved on every use.
+ * The first mate of `project`, decided by explicit facts only (no guessing from working directories). The first usable of:
+ *   1. the agent `bin/page claim <project>` recorded in that project's claim.json;
+ *   2. the checkout-wide agent `bin/page claim` recorded in state/firstmate.json (the fallback for a project with no
+ *      claim of its own, and where a checkout from before per-project claims keeps working);
+ *   3. the newest live agent carrying the first-mate label, EXCLUDING every agent id fleet.json or the archive lists as crew.
+ * A claim is usable when its agent still exists, is not archived and is not listed as crew (a claim held by a crew agent
+ * is ignored, with a log line). Without `project`, only 2 and 3 apply. Never writes a label. Re-resolved on every use.
  */
-export async function resolveFirstMate(port: PaseoPort, label: string, root?: string, log?: (msg: string) => void): Promise<FirstMate | null> {
-  let claim = root ? claimedId(root) : null;
+export async function resolveFirstMate(port: PaseoPort, label: string, root?: string, log?: (msg: string) => void, project?: string): Promise<FirstMate | null> {
   const crew = root ? crewAgentIds(root) : new Set<string>();
-  if (claim && crew.has(claim)) {
-    // A claim held by an agent that fleet.json (or the archive) lists as crew is wrong: crew never become the first mate.
-    if (!warnedCrewClaims.has(claim)) { warnedCrewClaims.add(claim); log?.(`ignoring the first-mate claim on ${claim}: fleet.json lists it as crew`); }
-    claim = null;
-  }
-  if (claim) {
-    const hit = (await port.listAgents()).find((a) => a.id === claim && !a.archived); // archived agents are not live
+  const claims = root ? [project ? projectClaimedId(root, project) : null, claimedId(root)] : [];
+  let agents: Awaited<ReturnType<PaseoPort["listAgents"]>> | null = null;
+  for (const claim of claims) {
+    if (!claim) continue;
+    if (crew.has(claim)) {
+      // A claim held by an agent that fleet.json (or the archive) lists as crew is wrong: crew never become the first mate.
+      if (!warnedCrewClaims.has(claim)) { warnedCrewClaims.add(claim); log?.(`ignoring the first-mate claim on ${claim}: fleet.json lists it as crew`); }
+      continue;
+    }
+    agents ??= await port.listAgents();
+    const hit = agents.find((a) => a.id === claim && !a.archived); // archived agents are not live
     if (hit) return { id: hit.id, status: hit.status };
   }
   const list = (await port.listAgents({ label })).filter((a) => !crew.has(a.id));
@@ -330,7 +325,7 @@ export async function resolveFirstMate(port: PaseoPort, label: string, root?: st
  * `early` is a first-mate lookup started a moment ago (while the batch window was open); if sending to it
  * fails, the first mate is resolved afresh and the send retried once.
  */
-export async function sendToFirstMate(ports: PortSelector, label: string, message: string, early?: Promise<FirstMate | null>, root?: string, log?: (msg: string) => void): Promise<string> {
+export async function sendToFirstMate(ports: PortSelector, label: string, message: string, early?: Promise<FirstMate | null>, root?: string, log?: (msg: string) => void, project?: string): Promise<string> {
   let fm: FirstMate | null = null;
   if (early) { try { fm = await early; } catch {} }
   if (fm) {
@@ -339,7 +334,7 @@ export async function sendToFirstMate(ports: PortSelector, label: string, messag
       return fm.id;
     } catch {}
   }
-  fm = await resolveFirstMate(ports.current(), label, root, log);
+  fm = await resolveFirstMate(ports.current(), label, root, log, project);
   if (!fm) throw new NoFirstMateError();
   await ports.send(fm.id, message);
   return fm.id;

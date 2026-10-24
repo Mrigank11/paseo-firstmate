@@ -92,7 +92,7 @@ export class Deck {
   /** Last state the poll of each project reported, and why (for the banner and page.json). */
   private listener = new Map<string, { state: string; detail: string }>();
   /** The last send failed because nobody is claimed/labelled as first mate (banner text differs). */
-  private noClaim = false;
+  private noClaim = new Set<string>();
   private rootProblem: string | null = null;
   private memo: { project: string; at: number; model: ProjectModel | null } | null = null;
   /** The last model of each project that loaded cleanly: shown while a state file is unreadable. */
@@ -114,14 +114,15 @@ export class Deck {
   private failing = new Map<string, number>();
   private webBase = "";
   private lavishBin: string | null = null;
-  private fmCache: { at: number; id: string | null } | null = null;
+  private fmCache = new Map<string, { at: number; id: string | null }>();
   private stopped = false;
   /** Projects whose page `bin/page stop` has stopped: no poll, no render, until `bin/page start`. */
   private haltedPages = new Set<string>();
   private marks: MarksServer;
   private marksKey = "";
   private tailnetIp = "";
-  private early: { at: number; p: Promise<FirstMate | null> } | null = null;
+  /** Per project: a first-mate lookup started while the batch window is open (two pages must not share one). */
+  private early = new Map<string, { at: number; p: Promise<FirstMate | null> }>();
 
   private o: DeckOpts;
 
@@ -134,15 +135,16 @@ export class Deck {
     // the first handle: everything on the pages was last-known until now, so ask about it all
     this.ports.onFirstHandle = () => this.scheduleAll("handle", 0);
     this.relay = new Relay({
-      send: async (_p, msg) => {
-        const early = this.early && Date.now() - this.early.at < 10_000 ? this.early.p : undefined;
-        this.early = null;
+      send: async (project, msg) => {
+        const e = this.early.get(project);
+        const early = e && Date.now() - e.at < 10_000 ? e.p : undefined;
+        this.early.delete(project);
         try {
-          const id = await sendToFirstMate(this.ports, this.cfg.firstmateLabel, msg, early, this.cfg.root, (m) => this.log(m));
-          this.noClaim = false;
+          const id = await sendToFirstMate(this.ports, this.cfg.firstmateLabel, msg, early, this.cfg.root, (m) => this.log(m), project);
+          this.noClaim.delete(project);
           return id;
         } catch (e) {
-          this.noClaim = e instanceof NoFirstMateError;
+          if (e instanceof NoFirstMateError) this.noClaim.add(project); else this.noClaim.delete(project);
           throw e;
         }
       },
@@ -337,7 +339,7 @@ export class Deck {
   private onFsEvent(rel: string | null): void {
     if (this.stopped) return;
     if (rel === null) return this.scheduleAll("fs", DEBOUNCE_MS);
-    if (rel === "firstmate.json") { this.fmCache = null; return; } // bin/page claim: the next send resolves afresh
+    if (rel === "firstmate.json" || /^projects\/[^/]+\/claim\.json$/.test(rel)) { this.fmCache.clear(); return; } // bin/page claim: the next send resolves afresh
     if (rel.endsWith("/inbox.jsonl")) {
       // comment state moved (our own append/mark, or `bin/page reply`): show it at once
       const ip = /^projects\/([^/]+)\//.exec(rel);
@@ -393,7 +395,7 @@ export class Deck {
     const n = this.failing.get(project) ?? 0;
     if (n > 0) {
       const q = `${n} comment${n === 1 ? "" : "s"} queued`;
-      return { kind: "unreachable", text: this.noClaim ? `${NO_CLAIM_MESSAGE} (${q})` : `First mate unreachable, ${q}` };
+      return { kind: "unreachable", text: this.noClaim.has(project) ? `${NO_CLAIM_MESSAGE} (${q})` : `First mate unreachable, ${q}` };
     }
     const bad = this.loadErrors.get(project);
     if (bad) {
@@ -661,8 +663,9 @@ export class Deck {
     late.unref?.();
     this.late.add(late);
     // Look the first mate up now, while the batch window is open, so the send itself is one CLI call.
-    this.early = { at: Date.now(), p: resolveFirstMate(this.ports.current(), this.cfg.firstmateLabel, this.cfg.root, (m) => this.log(m)) };
-    this.early.p.catch(() => {});
+    const early = { at: Date.now(), p: resolveFirstMate(this.ports.current(), this.cfg.firstmateLabel, this.cfg.root, (m) => this.log(m), project) };
+    early.p.catch(() => {});
+    this.early.set(project, early);
     this.relay.enqueue(project, entries);
   }
 
@@ -758,16 +761,18 @@ export class Deck {
 
   // ---------- summary RPC ----------
 
-  private async firstMateId(): Promise<string | null> {
-    if (this.fmCache && Date.now() - this.fmCache.at < 10_000) return this.fmCache.id;
+  private async firstMateId(project?: string): Promise<string | null> {
+    const key = project ?? "";
+    const hit = this.fmCache.get(key);
+    if (hit && Date.now() - hit.at < 10_000) return hit.id;
     let id: string | null = null;
-    try { id = (await resolveFirstMate(this.ports.current(), this.cfg.firstmateLabel, this.cfg.root, (m) => this.log(m)))?.id ?? null; } catch {}
-    this.fmCache = { at: Date.now(), id };
+    try { id = (await resolveFirstMate(this.ports.current(), this.cfg.firstmateLabel, this.cfg.root, (m) => this.log(m), project))?.id ?? null; } catch {}
+    this.fmCache.set(key, { at: Date.now(), id });
     return id;
   }
 
   async summary(only?: string): Promise<{ projects: Summary[]; firstmateAgentId: string | null; problem: string | null }> {
-    const firstmateAgentId = this.cfg.root ? await this.firstMateId() : null;
+    const firstmateAgentId = this.cfg.root ? await this.firstMateId(only) : null;
     const out: Summary[] = [];
     for (const p of this.cfg.root ? this.projectNames() : []) {
       if (only && p !== only) continue;
