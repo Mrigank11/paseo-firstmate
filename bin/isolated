@@ -1,0 +1,145 @@
+#!/usr/bin/env bash
+# bin/isolated — a throwaway firstmate-v2 environment: its OWN Paseo daemon, plugins and state. Never touches ~/.paseo.
+#
+#   bin/isolated up [--no-canvas]   create the home and state on first use, start the daemon, install firstmate-deck from THIS
+#                                   checkout (and agent-canvas), seed the sample fleet and project page; idempotent, and re-run
+#                                   from another worktree it re-points the plugin there
+#   bin/isolated down               stop the daemon (state and home are kept)
+#   bin/isolated reset              down, wipe home + state, up
+#   bin/isolated status             daemon, plugins, ports, URLs, agents with their fm.* labels
+#   bin/isolated paseo <args...>    the paseo CLI against the isolated daemon (--home added for you)
+#   bin/isolated fleet|page <args>  bin/fleet / bin/page against the isolated state (FIRSTMATE_ROOT + PASEO_HOME set)
+#   bin/isolated env                print the variables to eval for a shell that talks only to the isolated environment
+#
+# Overrides: ISO_HOME (default ~/.paseo-fm-v2), ISO_ROOT (state, default ~/.paseo-fm-v2-root), ISO_PORT (6782),
+# ISO_CANVAS_PORT (6791), ISO_LAVISH_PORT (4411), ISO_MARKS_PORT (4412), ISO_HOST (tailnet IP), ISO_CANVAS_DIR (agent-canvas checkout).
+set -euo pipefail
+
+REPO="$(cd "$(dirname "$0")/.." && pwd)"
+ISO_HOME="${ISO_HOME:-$HOME/.paseo-fm-v2}"
+ISO_ROOT="${ISO_ROOT:-$HOME/.paseo-fm-v2-root}"
+ISO_PORT="${ISO_PORT:-6782}"
+ISO_CANVAS_PORT="${ISO_CANVAS_PORT:-6791}"
+ISO_LAVISH_PORT="${ISO_LAVISH_PORT:-4411}"
+ISO_MARKS_PORT="${ISO_MARKS_PORT:-4412}"
+ISO_HOST="${ISO_HOST:-100.101.33.17}"
+ISO_NAME="${ISO_NAME:-manjaro.tail2e75.ts.net}"
+ISO_CANVAS_DIR="${ISO_CANVAS_DIR:-/home/mrigank/projects/paseo-plugins/agent-canvas}"
+PROJECT="${ISO_PROJECT:-demo-app}"
+
+die() { echo "isolated: $*" >&2; exit 1; }
+# Hard guards: never the live home, never the live state, never another task's demo home.
+case "${ISO_HOME%/}" in "$HOME/.paseo"|"$HOME/.paseo-canvas-demo") die "refusing: $ISO_HOME is not an isolated home" ;; esac
+case "${ISO_PORT}" in 6767|6790) die "refusing: port $ISO_PORT belongs to the live setup" ;; esac
+[[ "$(cd "$ISO_ROOT" 2>/dev/null && pwd -P || echo "$ISO_ROOT")" != "/home/mrigank/projects/llm-exp/paseo-firstmate" ]] || die "refusing: ISO_ROOT is the main checkout"
+
+P() { paseo --home "$ISO_HOME" "$@"; }
+export_env() {
+  export PASEO_HOME="$ISO_HOME" FIRSTMATE_ROOT="$ISO_ROOT" FLEET_FILE="$ISO_ROOT/state/fleet.json" AGENT_CANVAS_PORT="$ISO_CANVAS_PORT"
+  export AGENT_CANVAS_PUBLIC_URL="http://$ISO_NAME:$ISO_CANVAS_PORT" AGENT_CANVAS_APP_URL="http://$ISO_NAME:$ISO_PORT"
+}
+
+write_config() {
+  mkdir -p "$ISO_HOME"
+  local cfg="$ISO_HOME/config.json"
+  [[ -f "$cfg" ]] && return 0
+  cat >"$cfg" <<JSON
+{
+  "version": 1,
+  "daemon": {
+    "listen": "$ISO_HOST:$ISO_PORT",
+    "hostnames": ["manjaro", "$ISO_NAME"],
+    "mcp": { "injectIntoAgents": true },
+    "cors": { "allowedOrigins": ["https://app.paseo.sh"] },
+    "relay": { "enabled": false }
+  },
+  "app": { "baseUrl": "https://app.paseo.sh" },
+  "pluginsEnabled": true,
+  "features": { "webUi": { "enabled": true } }
+}
+JSON
+}
+
+seed_state() {
+  local S="$ISO_ROOT/state"
+  mkdir -p "$S"
+  printf 'LAVISH_AXI_PORT=%s\nLAVISH_AXI_STATE_DIR=%s\n' "$ISO_LAVISH_PORT" "$ISO_ROOT/lavish" >"$S/page.env"
+  mkdir -p "$ISO_ROOT/lavish"
+  [[ -f "$S/fleet.json" ]] || echo '{"tasks":[]}' >"$S/fleet.json"
+  [[ -f "$S/decisions.md" ]] || cp "$REPO/state/decisions.example.md" "$S/decisions.md"
+  local F=("$REPO/bin/fleet") ; export_env
+  if ! "${F[@]}" get sample-audit >/dev/null 2>&1; then
+    "${F[@]}" add sample-audit intent="Audit the retry logic in the sync worker" shape=scout status=done project="$PROJECT" title="Audit sync retries" >/dev/null
+    "${F[@]}" card sample-audit --file <(printf '## Sample audit\n\nThe sync worker retries three times with no backoff. Recommend exponential backoff.\n') >/dev/null
+    "${F[@]}" add sample-queued intent="Add jittered backoff to the sync worker" shape=ship status=queued project="$PROJECT" title="Add backoff to sync" >/dev/null
+    "${F[@]}" add sample-ask intent="Pick the queue library" shape=scout status=needs-captain project="$PROJECT" title="Pick a queue library" >/dev/null
+    "${F[@]}" ask sample-ask "Which queue library should the sync worker use?" --options "BullMQ|pg-boss|Keep in-process" >/dev/null
+  fi
+}
+
+cmd_up() {
+  command -v paseo >/dev/null && command -v jq >/dev/null || die "paseo and jq are required"
+  local canvas=1; [[ "${1:-}" == --no-canvas ]] && canvas=0
+  export_env
+  write_config
+  mkdir -p "$ISO_ROOT/state"
+  if ! (ss -ltn 2>/dev/null | grep -q "$ISO_HOST:$ISO_PORT "); then
+    ss -ltn 2>/dev/null | grep -qE "[:.]$ISO_PORT " && die "port $ISO_PORT is taken by another process"
+    echo "isolated: starting daemon on $ISO_HOST:$ISO_PORT (home $ISO_HOME)"
+    P start >/dev/null
+  fi
+  seed_state
+  # The plugin must not share the live Lavish (4387, default) or read-marks (4398) ports: set its own in the plugin settings.
+  local ds="$ISO_HOME/plugin-settings/firstmate-deck/deck.json"; mkdir -p "$(dirname "$ds")"
+  [[ -s "$ds" ]] || echo '{"version":1,"values":{}}' >"$ds"
+  jq --argjson lp "$ISO_LAVISH_PORT" --arg ld "$ISO_ROOT/lavish" --argjson rp "$ISO_MARKS_PORT" '.values += {lavishPort:$lp, lavishStateDir:$ld, readMarksPort:$rp}' "$ds" >"$ds.tmp" && mv "$ds.tmp" "$ds"
+  "$REPO/bin/page" install >/dev/null || die "bin/page install failed (see: bin/isolated paseo plugin logs firstmate-deck)"
+  if ((canvas)); then
+    if [[ -d "$ISO_CANVAS_DIR" ]]; then
+      P plugin ls --json | jq -e 'any(.[]; .id == "agent-canvas")' >/dev/null || P plugin install "$ISO_CANVAS_DIR" >/dev/null
+    else echo "isolated: $ISO_CANVAS_DIR not found; skipping agent-canvas" >&2; fi
+  fi
+  # The page needs a live first-mate agent ON THIS DAEMON to claim it (comments are delivered there): a tiny idle stand-in.
+  local fm; fm="$(cat "$ISO_ROOT/fm-agent" 2>/dev/null || true)"
+  if [[ -z "$fm" ]] || ! P inspect "$fm" --json >/dev/null 2>&1; then
+    fm="$(P run --no-wait --quiet --provider claude --model claude-sonnet-5-5 --mode bypassPermissions --title "First mate (isolated stand-in)" --cwd "$ISO_ROOT" "Reply with the single word ready, then stop. Do nothing else." | tail -1)"
+    echo "$fm" >"$ISO_ROOT/fm-agent"
+  fi
+  PASEO_AGENT_ID="$fm" "$REPO/bin/page" start "$PROJECT" --title "Demo app (isolated)" >/dev/null || echo "isolated: bin/page start reported a problem (bin/isolated page status)" >&2
+  cmd_status
+}
+
+cmd_down() { export_env; P daemon stop >/dev/null 2>&1 || true; echo "isolated: daemon stopped"; }
+
+cmd_reset() {
+  cmd_down || true
+  sleep 1
+  [[ -n "$ISO_HOME" && "$ISO_HOME" != / && "$ISO_ROOT" != / ]] || die "bad paths"
+  rm -rf "$ISO_HOME" "$ISO_ROOT"
+  cmd_up
+}
+
+cmd_status() {
+  export_env
+  echo "web UI:        http://$ISO_NAME:$ISO_PORT/   (also http://$ISO_HOST:$ISO_PORT/)"
+  echo "canvas view:   http://$ISO_NAME:$ISO_CANVAS_PORT/"
+  echo "home / state:  $ISO_HOME   $ISO_ROOT/state"
+  echo "plugin from:   $REPO/plugin/firstmate-deck"
+  P plugin ls 2>&1 | head -8 || true
+  local url; url="$(jq -r '.url // empty' "$ISO_ROOT/state/projects/$PROJECT/page.json" 2>/dev/null || true)"
+  [[ -n "$url" ]] && echo "project page:  $url"
+  P ls -g 2>/dev/null || true
+  echo "labels: bin/isolated paseo ls -g --label fm.task=<id>   (also fm.project=, fm.shape=)"
+}
+
+case "${1:-}" in
+  up) shift; cmd_up "$@" ;;
+  down) cmd_down ;;
+  reset) cmd_reset ;;
+  status) cmd_status ;;
+  paseo) shift; P "$@" ;;
+  fleet) shift; export_env; exec "$REPO/bin/fleet" "$@" ;;
+  page) shift; export_env; exec "$REPO/bin/page" "$@" ;;
+  env) export_env; echo "export PASEO_HOME=$ISO_HOME FIRSTMATE_ROOT=$ISO_ROOT FLEET_FILE=$ISO_ROOT/state/fleet.json" ;;
+  *) sed -n '2,15p' "$0"; exit 2 ;;
+esac

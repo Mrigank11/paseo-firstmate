@@ -54,9 +54,11 @@ Given a profile `{ "provider": "claude/opus", "modeId": "build", "thinkingOption
   "initialPrompt": "<brief>",
   "notifyOnFinish": true,
   "settings": { "modeId": "build", "thinkingOptionId": "think-hard", "features": { "auto_accept": true } },
-  "labels": { "task": "<id>", "shape": "ship" }
+  "labels": { "fm.task": "<id>", "fm.project": "<project>", "fm.shape": "ship", "task": "<id>", "shape": "ship" }
 }
 ```
+
+Stamp the labels on every `create_agent`: `fm.task` (the task id, the join key from an agent to its task), `fm.project` (the project page the task belongs to; omit it for a task with no project) and `fm.shape` (`scout` or `ship`). Keep the legacy `task` and `shape` labels alongside them (same values) until the migration retires them. Re-tasking an existing agent: `mcp__paseo__update_agent { labels: { "fm.task": "<new-id>" } }` (plus `fm.project` / `fm.shape` if they changed) before `send_agent_prompt`, so the label always names the agent's current task.
 
 Required fields on `mcp__paseo__create_agent` are `title`, `provider`, `initialPrompt`; `workspaceId` selects the workspace (below), `notifyOnFinish` stays true unless the captain says otherwise.
 

@@ -21,7 +21,7 @@ Call `mcp__paseo__get_agent_status` and `mcp__paseo__get_agent_activity` (pass `
 Relaunch only a dead or crashed member, never a healthy `running` one. Reuse the exact brief so the retry is comparable.
 
 1. Stop the old member with `mcp__paseo__cancel_agent`, falling back to `mcp__paseo__kill_agent` if cancel does not terminate it.
-2. Read the canonical brief at `state/tasks/<id>/brief.md` and spawn a replacement with `mcp__paseo__create_agent` in a fresh workspace matching the task's shape (a new `create_workspace` worktree for `ship`; no worktree for `scout`) — same instructions, no extra scope, no carried-over partial state.
+2. Read the canonical brief at `state/tasks/<id>/brief.md` and spawn a replacement with `mcp__paseo__create_agent` in a fresh workspace matching the task's shape (a new `create_workspace` worktree for `ship`; no worktree for `scout`) — same instructions, no extra scope, no carried-over partial state. Stamp the same labels as the original dispatch (`fm.task`, `fm.project`, `fm.shape`, plus the legacy `task` and `shape`; see `dispatch-routing` §3) so the replacement joins the same task.
 3. Update the task via `bin/fleet`: set the new `agentId`, reset status to `running`, set `lastEvent` to now (`bin/fleet set <id> agentId=… status=running lastEvent=…`), and append with `bin/fleet log <id> "…"` that this is attempt N (e.g. "attempt 2 relaunch after silent stall, old agent <id>").
 4. Increment the attempt counter (in the log line) so the cap in section 4 can be enforced.
 
