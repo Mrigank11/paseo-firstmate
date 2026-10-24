@@ -582,6 +582,23 @@ test("without a handle the CLI cannot see fm.task labels: no agent is claimed, n
   r.deck.stop();
 });
 
+test("after a reload (no SDK handle yet) the labelled agents come from the daemon's agent files: not Dispatching", async () => {
+  const r = rig(FLEET, { sdk: false });
+  const agentsDir = join(r.root, "daemon", "agents");
+  mkdirSync(join(agentsDir, "ab"), { recursive: true });
+  writeFileSync(join(agentsDir, "ab", "ag-1.json"), JSON.stringify({ id: "ag-1", labels: { "fm.task": "t1", "fm.project": "demo" }, createdAt: "2026-10-21T10:00:00Z", updatedAt: "2026-10-21T10:05:00Z" }));
+  const deck = new Deck({ exec: async (a: string[]) => (a[0] === "ls" ? JSON.stringify([{ id: "ag-1", status: "running" }]) : ""), ports: r.ports, batchMs: 30, agentsDir, readConfig: async () => ({ root: r.root, firstmateLabel: "firstmate=true" }) });
+  await deck.configure();
+  await deck.render("demo");
+  assert.notEqual(pill(r.live), "Dispatching");
+  assert.match(readFileSync(r.live, "utf8"), /Running/);
+  // a later SDK handle takes over without a flicker back to Dispatching
+  r.ports.capture({ paseo: fakePaseo(r.fw) }, "hook agent.turn_started");
+  await until(() => pill(r.live) === "running", 1500);
+  deck.stop();
+  r.deck.stop();
+});
+
 test("a failed SDK read keeps the last view but marks it stale", async () => {
   const r = rig(FLEET);
   await r.deck.configure();

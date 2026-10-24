@@ -7,6 +7,7 @@ import { normalizeRoot, type DeckConfig } from "./config.ts";
 import { hasLivePoll, killAllPolls, killStalePoll, lavishEnv, PagePoller, removePid, resolveLavishBin, spawnPoll, writePid } from "./lavish.ts";
 import { decodePoll } from "./toon.ts";
 import { AgentViews } from "./agent-views.ts";
+import { coldLabelled } from "./cold-agents.ts";
 import { CliPort, type Exec } from "./paseo-cli.ts";
 import { NO_CLAIM_MESSAGE, NoFirstMateError, PortSelector, resolveFirstMate, sendToFirstMate, type CommentRowData, type FirstMate, type PortAgent } from "./paseo-port.ts";
 import { Relay, newEntries, parseTarget, type AskLookup, type TargetInfo } from "./relay.ts";
@@ -32,6 +33,8 @@ export type DeckOpts = {
   /** Which API to use; defaults to the CLI until `capture()` hands it an SDK handle. */
   ports?: PortSelector;
   home?: string;
+  /** The daemon's agent files (`<home>/agents`): with no SDK handle yet (after a reload) the labelled agents are read from here, not shown as "Dispatching". */
+  agentsDir?: string;
   log?: (msg: string) => void;
   readConfig: () => Promise<DeckConfig>;
   batchMs?: number;
@@ -421,11 +424,11 @@ export class Deck {
    */
   private refreshLabeled(): Promise<boolean> {
     const sdk = this.ports.sdkPort();
-    if (!sdk) return Promise.resolve(false);
+    if (!sdk && !this.o.agentsDir) return Promise.resolve(false);
     if (this.labeledFlight && Date.now() - this.labeledFlight.at < 500) return this.labeledFlight.p;
     const p = (async () => {
       let list: PortAgent[];
-      try { list = await sdk.listAgents({ label: "fm.task", includeArchived: true }); }
+      try { list = sdk ? await sdk.listAgents({ label: "fm.task", includeArchived: true }) : await coldLabelled(this.o.agentsDir!, "fm.task", this.o.exec); }
       catch (e) { this.log(`listing agents by fm.task label failed: ${(e as Error).message}`); return false; }
       const by = new Map<string, PortAgent[]>();
       for (const a of list) { const t = a.labels["fm.task"]; if (t) by.set(t, [...(by.get(t) ?? []), a]); }
@@ -488,7 +491,7 @@ export class Deck {
         const model = this.load(project);
         if (!model) break;
         this.writePage(project, model);
-        if (!this.trackedAgents(project, model).length && !this.ports.hasHandle) continue;
+        if (!this.trackedAgents(project, model).length && !this.ports.hasHandle && !(this.o.agentsDir && model.tasks.length)) continue;
         await this.refreshLabeled(); // who is working on which task, straight from Paseo
         const ids2 = this.trackedAgents(project, this.load(project) ?? model);
         const sdk = this.ports.sdkPort();

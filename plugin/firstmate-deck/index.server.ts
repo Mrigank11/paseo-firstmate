@@ -3,6 +3,8 @@ import { deckSettings, summaryRpc } from "./shared/contract.ts";
 import { resolveConfig, type SettingsValues } from "./server/config.ts";
 import { CliPort, detectHome, makeExec } from "./server/paseo-cli.ts";
 import { PortSelector } from "./server/paseo-port.ts";
+import { homedir } from "node:os";
+import { join } from "node:path";
 import { Deck } from "./server/runtime.ts";
 
 const AGENT_EVENTS = [
@@ -29,6 +31,7 @@ export default function contribute(server: PluginServerContext) {
     exec,
     ports,
     home,
+    agentsDir: join(home ?? join(homedir(), ".paseo"), "agents"),
     log,
     readConfig: async () => {
       const st = await settings.read();
