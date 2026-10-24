@@ -46,11 +46,14 @@ export const DISPATCH_GRACE_MS = 10 * 60_000;
 
 const RUNNING = new Set(["running", "initializing"]);
 
-/** v1 registries carry a run `status`; map it to the v2 intent `state` (shim, deleted with the v1 registry in S3). */
-export function stateOf(raw: { state?: unknown; status?: unknown }): TaskState {
-  const s = typeof raw.state === "string" ? raw.state : typeof raw.status === "string" ? raw.status : "queued";
-  if (s === "dispatched" || s === "running" || s === "needs-captain") return "active";
-  return (["queued", "active", "parked", "blocked", "done", "failed"] as const).find((x) => x === s) ?? "queued";
+/** The registry's intent `state` (v2). Anything else reads as `queued`. */
+export function stateOf(raw: { state?: unknown }): TaskState {
+  return (["queued", "active", "parked", "blocked", "done", "failed"] as const).find((x) => x === raw.state) ?? "queued";
+}
+
+/** An archive line is history: its verdict is `outcome` (v2 lines), else `state`, else a v1 line's `status`. Done unless it says failed. */
+export function archiveStateOf(raw: { outcome?: unknown; state?: unknown; status?: unknown }): TaskState {
+  return raw.outcome === "failed" || raw.state === "failed" || raw.status === "failed" ? "failed" : "done";
 }
 
 const ms = (iso: string | null | undefined): number => Date.parse(iso ?? "") || 0;
@@ -122,22 +125,13 @@ export type LabeledAgent = {
   pendingPermissions?: number;
 };
 
-/** The agents of one task: the label-found ones; only when Paseo has none, the v1 `agentId` hint (its view stands in for the record). */
+/** The agents of one task: the ones Paseo knows by the `fm.task` label. No label, no agent. */
 export function stageAgentsFor(
-  task: { agentId?: string },
   labeled: readonly LabeledAgent[] | undefined,
-  view: (id: string) => { status: string; createdAt?: string; updatedAt?: string; final?: string } | undefined,
+  view: (id: string) => { final?: string } | undefined,
 ): StageAgent[] {
-  if (labeled?.length) {
-    return labeled.map((a) => ({
-      id: a.id, status: a.status, archived: a.archived, createdAt: a.createdAt, lastActivityAt: a.lastActivityAt ?? a.updatedAt,
-      pendingPermissions: a.pendingPermissions ?? 0, final: a.archived ? undefined : view(a.id)?.final,
-    }));
-  }
-  if (!task.agentId) return [];
-  const v = view(task.agentId);
-  return [{
-    id: task.agentId, status: v ? (v.status === "archived" ? "idle" : v.status) : "unknown", archived: v?.status === "archived",
-    createdAt: v?.createdAt, lastActivityAt: v?.updatedAt, pendingPermissions: 0, final: v?.final,
-  }];
+  return (labeled ?? []).map((a) => ({
+    id: a.id, status: a.status, archived: a.archived, createdAt: a.createdAt, lastActivityAt: a.lastActivityAt ?? a.updatedAt,
+    pendingPermissions: a.pendingPermissions ?? 0, final: a.archived ? undefined : view(a.id)?.final,
+  }));
 }

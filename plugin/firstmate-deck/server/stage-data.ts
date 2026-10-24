@@ -62,11 +62,6 @@ export type Row = { id: string; project: string | null; state: string; stage: st
 
 export function rowOf(t: Task, recs: Rec[], now: Date): Row {
   const mine = recs.filter((r) => r.task === t.id).map(toAgent);
-  // a v1 task whose agent carries no label yet: the recorded agentId stands in, as it does on the page
-  if (!mine.length && t.agentId) {
-    const hit = recs.find((r) => r.id === t.agentId);
-    mine.push(hit ? toAgent(hit) : { id: t.agentId, status: "unknown", archived: false, pendingPermissions: 0 });
-  }
   const s = computeStage(t, mine, now, { finalKnown: false });
   return { id: t.id, project: t.project ?? null, state: t.state, stage: s.stage, group: s.group, agentId: s.agentId, flags: s.flags, ...(s.stage === "Idle" ? { note: "final line unknown on CLI" } : {}) };
 }

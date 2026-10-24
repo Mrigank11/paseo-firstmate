@@ -1,29 +1,35 @@
 #!/usr/bin/env bash
 # bin/fleet — the ONLY writer of state/fleet.json.
 #
-# Every fleet write goes through this helper. It validates the status/shape
-# enums and the notes/ask length cap, then writes atomically (temp file +
+# Every fleet write goes through this helper. It validates the state/shape
+# enums and the ask length cap, then writes atomically (temp file +
 # rename) so a crash or truncated edit can never corrupt the file.
 # Reads (get, by-agent, active, asks) are plain jq and never mutate.
 #
+# fleet.json is v2: {"version": 2, "tasks": [...]}. A task holds the first mate's INTENT (`state`), never run state:
+# what the crew is doing comes from Paseo (agents labelled fm.task=<id>) and is computed (`bin/fleet stage`). A file
+# without "version": 2 is refused for writes ("run bin/migrate-fleet-v2"); reads still work. See docs/STATE.md.
+#
 #   bin/fleet get <id>                print one task entry (compact JSON)
-#   bin/fleet by-agent <agentId>      print the entry holding an agentId
+#   bin/fleet by-agent <agentId>      the entry of the task an agent works on: its fm.task label first, then the archive
+#                                     (agents/agentId lists). Prints nothing for an agent that is not crew
 #   bin/fleet stage <id>              the task's COMPUTED stage (JSON): {stage, group, agentId, flags}. Decided by the same
 #                                     function the page uses, from the task's intent + its asks + the Paseo agents carrying
 #                                     label fm.task=<id>; a flag with drift:true means the registry and Paseo disagree
 #   bin/fleet stages [--project <p>] [--table]   the same for every live task, in one pass
-#   bin/fleet active [--project <p>]  live entries: id, status, agentId (dispatched/running/needs-captain only)
-#   bin/fleet project <p>             every LIVE task of project <p>, any status (compact JSON, one per line)
+#   bin/fleet active [--project <p>]  live entries with state=active: id, state, since, project
+#   bin/fleet project <p>             every LIVE task of project <p>, any state (compact JSON, one per line)
 #   bin/fleet project <p> --archive [N]   last N (default 30) archive lines for project <p>
 #   bin/fleet asks                    every open ask across live tasks
-#   bin/fleet add <id> k=v ...        create a task (needs intent, shape, status)
+#   bin/fleet add <id> k=v ...        create a task (needs intent, shape, state); stamps since
 #   bin/fleet set <id> k=v ...        update scalar fields
-#   bin/fleet ask <id> "<text>" [--context-file <path>] [--options "A|B|C"]
+#   bin/fleet ask <id> "<text>" [--context-file <path>] [--options "A|B|C"] [--ref <json>]
 #                                     append {id, text, since} to asks. The id ("a1", "a2", ...) is stable: assigned
 #                                     here, never reused for that task, kept by reask/pending/answer. The file is copied
 #                                     to tasks/<id>/asks/<n>.md and linked as "context". --options
 #                                     (2-6 choices, each <=60 chars, "|" separated) stores
-#                                     options:[..]; the page shows them as buttons
+#                                     options:[..]; the page shows them as buttons. --ref (Phase 5) is
+#                                     {"kind":"canvas","agentId":"..","block":".."}: the ask lives in a canvas
 #   bin/fleet reask <id> <ask> ["<new text>"] [--context-file <path>] [--options "A|B|C"]
 #                                     reset ask n's "since" to now (back to Needs you on the page after
 #                                     the captain's follow-up was answered); optionally replace its text
@@ -35,24 +41,28 @@
 #   bin/fleet depend <id> <dep-id>... append to depends_on (de-duplicated; deps may be archived ids)
 #   bin/fleet undepend <id> <dep-id>  remove one id from depends_on
 #   bin/fleet answer <id> <ask>       resolve (remove) the ask, by stable id (a2) or by 1-based index
-#   bin/fleet preview <id> <port> <pid>   record a crew preview server
+#   bin/fleet preview <id> <port> <pid>   record a crew preview server (tasks/<id>/preview.json, not the registry)
 #   bin/fleet clear-preview <id>      drop the preview record (after killing it)
 #   bin/fleet log <id> "<text>"       append a timestamped line to tasks/<id>/log.md
-#   bin/fleet archive <id>            move a done/failed ask-free task to the archive
+#   bin/fleet archive <id>            move a done/failed ask-free task to the archive (the line adds agents:[ids], outcome)
 #   bin/fleet card <id> (--file <f>|-)  write tasks/<id>/card.md (the Markdown card the page shows) from a file or stdin; works for
 #                                     a live or an archived task; a no-op when the content is already there
 #   bin/fleet archive-update <id> k=v ...   append an updated copy of an ARCHIVED task (same keys as set, plus depends_on=a,b): the
 #                                     archive stays append-only and the newest line for an id wins. For tasks archived before
 #                                     they had a project/title
-#   bin/fleet finish <id> [--failed] [--card -|--card-file <f>] [--branch <b>] [--base main]
-#                                     a crew member is done: status=done (failed with --failed); writes tasks/<id>/card.md from
-#                                     the given card (stdin with -), else from notes + branch/PR when there is no card yet; for
+#   bin/fleet finish <id> [--failed] [--card -|--card-file <f>] [--branch <b>] [--base main] [--close-asks|--answer <ask>...]
+#                                     a crew member is done: state=done (failed with --failed); REFUSES while the task has open
+#                                     asks, unless the same command answers them (--close-asks answers all, --answer a1 one,
+#                                     repeatable): a finished task must not leave answered questions open. Records the task's
+#                                     agent ids (label fm.task) for the archive. Writes tasks/<id>/card.md from
+#                                     the given card (stdin with -), else from the intent + branch/PR when there is no card yet; for
 #                                     a project task whose branch is known and whose project.json has a repo, appends
 #                                     `git log --oneline <base>..<branch>` to projects/<p>/sections/code.md (dated, no duplicates)
 #
-# Statuses: queued, parked, blocked, dispatched, running, needs-captain, done, failed.
-# parked = the captain paused it; blocked = waiting on an outside dependency (not the captain, not crew) and REQUIRES
-# blocked_on="<what/who>" (<=200 chars). blocked_on is dropped when the status moves off blocked.
+# States: queued (planned), active (dispatched; Paseo says what is happening), parked (the captain paused it), blocked
+# (waiting on an outside dependency, not the captain, not crew; REQUIRES blocked_on="<what/who>", <=200 chars; dropped when
+# the state moves off blocked), done / failed (the first mate's verdict after harvest).
+# Run-state keys are refused with a pointer: status, agentId, workspaceId, lastEvent, notes, preview, provider.
 # Optional fields (add/set): project (kebab slug, empty = none), title (<=160 chars), order (integer: position on the
 # page within a group, lowest first; tasks without one keep file order), legacyId (kebab slug: the id the task had on a
 # hand-run page it was imported from). add also takes
@@ -70,12 +80,14 @@ STATE_DIR="$(dirname "$FLEET")"
 ARCHIVE="$STATE_DIR/fleet-archive.jsonl"
 TASKS="$STATE_DIR/tasks"
 
-STATUSES='["queued","parked","blocked","dispatched","running","needs-captain","done","failed"]'
+STATES='["queued","active","parked","blocked","done","failed"]'
 SHAPES='["scout","ship"]'
 MAXLEN=200
 TITLEMAX=160
 SLUG_RE='^[a-z0-9][a-z0-9-]*$'
-SETTABLE="intent shape provider agentId workspaceId status branch pr lastEvent notes project title order legacyId blocked_on"
+SETTABLE="intent shape state branch pr project title order legacyId blocked_on"
+# v1 run-state keys: Paseo's now (label fm.task), the log, the task folder, or computed. Named so the refusal can point at the new home.
+RUNSTATE_KEYS="status agentId workspaceId lastEvent notes preview provider"
 
 # jq: give every ask of a task a stable id ("a1", "a2", ...) and keep .askSeq (the highest number ever handed out) ahead
 # of all of them, so an id is never reused after its ask is answered. An existing ask without an id (written before ids
@@ -112,61 +124,77 @@ atomic_jq() { # jq-args... — run jq filter, validate result, rename over fleet
 
 check_entry() { # id — validate enum + length invariants on one entry
   local id="$1"
-  jq -e --arg id "$1" --argjson st "$STATUSES" --argjson sh "$SHAPES" --argjson max "$MAXLEN" \
+  jq -e --arg id "$1" --argjson st "$STATES" --argjson sh "$SHAPES" --argjson max "$MAXLEN" \
     --argjson tmax "$TITLEMAX" --arg re "$SLUG_RE" '
     (.tasks | map(select(.id == $id))[0]) as $t
-    | (((($t.status) as $s | $st | index($s)) != null)
+    | (((($t.state) as $s | $st | index($s)) != null)
       and ((($t.project // "") | length == 0) or (($t.project | type) == "string" and ($t.project | test($re))))
       and ((($t.title // "") | length) <= $tmax)
       and ((($t.shape // "scout") as $h | $sh | index($h)) != null)
-      and ((($t.notes // "") | length) <= $max)
       and ((($t.blocked_on // "") | length) <= $max)
-      and (($t.status != "blocked") or (($t.blocked_on // "") | length > 0))
+      and (($t.state != "blocked") or (($t.blocked_on // "") | length > 0))
       and (([$t.asks[]? .text | length] | all(. <= $max))))
-  ' "$FLEET" >/dev/null || die "entry $id violates schema (status/shape enum, project slug, title or 200-char cap)";
+  ' "$FLEET" >/dev/null || die "entry $id violates schema (state/shape enum, project slug, title or 200-char cap)";
 }
 
 # validate a fresh k=v object (from add/set) BEFORE touching the file
 check_obj() { # obj-json
-  jq -e --argjson st "$STATUSES" --argjson sh "$SHAPES" --argjson max "$MAXLEN" \
+  jq -e --argjson st "$STATES" --argjson sh "$SHAPES" --argjson max "$MAXLEN" \
     --argjson tmax "$TITLEMAX" --arg re "$SLUG_RE" -n --argjson o "$1" '
-    (((($o.status // null) as $s | if $s == null then true else ($st | index($s)) != null end))
+    (((($o.state // null) as $s | if $s == null then true else ($st | index($s)) != null end))
       and ((($o.project // "") | length == 0) or ($o.project | test($re)))
       and ((($o.title // "") | length) <= $tmax)
       and ((($o.shape // null) as $h | if $h == null then true else ($sh | index($h)) != null end))
       and ((($o.order // 0) | type) == "number" and (($o.order // 0) >= 0) and ((($o.order // 0) | floor) == ($o.order // 0)))
       and ((($o.legacyId // "") | length == 0) or (($o.legacyId | type) == "string" and ($o.legacyId | test($re))))
-      and ((($o.notes // "") | length) <= $max)
       and ((($o.blocked_on // "") | length) <= $max))
-  ' >/dev/null || die "refused: bad status/shape enum, project slug, title over $TITLEMAX chars, notes or blocked_on over $MAXLEN chars, order that is not a whole number, or legacyId that is not a kebab slug";
+  ' >/dev/null || die "refused: bad state/shape enum, project slug, title over $TITLEMAX chars, blocked_on over $MAXLEN chars, order that is not a whole number, or legacyId that is not a kebab slug";
 }
 
-# blocked <=> blocked_on: a blocked task must say what it waits on, and blocked_on on any other status is refused
-check_blocked() { # obj status blocked_on
+# blocked <=> blocked_on: a blocked task must say what it waits on, and blocked_on on any other state is refused
+check_blocked() { # obj state blocked_on
   if [[ "$2" == "blocked" ]]; then
-    [[ -n "$3" ]] || die "refused: status=blocked needs blocked_on=\"<what or who it waits on>\""
+    [[ -n "$3" ]] || die "refused: state=blocked needs blocked_on=\"<what or who it waits on>\""
   elif [[ -n "$3" ]]; then
-    die "refused: blocked_on only goes with status=blocked (status is '$2')"
+    die "refused: blocked_on only goes with state=blocked (state is '$2')"
   fi
 }
 
 cmd_get() { jq -c --arg id "$1" '.tasks | map(select(.id == $id))[0] // empty' "$FLEET"; }
-cmd_by_agent() { jq -c --arg a "$1" '.tasks | map(select(.agentId == $a))[0] // empty' "$FLEET"; }
-# stage / stages: read-only, computed by plugin/firstmate-deck/server/stage-cli.ts (needs node and the paseo CLI)
-cmd_stage() {
-  command -v node >/dev/null || die "node is required for stage"
-  [[ "$(basename "$STATE_DIR")" == "state" ]] || die "stage needs the fleet at <root>/state/fleet.json (FLEET_FILE is $FLEET)"
-  NODE_NO_WARNINGS=1 node "$ROOT/plugin/firstmate-deck/server/stage-cli.ts" "$1" "$(dirname "$STATE_DIR")" "${@:2}"
+# stage-cli.ts helper (node): FLEET_STAGE_TOOL replaces the node call (a stub in tests); it needs the fleet at <root>/state/fleet.json
+stage_tool() { # args after the script: <cmd> <root-placeholder replaced here> ...
+  local cmd="$1"; shift
+  if [[ -n "${FLEET_STAGE_TOOL:-}" ]]; then "$FLEET_STAGE_TOOL" "$cmd" "$(dirname "$STATE_DIR")" "$@"; return; fi
+  command -v node >/dev/null || die "node is required for $cmd"
+  [[ "$(basename "$STATE_DIR")" == "state" ]] || die "$cmd needs the fleet at <root>/state/fleet.json (FLEET_FILE is $FLEET)"
+  NODE_NO_WARNINGS=1 node "$ROOT/plugin/firstmate-deck/server/stage-cli.ts" "$cmd" "$(dirname "$STATE_DIR")" "$@"
 }
+# an agent -> its task: the agent's fm.task label (Paseo's), then the archive's agents/agentId lists
+cmd_by_agent() {
+  local a="$1" t=""
+  t="$(stage_tool task-of "$a" 2>/dev/null || true)"
+  if [[ -n "$t" ]]; then
+    local live; live="$(cmd_get "$t")"
+    if [[ -n "$live" ]]; then printf '%s\n' "$live"; return; fi
+    if [[ -f "$ARCHIVE" ]]; then
+      local line; line="$(jq -R -c --arg id "$t" 'fromjson? | select(.id == $id)' "$ARCHIVE" | tail -n 1)"
+      if [[ -n "$line" ]]; then printf '%s\n' "$line"; return; fi
+    fi
+  fi
+  [[ -f "$ARCHIVE" ]] || return 0
+  jq -R -c --arg a "$a" 'fromjson? | select(.agentId? == $a or ((.agents? // []) | index($a) != null))' "$ARCHIVE" | tail -n 1
+}
+# stage / stages: read-only, computed by plugin/firstmate-deck/server/stage-cli.ts (needs node and the paseo CLI)
+cmd_stage() { stage_tool "$@"; }
 cmd_active() {
   local proj=""
   if [[ $# -gt 0 ]]; then
     [[ "$1" == "--project" && $# -eq 2 ]] || die "usage: fleet active [--project <p>]"
     proj="$2"
   fi
-  jq -c --arg p "$proj" '[.tasks[] | select(.status == "dispatched" or .status == "running" or .status == "needs-captain")
+  jq -c --arg p "$proj" '[.tasks[] | select(.state == "active")
     | select($p == "" or .project == $p)
-    | {id, status, agentId}]' "$FLEET";
+    | {id, state, since, project}]' "$FLEET";
 }
 cmd_project() {
   local p="$1"; shift
@@ -192,6 +220,14 @@ build_obj() { # out: OBJ json with $keys validated; sets global OBJ
   for kv in "$@"; do
     [[ "$kv" == *=* ]] || die "expected key=value, got '$kv'"
     local k="${kv%%=*}" v="${kv#*=}"
+    if [[ " $RUNSTATE_KEYS " == *" $k "* ]]; then
+      case "$k" in
+        status) die "'status' is gone; use state=queued|active|parked|blocked|done|failed. running / needs-captain are computed (bin/fleet stage); a question for the captain is an ask";;
+        notes) die "'notes' is gone; narrative goes to the task log (bin/fleet log), the summary to its card (bin/fleet card); see docs/STATE.md";;
+        preview) die "'preview' is not a registry field; use bin/fleet preview <id> <port> <pid> (tasks/<id>/preview.json)";;
+        *) die "'$k' is Paseo's, not the registry's (label fm.task / the agent's own record); see docs/STATE.md";;
+      esac
+    fi
     [[ " $allow " == *" $k "* ]] || die "unknown key '$k' (allowed: $allow)"
     obj="$(jq --arg k "$k" --arg v "$v" '. + {($k): $v}' <<<"$obj")"
   done
@@ -218,7 +254,7 @@ cmd_add() {
   [[ "$id" =~ ^[a-z0-9][a-z0-9-]*$ ]] || die "id must be a kebab slug, got '$id'"
   entry_exists "$id" && die "task $id already exists"
   local obj; obj="$(build_obj "$SETTABLE depends_on" "$@")"
-  for req in intent shape status; do
+  for req in intent shape state; do
     jq -e --arg k "$req" '.[$k] // empty | length > 0' <<<"$obj" >/dev/null \
       || die "add needs $req=... (got: $*)";
   done
@@ -240,10 +276,10 @@ cmd_add() {
     fi
   fi
   check_obj "$obj"
-  check_blocked "$obj" "$(jq -r '.status' <<<"$obj")" "$(jq -r '.blocked_on // ""' <<<"$obj")"
+  check_blocked "$obj" "$(jq -r '.state' <<<"$obj")" "$(jq -r '.blocked_on // ""' <<<"$obj")"
   local ts; ts="$(now)"
   atomic_jq --arg id "$id" --argjson o "$obj" --arg ts "$ts" \
-    '.tasks += [($o + {id: $id, asks: [], lastEvent: ($o.lastEvent // $ts)})]';
+    '.version = 2 | .tasks += [($o + {id: $id, asks: [], since: $ts})]';
 }
 
 cmd_set() {
@@ -252,22 +288,21 @@ cmd_set() {
   [[ $# -gt 0 ]] || die "set needs at least one key=value"
   local obj; obj="$(build_obj "$SETTABLE" "$@")"
   check_obj "$obj"  # validate BEFORE touching the file: a refusal changes nothing
-  # blocked_on follows the status: required while blocked, dropped when the status moves off blocked
+  # blocked_on follows the state: required while blocked, dropped when the state moves off blocked
   local cur_st cur_bo new_st new_bo
-  cur_st="$(jq -r --arg id "$id" '.tasks | map(select(.id == $id))[0].status' "$FLEET")"
+  cur_st="$(jq -r --arg id "$id" '.tasks | map(select(.id == $id))[0].state' "$FLEET")"
   cur_bo="$(jq -r --arg id "$id" '.tasks | map(select(.id == $id))[0].blocked_on // ""' "$FLEET")"
-  new_st="$(jq -r --arg d "$cur_st" '.status // $d' <<<"$obj")"
+  new_st="$(jq -r --arg d "$cur_st" '.state // $d' <<<"$obj")"
   if jq -e 'has("blocked_on")' <<<"$obj" >/dev/null; then new_bo="$(jq -r '.blocked_on' <<<"$obj")"
   elif [[ "$new_st" == "blocked" ]]; then new_bo="$cur_bo"
   else new_bo=""; fi
   check_blocked "$obj" "$new_st" "$new_bo"
-  # asks/preview change only through ask/answer/preview, never set.
+  # asks change only through ask/answer, never set.
+  # `since` is when `state` last changed: stamped only on a real change
   local stamp="null"
-  if jq -e 'has("status")' <<<"$obj" >/dev/null && ! jq -e 'has("lastEvent")' <<<"$obj" >/dev/null; then
-    stamp="\"$(now)\"";
-  fi
+  if [[ "$new_st" != "$cur_st" ]]; then stamp="\"$(now)\""; fi
   atomic_jq --arg id "$id" --argjson o "$obj" --argjson stamp "$stamp" \
-    '.tasks |= map(if .id == $id then (. + $o + (if $stamp == null then {} else {lastEvent: $stamp} end)) | if .status != "blocked" then del(.blocked_on) else . end else . end)';
+    '.tasks |= map(if .id == $id then (. + $o + (if $stamp == null then {} else {since: $stamp} end)) | if .state != "blocked" then del(.blocked_on) else . end else . end)';
   check_entry "$id";
 }
 
@@ -307,12 +342,17 @@ parse_options() {
 }
 
 cmd_ask() {
-  local id="$1" text="$2" ctx="${3:-}" optraw="${4:-}"
+  local id="$1" text="$2" ctx="${3:-}" optraw="${4:-}" refraw="${5:-}"
   entry_exists "$id" || die "no task $id"
   ((${#text} > 0)) || die "ask text is empty"
   ((${#text} <= MAXLEN)) || die "ask over $MAXLEN chars"
-  local opts="null"
+  local opts="null" ref="null"
   [[ -z "$optraw" ]] || opts="$(parse_options "$optraw")"
+  if [[ -n "$refraw" ]]; then
+    ref="$(jq -c . <<<"$refraw" 2>/dev/null)" || die "--ref is not valid JSON"
+    jq -e '.kind == "canvas" and (.agentId | type == "string" and length > 0) and (.block | type == "string" and length > 0) and (keys - ["kind","agentId","block"] | length == 0)' <<<"$ref" >/dev/null \
+      || die "--ref must be {\"kind\":\"canvas\",\"agentId\":\"..\",\"block\":\"..\"}"
+  fi
   local n; n="$(next_ask_n "$id")"
   # an earlier answer can free a number while its context file lingers; never clobber it
   while [[ -e "$TASKS/$id/asks/$n.md" ]]; do n=$((n + 1)); done
@@ -323,10 +363,10 @@ cmd_ask() {
     mkdir -p "$TASKS/$id/asks"
     cp "$ctx" "$STATE_DIR/$rel"
   fi
-  if ! ( atomic_jq --arg id "$id" --arg t "$text" --arg s "$(now)" --arg c "$rel" --argjson n "$n" --argjson o "$opts" "$ENSURE_IDS"'
+  if ! ( atomic_jq --arg id "$id" --arg t "$text" --arg s "$(now)" --arg c "$rel" --argjson n "$n" --argjson o "$opts" --argjson r "$ref" "$ENSURE_IDS"'
     .tasks |= map(if .id == $id then ensure_ids | .askSeq = $n
       | .asks += [{id: ("a" + ($n | tostring)), text: $t, since: $s}
-          + (if $c == "" then {} else {context: $c} end) + (if $o == null then {} else {options: $o} end)]
+          + (if $c == "" then {} else {context: $c} end) + (if $o == null then {} else {options: $o} end) + (if $r == null then {} else {ref: $r} end)]
       else . end)' ); then
     [[ -z "$rel" ]] || rm -f "$STATE_DIR/$rel"; exit 1
   fi
@@ -410,18 +450,19 @@ cmd_answer() {
     '.tasks |= map(if .id == $id then .asks = ((.asks // []) | map(select(.id != $aid))) else . end)';
 }
 
+# the preview server is an operational kill handle, not status: it lives in tasks/<id>/preview.json
 cmd_preview() {
   local id="$1" port="$2" pid="$3"
   entry_exists "$id" || die "no task $id"
   [[ "$port" =~ ^[0-9]+$ ]] && [[ "$pid" =~ ^[0-9]+$ ]] || die "preview needs numeric port and pid"
-  atomic_jq --arg id "$id" --argjson port "$port" --argjson pid "$pid" \
-    '.tasks |= map(if .id == $id then .preview = {port: $port, pid: $pid} else . end)';
+  mkdir -p "$TASKS/$id"
+  printf '{"port":%s,"pid":%s}\n' "$port" "$pid" >"$TASKS/$id/preview.json.tmp.$$" && mv "$TASKS/$id/preview.json.tmp.$$" "$TASKS/$id/preview.json"
 }
 
 cmd_clear_preview() {
   local id="$1"
   entry_exists "$id" || die "no task $id"
-  atomic_jq --arg id "$id" '.tasks |= map(if .id == $id then del(.preview) else . end)';
+  rm -f "$TASKS/$id/preview.json"
 }
 
 cmd_log() {
@@ -434,13 +475,23 @@ cmd_log() {
 cmd_archive() {
   local id="$1"
   entry_exists "$id" || die "no task $id"
-  local st; st="$(jq -r --arg id "$id" '.tasks | map(select(.id == $id))[0].status' "$FLEET")"
+  local st; st="$(jq -r --arg id "$id" '.tasks | map(select(.id == $id))[0].state' "$FLEET")"
   [[ "$st" == "done" || "$st" == "failed" ]] \
-    || die "archive refuses $id with status '$st' — only done/failed archive";
+    || die "archive refuses $id with state '$st' — only done/failed archive";
   local open; open="$(jq --arg id "$id" '.tasks | map(select(.id == $id))[0] | (.asks // []) | length' "$FLEET")"
   ((open == 0)) || die "archive refuses $id with $open open ask(s) — answer them first ('fleet asks', 'fleet answer')";
-  jq -c --arg id "$id" '.tasks | map(select(.id == $id))[0]' "$FLEET" >>"$ARCHIVE";
-  atomic_jq --arg id "$id" '.tasks |= map(select(.id != $id))';
+  # the archive line keeps the task's agents (history) and its verdict; agents recorded at finish, else looked up now
+  local ag; ag="$(jq -c --arg id "$id" '.tasks | map(select(.id == $id))[0].agents // empty' "$FLEET")"
+  [[ -n "$ag" ]] || ag="$(agents_of "$id")"
+  jq -c --arg id "$id" --argjson ag "$ag" '.tasks | map(select(.id == $id))[0] | del(.agents) | . + {agents: $ag, outcome: .state}' "$FLEET" >>"$ARCHIVE";
+  atomic_jq --arg id "$id" '.tasks |= map(select(.id != $id))'
+}
+
+# the ids of the Paseo agents that worked on a task (label fm.task), oldest first, as a JSON array; [] (and a warning) when unknown
+agents_of() { # task-id
+  local out
+  if out="$(stage_tool agents "$1" 2>/dev/null)" && jq -e 'type == "array"' <<<"$out" >/dev/null 2>&1; then printf '%s' "$out"
+  else echo "fleet: could not read the agents of $1 from Paseo; the record has none" >&2; printf '[]'; fi
 }
 
 # card <id> (--file f | -): the task's card.md, atomically; unchanged content is not rewritten
@@ -477,41 +528,63 @@ CODE_PLACEHOLDER="No local code changes recorded yet."
 
 # finish <id> [--failed] [--card -|--card-file f] [--branch b] [--base main]
 cmd_finish() {
-  local id="" failed=0 cardsrc="" cardfile="" branch="" base="main"
+  local id="" failed=0 cardsrc="" cardfile="" branch="" base="main" closeall=0 answers=()
   while [[ $# -gt 0 ]]; do
     case "$1" in
       --failed) failed=1; shift;;
+      --close-asks) closeall=1; shift;;
+      --answer) [[ $# -ge 2 ]] || die "--answer needs an ask id (a1) or index"; answers+=("$2"); shift 2;;
       --card) [[ "${2:-}" == "-" ]] || die "--card takes '-' (read the card from stdin); use --card-file <f> for a file"; cardsrc=stdin; shift 2;;
       --card-file) [[ $# -ge 2 ]] || die "--card-file needs a path"; cardfile="$2"; [[ -f "$cardfile" ]] || die "card file '$cardfile' not found"; shift 2;;
       --branch) [[ $# -ge 2 ]] || die "--branch needs a value"; branch="$2"; shift 2;;
       --base) [[ $# -ge 2 ]] || die "--base needs a value"; base="$2"; shift 2;;
       -*) die "unknown option '$1'";;
-      *) [[ -z "$id" ]] || die "usage: fleet finish <id> [--failed] [--card -|--card-file <f>] [--branch <b>] [--base main]"; id="$1"; shift;;
+      *) [[ -z "$id" ]] || die "usage: fleet finish <id> [--failed] [--card -|--card-file <f>] [--branch <b>] [--base main] [--close-asks|--answer <ask>...]"; id="$1"; shift;;
     esac
   done
-  [[ -n "$id" ]] || die "usage: fleet finish <id> [--failed] [--card -|--card-file <f>] [--branch <b>] [--base main]"
+  [[ -n "$id" ]] || die "usage: fleet finish <id> [--failed] [--card -|--card-file <f>] [--branch <b>] [--base main] [--close-asks|--answer <ask>...]"
   entry_exists "$id" || die "no task $id"
   [[ "$id" =~ ^[a-z0-9][a-z0-9-]*$ ]] || die "bad id '$id'"
   local card=""
   [[ "$cardsrc" != stdin ]] || card="$(cat)"
   [[ -z "$cardfile" ]] || card="$(cat "$cardfile")"
 
+  # open asks: finish refuses to leave them behind. Check everything BEFORE changing anything
+  ensure_ask_ids "$id"
+  local open_ids close_ids=() a
+  open_ids="$(jq -r --arg id "$id" '.tasks | map(select(.id == $id))[0] | (.asks // [])[] | .id' "$FLEET")"
+  if ((closeall)); then
+    ((${#answers[@]} == 0)) || die "--close-asks and --answer are exclusive"
+    while IFS= read -r a; do [[ -z "$a" ]] || close_ids+=("$a"); done <<<"$open_ids"
+  else
+    for a in ${answers[@]+"${answers[@]}"}; do close_ids+=("$(resolve_ask "$id" "$a")"); done
+  fi
+  local left=() o
+  while IFS= read -r o; do
+    [[ -z "$o" ]] && continue
+    [[ " ${close_ids[*]-} " == *" $o "* ]] || left+=("$o")
+  done <<<"$open_ids"
+  ((${#left[@]} == 0)) || die "finish refuses $id with ${#left[@]} open ask(s) ($(IFS=,; echo "${left[*]}" | sed 's/,/, /g')): answer them in the same command (--close-asks, or --answer ${left[0]}) or 'fleet answer' them first"
+  for a in ${close_ids[@]+"${close_ids[@]}"}; do cmd_answer "$id" "$a"; done
+
   local status=done; ((failed)) && status=failed
-  local objargs=(status="$status")
+  local objargs=(state="$status")
   [[ -z "$branch" ]] || objargs+=(branch="$branch")
   cmd_set "$id" "${objargs[@]}"
+  # remember which Paseo agents worked on it: archive writes them into its line
+  local ag; ag="$(agents_of "$id")"
+  atomic_jq --arg id "$id" --argjson ag "$ag" '.tasks |= map(if .id == $id then .agents = ((.agents // []) + $ag | unique) else . end)'
 
   local task; task="$(cmd_get "$id")"
   [[ -n "$branch" ]] || branch="$(jq -r '.branch // empty' <<<"$task")"
   local pr project; pr="$(jq -r '.pr // empty' <<<"$task")"; project="$(jq -r '.project // empty' <<<"$task")"
 
-  # card.md: the given card, else (only when there is none yet) the notes plus branch/PR
+  # card.md: the given card, else (only when there is none yet) the intent plus branch/PR
   local cfile="$TASKS/$id/card.md"
   if [[ -n "$card" ]]; then
     mkdir -p "$TASKS/$id"; printf '%s\n' "$card" >"$cfile.tmp.$$" && mv "$cfile.tmp.$$" "$cfile"
   elif [[ ! -s "$cfile" ]]; then
-    local notes intent; notes="$(jq -r '.notes // empty' <<<"$task")"; intent="$(jq -r '.intent // empty' <<<"$task")"
-    local body="${notes:-$intent}" refs=""
+    local body refs=""; body="$(jq -r '.intent // empty' <<<"$task")"
     [[ -z "$branch" ]] || refs="Branch: \`$branch\`"
     [[ -z "$pr" ]] || refs+="${refs:+ · }PR: $pr"
     mkdir -p "$TASKS/$id"
@@ -550,16 +623,17 @@ usage() {
 
 # ask/reask argument parsing: positionals plus --context-file / --options in any order
 parse_ask_args() {
-  local pos=() ctx="" opts=""
+  local pos=() ctx="" opts="" ref=""
   while [[ $# -gt 0 ]]; do
     case "$1" in
       --context-file) [[ $# -ge 2 ]] || die "--context-file needs a path"; ctx="$2"; shift 2;;
       --options) [[ $# -ge 2 ]] || die "--options needs a value"; opts="$2"; shift 2;;
+      --ref) [[ $# -ge 2 ]] || die "--ref needs a JSON value"; ref="$2"; shift 2;;
       *) pos+=("$1"); shift;;
     esac
   done
-  [[ ${#pos[@]} -eq 2 ]] || die "usage: fleet ask <id> \"<text>\" [--context-file <path>] [--options \"A|B|C\"]"
-  cmd_ask "${pos[0]}" "${pos[1]}" "$ctx" "$opts"
+  [[ ${#pos[@]} -eq 2 ]] || die "usage: fleet ask <id> \"<text>\" [--context-file <path>] [--options \"A|B|C\"] [--ref <json>]"
+  cmd_ask "${pos[0]}" "${pos[1]}" "$ctx" "$opts" "$ref"
 }
 parse_reask_args() {
   local pos=() ctx="" opts=""
@@ -594,10 +668,19 @@ lock() {
   die "could not lock $FLEET within 30 s"
 }
 
+# A v1 registry (no "version": 2) is read-only here: an old file would take v2 writes half-way. An EMPTY one is just stamped.
+require_v2() {
+  [[ -f "$FLEET" ]] || return 0
+  [[ "$(jq -r '.version // 0' "$FLEET")" == "2" ]] && return 0
+  jq -e '(.tasks // []) | length == 0' "$FLEET" >/dev/null \
+    || die "$FLEET is a v1 registry (no \"version\": 2): run bin/migrate-fleet-v2 first (reads still work, writes are refused)"
+  atomic_jq '.version = 2'
+}
+
 need_jq
 cmd="${1:-}"; shift || true
 case "$cmd" in
-  add|set|ask|reask|pending|depend|undepend|answer|preview|clear-preview|archive|archive-update|finish) lock;; esac
+  add|set|ask|reask|pending|depend|undepend|answer|preview|clear-preview|archive|archive-update|finish) lock; require_v2;; esac
 case "$cmd" in
   get)           [[ $# -eq 1 ]] || die "usage: fleet get <id>"; cmd_get "$1";;
   by-agent)      [[ $# -eq 1 ]] || die "usage: fleet by-agent <agentId>"; cmd_by_agent "$1";;

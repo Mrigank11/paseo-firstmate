@@ -39,12 +39,12 @@ Use `mcp__paseo__get_agent_activity` (pass `limit: 10`) to get the why: read wha
 
 ## How to escalate well
 
-Run `bin/fleet set <id> status=needs-captain` so the fleet view shows the task is blocked on a human (plus `bin/fleet ask <id> "…"` for the exact question), then tell the captain concisely what the crew member wants, why it wants it (from agent activity), and what the risk of approving is.
+Run `bin/fleet ask <id> "…"` with the exact question (an open ask puts the task in Needs you; there is no status to set — a pending permission also shows as the stage `Needs you · permission`), then tell the captain concisely what the crew member wants, why it wants it (from agent activity), and what the risk of approving is.
 
 Wait after escalating. Do not approve while the captain is away, do not rephrase the request into something safer and approve that, and do not let the crew member talk you into it — a blocked agent is cheaper than an irreversible mistake.
 
 ## After responding
 
-After every approve or deny, update state with `bin/fleet set` + `bin/fleet log` (status back to working, what was decided, when), then end the turn. The crew member resumes on its own once the permission resolves — there is nothing further to send it.
+After every approve or deny, record what was decided and when with `bin/fleet log` (and `bin/fleet answer` the ask if you raised one), then end the turn. The crew member resumes on its own once the permission resolves — there is nothing further to send it.
 
 Expensive mistakes come from approving fast and escalating vaguely. Approve only the clearly safe, escalate everything else with enough context that the captain can decide in one read.

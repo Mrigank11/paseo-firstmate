@@ -29,15 +29,15 @@ Then sources: file paths inspected, commands run (read-only), and URLs consulted
 
 When a scout finishes, read `state/tasks/<id>/report.md` yourself before saying anything to the captain.
 
-Mark the task done only after you have confirmed the report exists and contains a BLUF plus evidence: `bin/fleet set <id> status=done`, record it with `bin/fleet log`, then `bin/fleet archive <id>` so the entry leaves the live index for `fleet-archive.jsonl`. If asks are still open, answer or drop each with the captain first — archive refuses ask-bearing tasks.
+Mark the task done only after you have confirmed the report exists and contains a BLUF plus evidence: `bin/fleet finish <id>`, record it with `bin/fleet log`, then `bin/fleet archive <id>` so the entry leaves the live index for `fleet-archive.jsonl`. `finish` and `archive` both refuse a task with open asks: answer each with the captain first, or close them in the same command (`bin/fleet finish <id> --close-asks`, or `--answer a1`) — never leave an answered question open.
 
 Reply to the captain with a ONE-LINE digest (the BLUF, or your corrected version of it) plus a pointer to the full report path — never paste the whole report into the conversation.
 
 ## Tear down a dedicated workspace
 
-Most scouts inherit a **shared** read-only checkout (e.g. the campaigns local checkout) and you must NEVER archive it — other tasks reuse it. But a scout given its **own** workspace for isolation (a throwaway worktree, or a fresh `isolation: local` scratch per `dispatch-routing` §4 — self-referential and planning scouts are the usual case) owns that workspace alone. Once you have archived such a task, stop its recorded preview the same way `ship-delivery` §6 does (`bin/fleet get` shows `preview: {port, pid}` — check, kill, `clear-preview` *before* archiving), then archive its workspace with `mcp__paseo__archive_workspace` (`{ workspaceId }`) and record it with `bin/fleet log`.
+Most scouts inherit a **shared** read-only checkout (e.g. the campaigns local checkout) and you must NEVER archive it — other tasks reuse it. But a scout given its **own** workspace for isolation (a throwaway worktree, or a fresh `isolation: local` scratch per `dispatch-routing` §4 — self-referential and planning scouts are the usual case) owns that workspace alone. Once you have archived such a task, stop its recorded preview the same way `ship-delivery` §6 does (`tasks/<id>/preview.json` holds `{port, pid}` — check, kill, `clear-preview` *before* archiving), then archive its workspace with `mcp__paseo__archive_workspace` (`{ workspaceId }`) and record it with `bin/fleet log`.
 
-The test is **ownership, not shape**: archive a `workspaceId` that is `kind: worktree` and that only this one task lists in the live index (`bin/fleet active`); never archive one that any other task also lists (a shared checkout), and never a `local_checkout`. REFUSE teardown if the workspace holds unlanded work (a dirty tree or unpushed commits) — surface it to the captain instead of archiving.
+The test is **ownership, not shape**: archive the `workspaceId` of the task's current agent (`get_agent_status`; find the agent with `bin/fleet stage <id>`) when it is `kind: worktree` and no other live agent with a different `fm.task` label sits in it; never archive one another task's agent also uses (a shared checkout), and never a `local_checkout`. REFUSE teardown if the workspace holds unlanded work (a dirty tree or unpushed commits) — surface it to the captain instead of archiving.
 
 ## Verify before trust
 

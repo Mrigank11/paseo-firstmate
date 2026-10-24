@@ -119,7 +119,7 @@ test("SdkPort.agentView: status, times, model, thinking and the steps from a bou
 test("first mate resolution through the SDK: claim first, then newest live labelled non-crew agent", async () => {
   const root = mkdtempSync(join(tmpdir(), "deck-sdkfm-"));
   mkdirSync(join(root, "state"), { recursive: true });
-  writeFileSync(join(root, "state", "fleet.json"), JSON.stringify({ tasks: [{ id: "t", agentId: "scout" }] }));
+  writeFileSync(join(root, "state", "fleet.json"), JSON.stringify({ version: 2, tasks: [{ id: "t", agentId: "scout" }] }));
   const w = new FakeWorld().add(
     { id: "scout", status: "idle", labels: { firstmate: "true" }, createdAt: "2026-10-21T12:00:00Z" },
     { id: "fm-a", status: "idle", labels: { firstmate: "true" }, createdAt: "2026-10-21T08:00:00Z" },

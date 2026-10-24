@@ -11,7 +11,7 @@ function checkout(o: { claim?: string; crew?: string[]; archived?: string[] } = 
   const root = mkdtempSync(join(tmpdir(), "deck-fm-"));
   mkdirSync(join(root, "state"), { recursive: true });
   if (o.claim) writeFileSync(join(root, "state", "firstmate.json"), JSON.stringify({ agentId: o.claim, claimedAt: "2026-10-21T08:00:00Z" }));
-  writeFileSync(join(root, "state", "fleet.json"), JSON.stringify({ tasks: (o.crew ?? []).map((agentId, i) => ({ id: `t${i}`, agentId })) }));
+  writeFileSync(join(root, "state", "fleet.json"), JSON.stringify({ version: 2, tasks: (o.crew ?? []).map((agentId, i) => ({ id: `t${i}`, agentId })) }));
   if (o.archived) writeFileSync(join(root, "state", "fleet-archive.jsonl"), o.archived.map((agentId, i) => JSON.stringify({ id: `a${i}`, agentId }) + "\n").join(""));
   return root;
 }

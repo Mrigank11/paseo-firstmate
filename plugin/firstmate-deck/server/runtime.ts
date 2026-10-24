@@ -534,13 +534,13 @@ export class Deck {
     const ids: string[] = [];
     for (const t of model.tasks) {
       const found = this.labeled.get(t.id) ?? [];
-      for (const id of [...found.map((a) => a.id), ...(t.agentId ? [t.agentId] : [])]) {
+      for (const id of found.map((a) => a.id)) {
         const set = this.agentProjects.get(id) ?? new Set();
         set.add(project);
         this.agentProjects.set(id, set);
       }
       if ((t.state === "done" || t.state === "failed") && !t.asks.length) continue;
-      const cur = currentAgent(found)?.id ?? t.agentId;
+      const cur = currentAgent(found)?.id;
       if (cur) ids.push(cur);
     }
     return [...new Set(ids)];
@@ -850,7 +850,7 @@ export class Deck {
           counts.withFirstMate++; // the next move is the first mate's, so it does not count as needing the captain
         } else if (g === "running") {
           counts.running++;
-          const aid = st.agentId ?? t.agentId;
+          const aid = st.agentId;
           const v = aid ? this.agents.peek(aid) : undefined;
           running.push({
             taskId: t.id, taskTitle: plainTitle(t), agentId: aid ?? null,

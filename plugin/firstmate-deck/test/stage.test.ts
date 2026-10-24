@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { computeStage, currentAgent, stageAgentsFor, stateOf, type StageAgent, type StageTask } from "../server/stage.ts";
+import { computeStage, currentAgent, archiveStateOf, stageAgentsFor, stateOf, type StageAgent, type StageTask } from "../server/stage.ts";
 
 const NOW = new Date("2026-10-24T12:00:00Z");
 const ago = (min: number) => new Date(NOW.getTime() - min * 60_000).toISOString();
@@ -98,14 +98,14 @@ test("reuse: the newest live agent wins; an older finished one is history", () =
   assert.equal(currentAgent([agent({ id: "a", archived: true, createdAt: ago(5) }), agent({ id: "b", createdAt: ago(90) })])?.id, "b");
 });
 
-test("v1 shim: status maps to state; agentId is only a hint when Paseo has no labelled agent", () => {
-  for (const [status, state] of [["dispatched", "active"], ["running", "active"], ["needs-captain", "active"], ["done", "done"], ["queued", "queued"], ["weird", "queued"]]) assert.equal(stateOf({ status }), state);
-  assert.equal(stateOf({ state: "parked", status: "running" }), "parked");
-  const view = (id: string) => (id === "hint" ? { status: "idle", createdAt: ago(9), final: "DONE: ok" } : undefined);
-  const hinted = stageAgentsFor({ agentId: "hint" }, undefined, view);
-  assert.deepEqual([hinted.length, stage(task(), hinted).stage], [1, "Review"]);
-  const labeled = stageAgentsFor({ agentId: "hint" }, [{ id: "lab", status: "running", archived: false, createdAt: ago(5) }], view);
-  assert.deepEqual(labeled.map((a) => a.id), ["lab"]);
-  assert.deepEqual(stageAgentsFor({}, undefined, view), []);
-  assert.equal(stageAgentsFor({ agentId: "nope" }, undefined, view)[0].status, "unknown");
+test("state is the registry's intent; the v1 status and agentId are not read any more", () => {
+  for (const [state, want] of [["active", "active"], ["parked", "parked"], ["done", "done"], ["queued", "queued"], ["weird", "queued"], [undefined, "queued"]]) assert.equal(stateOf({ state }), want);
+  assert.equal(stateOf({ status: "running" } as never), "queued");
+  assert.equal(archiveStateOf({ outcome: "failed" }), "failed");
+  assert.equal(archiveStateOf({ status: "failed" }), "failed");
+  assert.equal(archiveStateOf({ state: "done" }), "done");
+  const view = (id: string) => (id === "lab" ? { final: "DONE: ok" } : undefined);
+  const labeled = stageAgentsFor([{ id: "lab", status: "idle", archived: false, createdAt: ago(5) }], view);
+  assert.deepEqual([labeled.map((a) => a.id), labeled[0].final], [["lab"], "DONE: ok"]);
+  assert.deepEqual(stageAgentsFor(undefined, view), []);
 });

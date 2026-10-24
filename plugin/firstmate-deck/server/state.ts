@@ -4,7 +4,7 @@ import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { basename, join, resolve, sep } from "node:path";
 import { cleanUi } from "./marks.ts";
 import { askIdOf } from "./store.ts";
-import { stateOf, type TaskState } from "./stage.ts";
+import { archiveStateOf, stateOf, type TaskState } from "./stage.ts";
 
 export type Ask = {
   /** bin/fleet's stable ask id ("a2"). An ask written before ids existed is "a<its 1-based index>". */
@@ -38,7 +38,7 @@ export type Task = {
   title?: string;
   project?: string;
   shape?: string;
-  /** "<provider>/<model>" or a plain model name, as the first mate (or an import) recorded it. The label of last resort when Paseo has no record of the agent. */
+  /** Archive lines only (v1 history): "<provider>/<model>" as the first mate recorded it. Live v2 tasks have none; Paseo knows the model. */
   provider?: string;
   /** Position within its page group, lowest first (bin/fleet set order=N). Tasks without one keep file order, after the ordered ones. */
   order?: number;
@@ -46,27 +46,25 @@ export type Task = {
   legacyId?: string;
   /** What a `blocked` task waits on (bin/fleet set blocked_on=...): an outside dependency, not the captain or the crew. */
   blocked_on?: string;
-  /** Legacy v1 run status, kept only so old registries load; the stage is computed (stage.ts), never read from here. */
-  status: string;
-  /** The first mate's intent: v2 `state`, else the v1 `status` mapped (dispatched/running/needs-captain -> active). */
+  /** The first mate's intent (v2 `state`); archive lines: their verdict. The stage is computed (stage.ts), never stored. */
   state: TaskState;
-  /** When `state` last changed (v2 `since`, else the v1 `lastEvent`). */
+  /** When `state` last changed (archive lines: their last event). */
   since?: string;
-  /** v1 only: used as a hint when Paseo has no agent labelled fm.task=<id>. Deleted with the v1 registry in S3. */
-  agentId?: string;
+  /** Archive lines only: the Paseo agents that worked on the task, oldest first (v1 lines: their one `agentId`). */
+  agents?: string[];
   depends_on: string[];
   asks: Ask[];
+  /** Archive lines only (v1 history); live v2 tasks keep narrative in tasks/<id>/log.md. */
   notes: string;
   pr?: string;
   branch?: string;
-  lastEvent?: string;
   /** Markdown from state/tasks/<id>/card.md ("" when absent). */
   card: string;
   /** Asks the first mate has answered (state/tasks/<id>/asks.jsonl, written by `bin/fleet answer`), oldest first; context files left without a record come last with no text. */
   answered: AnsweredAsk[];
   /** state/tasks/<id>/report.md exists: the page points at it. */
   hasReport: boolean;
-  /** `lastEvent` as epoch ms (0 when absent): what the Done group sorts by. */
+  /** `since` as epoch ms (0 when absent): what the Done group sorts by. */
   updatedMs: number;
 };
 
@@ -111,6 +109,8 @@ export type ProjectModel = {
   /** Set when fleet.json exists but cannot be used (empty or malformed). `tasks` is then empty: the caller keeps its last good model. */
   fleetError?: { file: string; message: string };
 };
+
+const V1_MESSAGE = "fleet.json is a v1 registry (no \"version\": 2): run bin/migrate-fleet-v2";
 
 function readText(path: string): string {
   try {
@@ -186,7 +186,7 @@ function loadAnswered(root: string, id: string): AnsweredAsk[] {
   return out;
 }
 
-function toTask(raw: any, root: string, label: string, inbox: Comment[] = []): Task {
+function toTask(raw: any, root: string, label: string, inbox: Comment[] = [], archived = false): Task {
   if (!raw || typeof raw !== "object" || typeof raw.id !== "string") throw new Error(`${label}: task without a string id`);
   const asks: Ask[] = (Array.isArray(raw.asks) ? raw.asks : []).map((a: any, i: number) => {
     const stateDir = resolve(root, "state");
@@ -239,27 +239,29 @@ function toTask(raw: any, root: string, label: string, inbox: Comment[] = []): T
     order: orderOf(raw.order),
     legacyId: typeof raw.legacyId === "string" && raw.legacyId ? raw.legacyId : undefined,
     blocked_on: typeof raw.blocked_on === "string" && raw.blocked_on ? raw.blocked_on : undefined,
-    status: String(raw.status ?? raw.state ?? "queued"),
-    state: stateOf(raw),
-    since: raw.since || raw.lastEvent || undefined,
-    agentId: raw.agentId || undefined,
+    state: archived ? archiveStateOf(raw) : stateOf(raw),
+    since: raw.since || (archived ? raw.lastEvent : undefined) || undefined,
+    agents: archived ? (Array.isArray(raw.agents) ? raw.agents.map(String) : raw.agentId ? [String(raw.agentId)] : []) : undefined,
     depends_on: Array.isArray(raw.depends_on) ? raw.depends_on.map(String) : [],
     asks,
     notes: String(raw.notes ?? ""),
     pr: raw.pr || undefined,
     branch: raw.branch || undefined,
-    lastEvent: raw.lastEvent || undefined,
     card: slug ? readText(join(root, "state", "tasks", raw.id, "card.md")) : "",
     answered: loadAnswered(root, raw.id).filter((a) => !answeredIds.has(a.id)),
     hasReport: slug && existsSync(join(root, "state", "tasks", raw.id, "report.md")),
-    updatedMs: Date.parse(raw.since ?? raw.lastEvent ?? "") || 0,
+    updatedMs: Date.parse(raw.since ?? (archived ? raw.lastEvent : "") ?? "") || 0,
   };
 }
 
 /** Every live task of every project (and those without one), for the CLI: the same Task model the page renders. */
 export function loadAllLive(root: string): Task[] {
   let live: any[] = [];
-  try { live = JSON.parse(readText(join(root, "state", "fleet.json")) || "{}")?.tasks ?? []; } catch { return []; }
+  try {
+    const fleet = JSON.parse(readText(join(root, "state", "fleet.json")) || "{}");
+    live = fleet?.tasks ?? [];
+    if (live.length && fleet?.version !== 2) throw new Error(V1_MESSAGE);
+  } catch (e) { if ((e as Error).message === V1_MESSAGE) throw e; return []; }
   const inboxes = new Map<string, Comment[]>();
   const inboxOf = (p: unknown) => {
     if (typeof p !== "string" || !/^[a-z0-9][a-z0-9-]*$/.test(p)) return [];
@@ -293,6 +295,7 @@ export function loadProject(root: string, project: string): ProjectModel {
     try {
       const fleet: any = parseJson(fleetText, fleetPath);
       live = Array.isArray(fleet?.tasks) ? fleet.tasks : [];
+      if (live.length && fleet?.version !== 2) { live = []; fleetError = { file: basename(fleetPath), message: V1_MESSAGE }; }
     } catch (e) {
       fleetError = { file: basename(fleetPath), message: (e as Error).message.replace(`${fleetPath}: `, "") };
     }
@@ -307,7 +310,7 @@ export function loadProject(root: string, project: string): ProjectModel {
     try { raw = JSON.parse(line); } catch { archiveSkipped++; continue; }
     if (raw && typeof raw.id === "string") {
       // the newest line for an id wins (bin/fleet archive-update appends), whichever project the older line named
-      if (raw.project === project) { archive.delete(raw.id); archive.set(raw.id, toTask(raw, root, archPath)); }
+      if (raw.project === project) { archive.delete(raw.id); archive.set(raw.id, toTask(raw, root, archPath, [], true)); }
       else archive.delete(raw.id);
     }
   }

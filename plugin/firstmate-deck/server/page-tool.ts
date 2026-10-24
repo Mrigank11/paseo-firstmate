@@ -143,26 +143,13 @@ function status(root: string, only?: string): void {
 }
 
 /**
- * Live tasks with no project never show on a page. Warn (on stderr) about them while project pages exist: by name when
- * the task's workspace sits inside a project's repo, else as a count.
+ * Live tasks with no project never show on a page. Warn (on stderr) about them while project pages exist.
  */
 function untaggedWarnings(root: string, projects: string[]): void {
   let tasks: any[] = [];
   try { tasks = JSON.parse(readFileSync(join(root, "state", "fleet.json"), "utf8"))?.tasks ?? []; } catch { return; }
-  const repos = new Map<string, string>();
-  const base = join(root, "state", "projects");
-  for (const n of existsSync(base) ? readdirSync(base) : []) {
-    try { const r = JSON.parse(readFileSync(join(base, n, "project.json"), "utf8")).repo; if (typeof r === "string" && r) repos.set(n, r.replace(/\/+$/, "")); } catch {}
-  }
-  if (!repos.size && !projects.length) return;
-  const loose = tasks.filter((t) => t && !t.project && t.status !== "done" && t.status !== "failed");
-  const rest: string[] = [];
-  for (const t of loose) {
-    const ws = typeof t.workspaceId === "string" ? t.workspaceId : "";
-    const hit = ws.startsWith("/") ? [...repos].find(([, r]) => ws === r || ws.startsWith(r + "/") || ws.startsWith(r + "-")) : undefined;
-    if (hit) console.error(`warning: live task ${t.id} has no project, but its workspace is in project ${hit[0]}'s repo (${hit[1]}): bin/fleet set ${t.id} project=${hit[0]}`);
-    else rest.push(t.id);
-  }
+  if (!projects.length) return;
+  const rest = tasks.filter((t) => t && !t.project && t.state !== "done" && t.state !== "failed").map((t) => t.id);
   if (rest.length) console.error(`warning: ${rest.length} live task${rest.length === 1 ? "" : "s"} ha${rest.length === 1 ? "s" : "ve"} no project while project pages exist (${rest.join(", ")}): they are invisible on every page; set project=<slug> if they belong on one`);
 }
 

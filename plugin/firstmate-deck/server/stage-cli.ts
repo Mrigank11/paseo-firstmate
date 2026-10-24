@@ -2,6 +2,7 @@
 //   stage-cli.ts stage <root> <taskId>                   one task's stage (JSON); a live task, else its newest archive line
 //   stage-cli.ts stages <root> [--project p] [--table]   every live task's stage, one pass (JSON array, or a table)
 //   stage-cli.ts drift <root> [project]                  "<n>" drift flags across live tasks; each flagged task on stderr
+//   stage-cli.ts agents <root> <taskId>                  JSON array of the ids of every agent labelled fm.task=<taskId>, oldest first
 //   stage-cli.ts task-of <root> <agentId>                the fm.task label of that agent ("" when it has none)
 import { archiveRow, labelledAgents, rowOf, stages, table } from "./stage-data.ts";
 import { loadAllLive } from "./state.ts";
@@ -12,7 +13,7 @@ function die(msg: string): never {
 }
 
 const [cmd, root, ...rest] = process.argv.slice(2);
-if (!cmd || !root) die("usage: stage-cli.ts <stage|stages|drift|task-of> <root> ...");
+if (!cmd || !root) die("usage: stage-cli.ts <stage|stages|drift|agents|task-of> <root> ...");
 
 try {
 switch (cmd) {
@@ -38,6 +39,13 @@ switch (cmd) {
     const bad = rows.filter((r) => r.flags.some((f) => f.drift));
     for (const r of bad) console.error(`drift: ${r.id} (${r.stage}): ${r.flags.filter((f) => f.drift).map((f) => f.text).join("; ")}`);
     console.log(String(bad.reduce((n, r) => n + r.flags.filter((f) => f.drift).length, 0)));
+    break;
+  }
+  case "agents": {
+    const id = rest[0];
+    if (!id) die("agents needs a task id");
+    const mine = labelledAgents([id]).filter((r) => r.task === id).sort((a, b) => (Date.parse(a.createdAt ?? "") || 0) - (Date.parse(b.createdAt ?? "") || 0));
+    console.log(JSON.stringify(mine.map((r) => r.id)));
     break;
   }
   case "task-of": {

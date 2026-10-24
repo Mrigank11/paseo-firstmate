@@ -101,8 +101,8 @@ const titleCase = (s: string) => s.replace(/[-_]+/g, " ").replace(/\b\w/g, (c) =
 
 /** The task's computed stage (stage.ts): from the registry's intent, its asks, and the Paseo agents carrying its label. */
 export function stageOf(t: Task, live: boolean, o: { now: Date; labeled?: RenderOpts["labeled"] }, view: (id: string) => AgentView | undefined = () => undefined): Stage {
-  if (!live) return computeStage(t, t.agentId ? [{ id: t.agentId, status: "idle", archived: false, pendingPermissions: 0 }] : [], o.now, { archived: true });
-  return computeStage(t, stageAgentsFor(t, o.labeled?.[t.id], view), o.now);
+  if (!live) return computeStage(t, t.agents?.length ? [{ id: t.agents[t.agents.length - 1], status: "idle", archived: false, pendingPermissions: 0 }] : [], o.now, { archived: true });
+  return computeStage(t, stageAgentsFor(o.labeled?.[t.id], view), o.now);
 }
 
 export function groupOf(t: Task, live: boolean, now = new Date(), labeled?: RenderOpts["labeled"], view?: (id: string) => AgentView | undefined): GroupKey {
@@ -120,7 +120,7 @@ function pill(group: GroupKey, ast: string): [string, string] {
 const flagBadges = (flags: StageFlag[]) => flags.map((f) => `<span class="fl${f.drift ? " fl-d" : ""}" title="${esc(f.key)}">${esc(f.text)}</span>`).join("");
 
 function agentBlock(t: Task, group: GroupKey, view: AgentView | undefined, o: RenderOpts, st: Stage): string {
-  const aid = st.agentId ?? t.agentId;
+  const aid = st.agentId;
   if (!aid) { // no agent to show: Dispatching and Lost still say where the task stands, and so does any drift flag
     if (!st.flags.length && group !== "running" && group !== "fm") return "";
     return `<div class="ag"><span class="pill p-idle"><span class="dot"></span>${esc(st.stage)}</span>${flagBadges(st.flags)}</div>`;
@@ -223,7 +223,7 @@ export const markable = (t: Task): boolean => t.card.trim() !== "";
 function row(t: Task, group: GroupKey, ctx: Ctx, idx = 0): string {
   const name = esc(t.title || t.intent || t.id);
   const st = ctx.stages.get(t.id)!;
-  const aid = st.agentId ?? t.agentId;
+  const aid = st.agentId;
   const title = aid ? `<a href="${esc(ctx.o.paseoAgentUrl(aid))}">${name}</a>` : name;
   const failed = st.failed;
   const chip = failed ? `<span class="chip c-fail">failed</span>` : "";

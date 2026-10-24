@@ -54,11 +54,11 @@ Given a profile `{ "provider": "claude/opus", "modeId": "build", "thinkingOption
   "initialPrompt": "<brief>",
   "notifyOnFinish": true,
   "settings": { "modeId": "build", "thinkingOptionId": "think-hard", "features": { "auto_accept": true } },
-  "labels": { "fm.task": "<id>", "fm.project": "<project>", "fm.shape": "ship", "task": "<id>", "shape": "ship" }
+  "labels": { "fm.task": "<id>", "fm.project": "<project>", "fm.shape": "ship" }
 }
 ```
 
-Stamp the labels on every `create_agent`: `fm.task` (the task id, the join key from an agent to its task), `fm.project` (the project page the task belongs to; omit it for a task with no project) and `fm.shape` (`scout` or `ship`). Keep the legacy `task` and `shape` labels alongside them (same values) until the migration retires them. Re-tasking an existing agent: `mcp__paseo__update_agent { labels: { "fm.task": "<new-id>" } }` (plus `fm.project` / `fm.shape` if they changed) before `send_agent_prompt`, so the label always names the agent's current task.
+Stamp the labels on every `create_agent`: `fm.task` (the task id, the join key from an agent to its task), `fm.project` (the project page the task belongs to; omit it for a task with no project) and `fm.shape` (`scout` or `ship`). The legacy `task` / `shape` labels are no longer read by anything; old agents may still carry them, new ones don't need them. A crew agent with no `fm.task` label is invisible to the stage engine (the page shows its task as Dispatching, then Lost). Re-tasking an existing agent: `mcp__paseo__update_agent { labels: { "fm.task": "<new-id>" } }` (plus `fm.project` / `fm.shape` if they changed) before `send_agent_prompt`, so the label always names the agent's current task.
 
 Required fields on `mcp__paseo__create_agent` are `title`, `provider`, `initialPrompt`; `workspaceId` selects the workspace (below), `notifyOnFinish` stays true unless the captain says otherwise.
 
@@ -83,7 +83,7 @@ A `scout` task never touches project code and gets no worktree: omit `workspaceI
 
 ## 6. After spawning
 
-Record `{ id, agentId, workspaceId, provider, shape, status: "dispatched" }` into `state/fleet.json`, then end the turn — do not follow the agent, poll it, or start reviewing output in this turn.
+Record the task with `bin/fleet add <id> intent="…" shape=<scout|ship> state=active [project=<p>] [title="…"]` — nothing about the agent goes into the registry: its id, workspace and model are Paseo's, found through the `fm.task` label (`bin/fleet stage <id>` shows them). Then end the turn — do not follow the agent, poll it, or start reviewing output in this turn.
 
 ## 7. Never guess IDs
 

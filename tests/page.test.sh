@@ -10,7 +10,7 @@ export FAKE_LOG="$T/fake.log"
 export FAKE_PLUGIN_STATUS=running
 export PASEO_AGENT_ID=agent-fm-1
 export PAGE_VERIFY_SECS=3 PAGE_INSTALL_WAIT=6
-export STAGE_AGENTS_JSON="$T/no-agents.json"; echo "[]" >"$T/no-agents.json"
+export STAGE_AGENTS_JSON="$T/no-agents.json"; echo '[{"id":"crew-9","task":"scout-1","status":"running","archived":false,"createdAt":null,"lastActivityAt":null,"pending":0}]' >"$T/no-agents.json"
 unset PASEO_HOME LAVISH_AXI_PORT LAVISH_AXI_STATE_DIR FIRSTMATE_LABEL
 pass=0; fail=0
 ok()  { echo "PASS $1"; pass=$((pass+1)); }
@@ -137,8 +137,8 @@ st="$("$P" status)"
 grep -q "^PROJECT" <<<"$st" && ok "status has a header" || bad "status has a header"
 for col in LISTENER BANNER RENDERED "PLUGIN ROOT" UNDELIVERED DRIFT; do grep -q "$col" <<<"$st" && ok "status column $col" || bad "status column $col" "$st"; done
 grep -E "^demo +[^ ]+ +open +ok +First mate unreachable, 1 comment queued +[0-9]+s ago +$T/root +1 +0 +- +running +http://fake.test:4390/session/abc123" <<<"$st" >/dev/null && ok "status row: session, listener, banner, age, root, undelivered, plugin, url" || bad "status row" "$st"
-cp "$T/root/state/fleet.json" "$T/fleet.pre-drift" 2>/dev/null || echo '{"tasks":[]}' >"$T/fleet.pre-drift"
-echo '{"tasks":[{"id":"drifted","intent":"x","shape":"ship","state":"queued","project":"demo","asks":[]}]}' >"$T/root/state/fleet.json"
+cp "$T/root/state/fleet.json" "$T/fleet.pre-drift" 2>/dev/null || echo '{"version":2,"tasks":[]}' >"$T/fleet.pre-drift"
+echo '{"version":2,"tasks":[{"id":"drifted","intent":"x","shape":"ship","state":"queued","project":"demo","asks":[]}]}' >"$T/root/state/fleet.json"
 echo '[{"id":"ag-d","task":"drifted","status":"running","archived":false,"createdAt":"2026-10-24T10:00:00Z","lastActivityAt":null,"pending":0}]' >"$T/agents-drift.json"
 dst="$(STAGE_AGENTS_JSON="$T/agents-drift.json" "$P" status demo 2>"$T/drift.err")"
 grep -E "^demo .* +1 +- +running" <<<"$dst" >/dev/null && ok "status: DRIFT counts a queued task that has a running agent" || bad "status DRIFT" "$dst"
@@ -206,7 +206,7 @@ PASEO_AGENT_ID= go refused >/dev/null 2>&1 && bad "start without PASEO_AGENT_ID 
 # ---- crew can never become the first mate (C2) ----
 cp "$T/root/state/fleet.json" "$T/fleet.keep" 2>/dev/null || true
 cat >"$T/root/state/fleet.json" <<'J'
-{"tasks":[{"id":"scout-1","intent":"x","shape":"scout","status":"running","agentId":"crew-9"}]}
+{"version":2,"tasks":[{"id":"scout-1","intent":"x","shape":"scout","state":"active"}]}
 J
 echo '{"id":"old-crew","intent":"x","shape":"ship","status":"done","agentId":"crew-archived"}' >"$T/root/state/fleet-archive.jsonl"
 echo '{"agentId":"agent-fm-1","claimedAt":"2026-10-21T00:00:00Z"}' >"$T/root/state/firstmate.json"
@@ -221,12 +221,12 @@ printf '{garbage\n{"id":"old-crew2","agentId":"crew-after-garbage"}\n' >"$T/root
 msg="$(PASEO_AGENT_ID=crew-after-garbage "$P" claim 2>&1)"; rc=$?
 [[ $rc -ne 0 ]] && grep -q "is crew on task old-crew2" <<<"$msg" && ok "...a malformed archive line does not hide later crew" || bad "archive with a bad line" "$msg"
 # Paseo is the source of truth: an agent carrying an fm.task label is crew even when fleet.json never recorded it
-echo '{"tasks":[]}' >"$T/root/state/fleet.json"
+echo '{"version":2,"tasks":[]}' >"$T/root/state/fleet.json"
 echo '[{"id":"crew-labelled","task":"some-task","status":"running","archived":false,"createdAt":null,"lastActivityAt":null,"pending":0}]' >"$T/agents.json"
 msg="$(STAGE_AGENTS_JSON="$T/agents.json" PASEO_AGENT_ID=crew-labelled "$P" claim 2>&1)"; rc=$?
 [[ $rc -ne 0 ]] && grep -q "agent crew-labelled is crew on task some-task" <<<"$msg" && ok "claim refuses an agent labelled fm.task (no fleet.json record)" || bad "claim refuses a labelled agent" "$msg"
 cat >"$T/root/state/fleet.json" <<'J'
-{"tasks":[{"id":"scout-1","intent":"x","shape":"scout","status":"running","agentId":"crew-9"}]}
+{"version":2,"tasks":[{"id":"scout-1","intent":"x","shape":"scout","state":"active"}]}
 J
 rm -f "$T/root/state/firstmate.json"
 PASEO_AGENT_ID=crew-9 go claimcrew >/dev/null 2>&1 && bad "start by a crew agent with no live claim is refused" || ok "start by a crew agent with no live claim is refused"
@@ -300,7 +300,7 @@ eq "$(jq -r .session "$PROJ/page.json")" open "...and reopens it"
 # ---- reply --followup ----
 mkdir -p "$T/root/state"
 cat >"$T/root/state/fleet.json" <<'J'
-{"tasks":[{"id":"pick-db","intent":"x","shape":"scout","status":"needs-captain","project":"demo","asks":[{"text":"A or B?","since":"2026-10-21T09:00:00Z"},{"text":"Flag?","since":"2026-10-21T09:00:00Z"}]},
+{"version":2,"tasks":[{"id":"pick-db","intent":"x","shape":"scout","state":"active","project":"demo","asks":[{"text":"A or B?","since":"2026-10-21T09:00:00Z"},{"text":"Flag?","since":"2026-10-21T09:00:00Z"}]},
 {"id":"other-t","intent":"y","shape":"scout","status":"queued","project":"demo","asks":[{"text":"Q?","since":"2026-10-21T09:00:00Z"}]}]}
 J
 echo '{"id":"c9","at":"2026-10-21T10:00:00Z","project":"demo","target":"t-pick-db#a1","text":"more detail please","prompt":{},"delivered":true,"answered":false}' >"$PROJ/inbox.jsonl"
@@ -322,7 +322,7 @@ eq "$(jq -r '.tasks[0].asks[1] | has("pendingSince")' "$T/root/state/fleet.json"
 
 # ---- reply applies option picks (stable ask ids) ----
 cat >"$T/root/state/fleet.json" <<'J'
-{"tasks":[{"id":"pick","intent":"x","shape":"scout","status":"needs-captain","project":"demo","asks":[
+{"version":2,"tasks":[{"id":"pick","intent":"x","shape":"scout","state":"active","project":"demo","asks":[
  {"id":"a1","text":"DB?","since":"2026-10-21T09:00:00Z","options":["Postgres","SQLite"]},
  {"id":"a2","text":"CI?","since":"2026-10-21T09:00:00Z","options":["Buildkite","Actions"]},
  {"id":"a3","text":"Region?","since":"2026-10-21T09:00:00Z","options":["eu","us"]}]}]}
@@ -339,7 +339,7 @@ grep -q "applied option picks: pick#a2" <<<"$out" && ok "...and reports what it 
 eq "$(jq -r 'select(.id=="k2") | .answered' "$PROJ/inbox.jsonl")" true "--keep-open keeps the ask a3 open but still answers its comment"
 eq "$(jq -r 'select(.id=="k4") | .answered' "$PROJ/inbox.jsonl")" false "an undelivered pick is neither applied nor answered"
 cat >"$T/root/state/fleet.json" <<'J'
-{"tasks":[{"id":"pick","intent":"x","shape":"scout","status":"needs-captain","project":"demo","asks":[
+{"version":2,"tasks":[{"id":"pick","intent":"x","shape":"scout","state":"active","project":"demo","asks":[
  {"id":"a1","text":"DB?","since":"2026-10-21T09:00:00Z","options":["Postgres","SQLite"]}]}]}
 J
 cp "$T/root/state/fleet.json" "$T/fleet.before"
@@ -351,7 +351,7 @@ printf '%s\n' '{"id":"k6","at":"2026-10-21T10:00:00Z","project":"demo","target":
 eq "$rc" 0 "two picks on one ask: the second does not fail the reply"
 eq "$(jq -c '.tasks[0].asks' "$T/root/state/fleet.json")" '[]' "...and the ask is answered once"
 cat >"$T/root/state/fleet.json" <<'J'
-{"tasks":[{"id":"pick","intent":"x","shape":"scout","status":"needs-captain","project":"demo","asks":[{"id":"a1","text":"DB?","since":"2026-10-21T09:00:00Z"},{"id":"a2","text":"CI?","since":"2026-10-21T09:00:00Z"}]}]}
+{"version":2,"tasks":[{"id":"pick","intent":"x","shape":"scout","state":"active","project":"demo","asks":[{"id":"a1","text":"DB?","since":"2026-10-21T09:00:00Z"},{"id":"a2","text":"CI?","since":"2026-10-21T09:00:00Z"}]}]}
 J
 echo '{"id":"k8","at":"2026-10-21T10:00:00Z","project":"demo","target":"t-pick#a1","text":"Picked: A","prompt":{},"delivered":true,"answered":false,"choice":{"task":"pick","ask":"a1","option":"A"}}' >"$PROJ/inbox.jsonl"
 "$P" reply demo "need detail" --followup pick:a1 >/dev/null 2>&1
@@ -390,15 +390,14 @@ jq '.lastRender=(now-5|todate)' "$PROJ/page.json" >"$PROJ/p.tmp" && mv "$PROJ/p.
 
 # ---- status warns about live tasks with no project ----
 cat >"$T/root/state/fleet.json" <<J
-{"tasks":[{"id":"loose-in-repo","intent":"x","shape":"ship","status":"running","workspaceId":"/tmp/some-repo-wt/feat"},
-{"id":"loose-in-repo2","intent":"x","shape":"ship","status":"running","workspaceId":"/tmp/some-repo/sub"},
-{"id":"loose-other","intent":"x","shape":"scout","status":"queued"},
-{"id":"done-loose","intent":"x","shape":"scout","status":"done"},
-{"id":"tagged","intent":"x","shape":"scout","status":"running","project":"demo"}]}
+{"version":2,"tasks":[{"id":"loose-a","intent":"x","shape":"ship","state":"active"},
+{"id":"loose-b","intent":"x","shape":"ship","state":"active"},
+{"id":"loose-other","intent":"x","shape":"scout","state":"queued"},
+{"id":"done-loose","intent":"x","shape":"scout","state":"done"},
+{"id":"tagged","intent":"x","shape":"scout","state":"active","project":"demo"}]}
 J
 w="$("$P" status 2>&1 >/dev/null)"
-grep -q "live task loose-in-repo2 has no project, but its workspace is in project demo's repo (/tmp/some-repo): bin/fleet set loose-in-repo2 project=demo" <<<"$w" && ok "status warns about a project-less task whose workspace is in a project's repo" || bad "status repo warning" "$w"
-grep -q "1 live task has no project while project pages exist (loose-other)\|2 live tasks have no project while project pages exist (loose-in-repo, loose-other)" <<<"$w" && ok "...and counts the other project-less live tasks" || bad "status generic warning" "$w"
+grep -q "3 live tasks have no project while project pages exist (loose-a, loose-b, loose-other)" <<<"$w" && ok "status counts the project-less live tasks" || bad "status generic warning" "$w"
 grep -q "done-loose\|tagged" <<<"$w" && bad "done and tagged tasks are not warned about" || ok "done and tagged tasks are not warned about"
 rm -f "$T/root/state/fleet.json"
 

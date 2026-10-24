@@ -11,7 +11,10 @@ import { groupOf, liveJs, renderProject } from "../server/render.ts";
 const here = dirname(fileURLToPath(import.meta.url));
 const root = join(here, "fixtures", "root");
 const agents = JSON.parse(readFileSync(join(here, "fixtures", "agents.json"), "utf8"));
-const opts = { now: new Date("2026-10-21T10:15:30Z"), paseoAgentUrl: (id: string) => `http://paseo.test/agent/${id}`, tickSeconds: 20 };
+// the agents Paseo finds by the fm.task label (the registry no longer names them)
+const labeled = Object.fromEntries(Object.entries({ "pick-db": "ag-pick", "ship-api": "ag-api", "done-live": "ag-done", "broke-build": "ag-broke" })
+  .map(([task, id]) => [task, [{ id, status: agents[id].status, archived: false, createdAt: agents[id].createdAt }]]));
+const opts = { now: new Date("2026-10-21T10:15:30Z"), paseoAgentUrl: (id: string) => `http://paseo.test/agent/${id}`, tickSeconds: 20, labeled };
 const model = loadProject(root, "deck-demo");
 const r = renderProject(model, agents, opts);
 

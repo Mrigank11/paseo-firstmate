@@ -13,8 +13,8 @@ function world(opts: { pendingSince?: string; otherStatus?: string; comments?: o
   mkdirSync(join(r, "state/projects/p"), { recursive: true });
   writeFileSync(join(r, "state/projects/p/project.json"), JSON.stringify({ title: "p", sections: [] }));
   const ask = { text: "A or B?", since: SINCE, ...(opts.pendingSince ? { pendingSince: opts.pendingSince } : {}) };
-  writeFileSync(join(r, "state/fleet.json"), JSON.stringify({ tasks: [
-    { id: "pick", project: "p", status: "needs-captain", asks: opts.asks ?? [ask] },
+  writeFileSync(join(r, "state/fleet.json"), JSON.stringify({ version: 2, tasks: [
+    { id: "pick", project: "p", state: "active", asks: opts.asks ?? [ask] },
     { id: "mockups", project: "p", status: opts.otherStatus ?? "queued" },
   ] }));
   writeFileSync(join(r, "state/projects/p/inbox.jsonl"), (opts.comments ?? []).map((e) => JSON.stringify(e) + "\n").join(""));

@@ -20,11 +20,11 @@ function world() {
   writeFileSync(join(p, "project.json"), JSON.stringify({ title: "Demo", sections: [] }));
   writeFileSync(join(root, "state", "tasks", "a", "card.md"), "Card **A**\n");
   writeFileSync(join(root, "state", "tasks", "b", "card.md"), "Card B\n");
-  writeFileSync(join(root, "state", "fleet.json"), JSON.stringify({ tasks: [
-    { id: "a", intent: "a", status: "done", project: "demo", order: 2, provider: "Sonnet 5", agentId: "ag1" },
-    { id: "b", intent: "b", status: "done", project: "demo", order: 1 },
-    { id: "c", intent: "c", status: "done", project: "demo" },
-    { id: "q", intent: "q", status: "queued", project: "demo", provider: "Sonnet 5.5", agentId: "ag2" },
+  writeFileSync(join(root, "state", "fleet.json"), JSON.stringify({ version: 2, tasks: [
+    { id: "a", intent: "a", state: "done", project: "demo", order: 2, provider: "Sonnet 5", agentId: "ag1" },
+    { id: "b", intent: "b", state: "done", project: "demo", order: 1 },
+    { id: "c", intent: "c", state: "done", project: "demo" },
+    { id: "q", intent: "q", state: "queued", project: "demo", provider: "Sonnet 5.5", agentId: "ag2" },
   ] }));
   return root;
 }
@@ -46,14 +46,6 @@ test("done tasks with a card go under Done, unread (ordered, hashed, with button
   const d = r.live.slice(r.live.indexOf('id="g-done"'));
   assert.ok(d.includes('id="t-c"') && !d.includes('class="mr"'));
   assert.match(r.live, /class="sum c-done" data-k="u">2 done, unread/);
-});
-
-test("without Paseo's record the task's provider is the label", () => {
-  const root = world();
-  const r = renderProject(loadProject(root, "demo"), {}, opts);
-  assert.match(r.live, /Sonnet 5\.5/);
-  const m = loadProject(root, "demo");
-  assert.equal(m.tasks.find((t) => t.id === "q")!.provider, "Sonnet 5.5");
 });
 
 test("the page script carries the endpoint URL and degrades silently without fetch", () => {
@@ -100,9 +92,9 @@ test("Needs-you ask: BLUF text is the bold label, context is open and does not r
   mkdirSync(join(root, "state", "tasks", "q", "asks"), { recursive: true });
   writeFileSync(join(root, "state", "tasks", "q", "asks", "1.md"), "**BLUF: pick one.**\n\n1. First\n2. Second\n");
   writeFileSync(join(root, "state", "tasks", "b", "card.md"), "Brief body\n\n## Notes\n\nSide notes\n");
-  writeFileSync(join(root, "state", "fleet.json"), JSON.stringify({ tasks: [
-    { id: "q", intent: "q", status: "needs-captain", project: "demo", asks: [{ id: "a1", text: "BLUF: pick one.", since: "2026-10-21T09:00:00Z", context: "tasks/q/asks/1.md" }] },
-    { id: "b", intent: "b", status: "done", project: "demo" },
+  writeFileSync(join(root, "state", "fleet.json"), JSON.stringify({ version: 2, tasks: [
+    { id: "q", intent: "q", state: "active", project: "demo", asks: [{ id: "a1", text: "BLUF: pick one.", since: "2026-10-21T09:00:00Z", context: "tasks/q/asks/1.md" }] },
+    { id: "b", intent: "b", state: "done", project: "demo" },
   ] }));
   const live = renderProject(loadProject(root, "demo"), {}, opts).live;
   assert.match(live, /<div class="ask"><b>BLUF: pick one\.<\/b><\/div>/);
@@ -125,7 +117,7 @@ test("a 160-char title renders in full and the title cell wraps", async () => {
   const { CSS } = await import("../server/style.ts");
   const root = world();
   const long = ("A very long task title with words " + "and-an-unbreakable-" + "x".repeat(40) + " ").repeat(1).padEnd(160, "y").slice(0, 160);
-  writeFileSync(join(root, "state", "fleet.json"), JSON.stringify({ tasks: [{ id: "lt", intent: "lt", title: long, status: "queued", project: "demo" }] }));
+  writeFileSync(join(root, "state", "fleet.json"), JSON.stringify({ version: 2, tasks: [{ id: "lt", intent: "lt", title: long, state: "queued", project: "demo" }] }));
   const live = renderProject(loadProject(root, "demo"), {}, opts).live;
   assert.ok(live.includes(long));
   assert.match(CSS, /\.tt\{flex-wrap:wrap\}\.ttl\{min-width:0;overflow-wrap:anywhere\}/);
