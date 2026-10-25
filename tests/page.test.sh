@@ -11,7 +11,8 @@ export FAKE_PLUGIN_STATUS=running
 export PASEO_AGENT_ID=agent-fm-1
 export PAGE_VERIFY_SECS=3 PAGE_INSTALL_WAIT=6
 export STAGE_AGENTS_JSON="$T/no-agents.json"; echo '[{"id":"crew-9","task":"scout-1","status":"running","archived":false,"createdAt":null,"lastActivityAt":null,"pending":0}]' >"$T/no-agents.json"
-unset PASEO_HOME LAVISH_AXI_PORT LAVISH_AXI_STATE_DIR FIRSTMATE_LABEL
+unset LAVISH_AXI_PORT LAVISH_AXI_STATE_DIR LAVISH_AXI_BIN FIRSTMATE_LABEL
+export PASEO_HOME="$T/paseo-home-default"  # never read the live ~/.paseo settings (lavishBin)
 pass=0; fail=0
 ok()  { echo "PASS $1"; pass=$((pass+1)); }
 bad() { echo "FAIL $1 ${2:-}"; fail=$((fail+1)); }
@@ -430,6 +431,26 @@ grep -q "lavish-axi reply .* port=4555 sdir=/plugin/lavish-state" "$FAKE_LOG" &&
 PAGE_VERIFY_SECS=3 "$P" start demo --reopen >/dev/null 2>&1; end_sim
 grep -q "lavish-axi $PROJ/page.html --reopen port=4555 sdir=/plugin/lavish-state" "$FAKE_LOG" && ok "start opens the page on the plugin's Lavish too" || bad "start uses plugin cfg" "$(cat "$FAKE_LOG")"
 rm -f "$T/root/state/page.env"
+
+# ---- lavishBin ----
+mkdir -p "$T/lb-home/plugin-settings/firstmate-deck"
+cat >"$T/stub-setting.mjs" <<'F'
+import { appendFileSync } from "node:fs"; appendFileSync(process.env.FAKE_LOG, "stub-setting " + process.argv.slice(2).join(" ") + "\n"); console.log("status: sent");
+F
+sed 's/stub-setting/stub-env/' "$T/stub-setting.mjs" >"$T/stub-env.mjs"
+lbrun() { : >"$FAKE_LOG"; PASEO_HOME="$T/lb-home" "$@" "$P" reply demo "lb" >/dev/null 2>&1; }
+echo "{\"version\":1,\"values\":{\"lavishBin\":\"$T/stub-setting.mjs\"}}" >"$T/lb-home/plugin-settings/firstmate-deck/deck.json"
+lbrun env LAVISH_AXI_BIN="$T/stub-env.mjs"
+grep -q "^stub-setting reply" "$FAKE_LOG" && ok "lavishBin setting wins over LAVISH_AXI_BIN" || bad "lavishBin setting wins" "$(cat "$FAKE_LOG")"
+grep -q "^lavish-axi" "$FAKE_LOG" && bad "...and PATH lavish-axi is not used" || ok "...and PATH lavish-axi is not used"
+echo '{"version":1,"values":{}}' >"$T/lb-home/plugin-settings/firstmate-deck/deck.json"
+lbrun env LAVISH_AXI_BIN="$T/stub-env.mjs"
+grep -q "^stub-env reply" "$FAKE_LOG" && ok "LAVISH_AXI_BIN is used when the setting is empty" || bad "env fallback" "$(cat "$FAKE_LOG")"
+lbrun env -u LAVISH_AXI_BIN
+grep -q "^lavish-axi reply" "$FAKE_LOG" && ok "PATH lavish-axi is used when neither is set" || bad "PATH fallback" "$(cat "$FAKE_LOG")"
+echo '{"version":1,"values":{"lavishBin":"/nonexistent/cli.mjs"}}' >"$T/lb-home/plugin-settings/firstmate-deck/deck.json"
+lbrun env -u LAVISH_AXI_BIN
+grep -q "^lavish-axi" "$FAKE_LOG" && bad "a missing lavishBin does not fall back to stock Lavish" || ok "a missing lavishBin does not fall back to stock Lavish"
 
 # ---- install ----
 export PASEO_HOME="$T/paseo-home"

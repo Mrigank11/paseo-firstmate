@@ -75,8 +75,23 @@ STALL_SECS="${PAGE_STALL_SECS:-120}"
 
 die() { echo "page: $*" >&2; exit 1; }
 
-lavish() { # lavish-axi from PATH if installed, else through npx
-  if command -v lavish-axi >/dev/null 2>&1; then lavish-axi "$@"; else npx -y lavish-axi "$@"; fi
+# Same order as the deck (plugin/firstmate-deck/server/lavish.ts): the deck's lavishBin setting, then LAVISH_AXI_BIN,
+# then lavish-axi on PATH, then npx. The first two name a cli.mjs and run under node.
+lavish_bin() {
+  local settings="${PASEO_HOME:-$HOME/.paseo}/plugin-settings/$PLUGIN_ID/deck.json" b=""
+  if [[ -s "$settings" ]]; then b="$(jq -r '(.values.lavishBin // "") | strings | gsub("^\\s+|\\s+$"; "")' "$settings" 2>/dev/null || true)"; fi
+  [[ -n "$b" ]] || b="${LAVISH_AXI_BIN:-}"
+  [[ "$b" != "~/"* ]] || b="$HOME/${b#\~/}"
+  printf '%s' "$b"
+}
+
+lavish() {
+  local bin; bin="$(lavish_bin)"
+  if [[ -n "$bin" ]]; then
+    [[ -f "$bin" ]] || die "lavishBin $bin does not exist"
+    node "$bin" "$@"
+  elif command -v lavish-axi >/dev/null 2>&1; then lavish-axi "$@"
+  else npx -y lavish-axi "$@"; fi
 }
 
 # The plugin's own Lavish port/state dir (from page.json) override env and state/page.env.
