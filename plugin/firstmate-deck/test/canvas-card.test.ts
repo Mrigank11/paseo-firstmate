@@ -151,8 +151,15 @@ test("a done card keeps its own shape: no live canvas, no links row", () => {
   assert.ok(!html.includes('class="cv') && !html.includes("cv-links"));
 });
 
-test("a done card with a canvas.final.html shows it expanded; card.md folds below, and is the fallback when there is no snapshot", () => {
-  const snap = `<!doctype html><html><body><div class="cv-snap">FINAL "canvas"</div></body></html>`;
+test("a done card with a canvas.final.html shows it inline, minus the frozen run chrome; card.md folds below, and is the fallback when there is no snapshot", () => {
+  const snap = `<!doctype html><html lang="en"><head><style>
+body{margin:0;background:#fff}
+.cv-snap{max-width:860px;margin:24px auto}
+.acv .lede{color:red}
+</style></head><body>
+<div class="cv-snap acv"><div class="acv"><article class="canvas"><div class="sheet"><div class="statusline"><div class="l1">Done · Paseo: idle</div></div><div class="trow dimmable"><span class="title">T</span><a href="x">Open agent in Paseo ↗</a></div><div class="sheet dimmable"><p class="lede">FINAL "canvas"</p></div></div></article></div></div>
+</body></html>
+`;
   const withSnap = (files: Record<string, string>) => {
     project([{ ...T, state: "done" }]);
     const dir = join(lastRoot, "state", "tasks", "t1");
@@ -160,12 +167,20 @@ test("a done card with a canvas.final.html shows it expanded; card.md folds belo
     for (const [f, c] of Object.entries(files)) writeFileSync(join(dir, f), c);
     return loadProject(lastRoot, "demo");
   };
-  const both = card(render(withSnap({ "canvas.final.html": snap, "card.md": "short card text" })).live);
-  assert.match(both, /<details class="cnotes cv-d" id="cvf-t1" open><summary>Final canvas<\/summary><iframe class="cv-final" title="Final canvas" sandbox srcdoc="[^"]*FINAL &quot;canvas&quot;/);
-  assert.ok(both.indexOf("cv-final") < both.indexOf("short card text"), "canvas first");
+  const r = render(withSnap({ "canvas.final.html": snap, "card.md": "short card text" }));
+  const both = r.live.slice(r.live.indexOf(`id="t-t1"`)); // the snapshot has its own <article>, so card() would cut short
+  assert.match(both, /<details class="cnotes cv-d" id="cvf-t1" open><summary>Final canvas<\/summary><div class="cv-f cv-fin acv"><div class="acv"><article class="canvas"><div class="sheet">.*FINAL "canvas"/s);
+  assert.ok(!both.includes("<iframe") && !both.includes("statusline") && !both.includes("Open agent in Paseo"), "inline, without the frozen status line and title row");
+  assert.ok(both.indexOf("cv-fin") < both.indexOf("short card text"), "canvas first");
   assert.match(both, /<details class="cnotes" id="cd-t1"><summary>Card<\/summary>.*short card text/s);
+  // its stylesheet is hoisted once, without the standalone document's body and wrapper rules
+  assert.equal((r.live.match(/<style data-cv-snap>/g) ?? []).length, 1);
+  assert.match(r.live, /<style data-cv-snap>\n\.acv \.lede\{color:red\}\n<\/style>/);
   const cardOnly = card(render(withSnap({ "card.md": "short card text" })).live);
-  assert.ok(!cardOnly.includes("cv-final") && /<div class="nt">.*short card text/s.test(cardOnly));
+  assert.ok(!cardOnly.includes("cv-fin") && /<div class="nt">.*short card text/s.test(cardOnly));
+  // a snapshot that is not the expected shape still shows, in a sandboxed frame
+  const odd = card(render(withSnap({ "canvas.final.html": "<p>odd</p>" })).live);
+  assert.match(odd, /<iframe class="cv-final" title="Final canvas" sandbox srcdoc="&lt;p&gt;odd/);
 });
 
 test("canvasFragment: long step lists are scaled, a missing BLUF or steps is simply absent, HTML is escaped", () => {

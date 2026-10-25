@@ -251,7 +251,7 @@ export function trailHtml(all: TrailComment[], target: string, now: Date, also?:
   return `<div class="trail"><span class="tr-who">💬 You${hm}</span><span class="tr-txt">${said}</span>${n}${chipHtml(last, now)}</div>`;
 }
 
-type Ctx = { byId: Map<string, Task>; unblocks: Map<string, string[]>; agents: Record<string, AgentView>; o: RenderOpts; comments: TrailComment[]; stages: Map<string, Stage>; canvas?: CanvasData };
+type Ctx = { snapCss: Set<string>; byId: Map<string, Task>; unblocks: Map<string, string[]>; agents: Record<string, AgentView>; o: RenderOpts; comments: TrailComment[]; stages: Map<string, Stage>; canvas?: CanvasData };
 
 /**
  * An ask's context repeats the ask text when it came from a longer text (the first sentence, bold or not). Show it once:
@@ -282,9 +282,46 @@ function cardHtml(t: Task): string {
   return `${markdown(t.card.slice(0, i))}<details class="cnotes" id="n-${esc(t.id)}"><summary>Notes</summary>${markdown(t.card.slice(i + NOTES_MARK.length))}</details>`;
 }
 
-/** The final canvas snapshot of a done task, expanded in the card: a sandboxed frame keeps its stylesheet off the page. */
-const finalCanvas = (t: Task): string =>
-  `<details class="cnotes cv-d" id="cvf-${esc(t.id)}" open><summary>Final canvas</summary><iframe class="cv-final" title="Final canvas" sandbox srcdoc="${esc(t.canvasFinal)}"></iframe></details>`;
+/** Removes the `<div class="${cls}"…>` element (balanced, nested divs counted) from `html`; the rest is returned untouched. */
+function dropDiv(html: string, cls: string): string {
+  const at = html.indexOf(`<div class="${cls}`);
+  if (at < 0) return html;
+  const tag = /<(\/?)div\b/g;
+  tag.lastIndex = at;
+  for (let depth = 0, m: RegExpExecArray | null; (m = tag.exec(html)); ) {
+    depth += m[1] ? -1 : 1;
+    if (depth === 0) return html.slice(0, at) + html.slice(html.indexOf(">", m.index) + 1);
+  }
+  return html;
+}
+
+/**
+ * Splits a `canvas.final.html` snapshot (canvas-cmd.ts) into the stylesheet and the canvas body, without the run chrome the
+ * snapshot froze in (the status line and the title row repeat the card's own header). Undefined when it is not that shape.
+ */
+export function snapshotParts(doc: string): { css: string; body: string } | undefined {
+  const css = /<style>([\s\S]*?)<\/style>/.exec(doc)?.[1];
+  const at = doc.indexOf('<div class="cv-snap acv">');
+  const end = doc.lastIndexOf("</div>\n</body>");
+  if (css === undefined || at < 0 || end < at) return undefined;
+  const body = dropDiv(dropDiv(doc.slice(at + '<div class="cv-snap acv">'.length, end), "statusline"), "trow")
+    .replace(/<(script|style)\b[\s\S]*?<\/\1>/gi, "");
+  // the page and wrapper rules (body, .cv-snap) belong to the standalone document, not to the card
+  const scoped = css.replace(/(?<=^|\})\s*(?:body|\.cv-snap)\s*\{[^}]*\}/g, "").replace(/@import[^;]*;/gi, "").trim();
+  return { css: scoped, body };
+}
+
+/**
+ * The final canvas snapshot of a done task, expanded in the card and set inline like a running canvas: natural height, the
+ * deck's tokens (`.cv-f`), no frame. Its stylesheet is scoped under `.acv` and hoisted once per page through `css`.
+ * A snapshot that is not the expected shape falls back to a sandboxed frame.
+ */
+const finalCanvas = (t: Task, css: Set<string>): string => {
+  const parts = snapshotParts(t.canvasFinal);
+  if (!parts) return `<details class="cnotes cv-d" id="cvf-${esc(t.id)}" open><summary>Final canvas</summary><iframe class="cv-final" title="Final canvas" sandbox srcdoc="${esc(t.canvasFinal)}"></iframe></details>`;
+  if (parts.css) css.add(parts.css);
+  return `<details class="cnotes cv-d" id="cvf-${esc(t.id)}" open><summary>Final canvas</summary><div class="cv-f cv-fin acv">${parts.body}</div></details>`;
+};
 
 /** A done task whose card the captain can mark read: it has a non-empty card.md. */
 export const markable = (t: Task): boolean => t.card.trim() !== "";
@@ -370,7 +407,7 @@ function row(t: Task, group: GroupKey, ctx: Ctx, idx = 0): string {
   const body = t.card.trim() ? cardHtml(t) : esc(t.notes);
   // a done task with a final canvas shows it expanded; the short card is the fallback when there is none, else it folds away
   if (group === "done" && t.canvasFinal) {
-    out.push(finalCanvas(t));
+    out.push(finalCanvas(t, ctx.snapCss));
     if (body) out.push(`<details class="cnotes" id="cd-${esc(t.id)}"><summary>Card</summary><div class="nt">${body}</div></details>`);
   } else if (body) out.push(`<div class="nt">${body}</div>`);
   // a done card with a card.md keeps its notes in the same place; a report on disk is pointed at, not inlined
@@ -436,7 +473,7 @@ function renderLive(model: ProjectModel, agents: Record<string, AgentView>, o: R
   const unblocks = new Map<string, string[]>();
   for (const t of all) for (const d of t.depends_on) unblocks.set(d, [...(unblocks.get(d) ?? []), t.id]);
   const stages = stagesOf(model, agents, o);
-  const ctx: Ctx = { byId, unblocks, agents, o, comments: model.comments, stages, canvas: o.canvas };
+  const ctx: Ctx = { snapCss: new Set(), byId, unblocks, agents, o, comments: model.comments, stages, canvas: o.canvas };
 
   const buckets: Record<GroupKey, { t: Task; g: GroupKey }[]> = { you: [], fm: [], running: [], blocked: [], next: [], parked: [], done: [] };
   for (const t of model.tasks) buckets[stages.get(t.id)!.group].push({ t, g: stages.get(t.id)!.group });
@@ -485,6 +522,7 @@ function renderLive(model: ProjectModel, agents: Record<string, AgentView>, o: R
     if (k === "done" || k === "parked") parts.push(`<details class="grp" id="g-${k}"><summary>${h}</summary>\n${rows}</details>`);
     else parts.push(`<section class="grp" id="g-${k}">${h}\n${rows}</section>`);
   }
+  if (ctx.snapCss.size) parts.push(`<style data-cv-snap>\n${[...ctx.snapCss].join("\n").replace(/<\/style/gi, "<\\/style")}\n</style>`);
   if (parts.length === 1) parts.push(`<div class="m">No tasks for this project yet.</div>`);
   // Trails for the page and the sections live outside the live block (page.html is not rewritten per comment);
   // the page script copies these into their slots after every swap.
