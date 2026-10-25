@@ -83,12 +83,17 @@ test("page.html is rewritten only when the signature moves; live.js on every ren
   r.world.status = "idle"; // agent status is part of the signature
   r.deck.onAgentEvent("ag-1");
   await r.deck.render("demo");
-  assert.notEqual(readFileSync(r.page, "utf8"), "MARKER", "agent status changed: html rewritten");
+  assert.equal(readFileSync(r.page, "utf8"), "MARKER", "agent status changed: html untouched (Lavish reloads the page when it is rewritten)");
 
-  writeFileSync(r.page, "MARKER");
+
   writeFileSync(join(r.root, "state", "fleet.json"), JSON.stringify({ version: 2, tasks: [{ ...FLEET.tasks[0], state: "done" }] }));
   await r.deck.render("demo");
-  assert.notEqual(readFileSync(r.page, "utf8"), "MARKER", "fleet change: html rewritten");
+  assert.equal(readFileSync(r.page, "utf8"), "MARKER", "fleet change: html untouched");
+  assert.match(readFileSync(r.live, "utf8"), /done/, "the change reaches the page through live.js");
+
+  writeFileSync(join(r.root, "state", "projects", "demo", "project.json"), JSON.stringify({ title: "Renamed", sections: ["endpoints"] }));
+  await r.deck.render("demo");
+  assert.notEqual(readFileSync(r.page, "utf8"), "MARKER", "title change: html rewritten");
   r.deck.stop();
 });
 
@@ -383,7 +388,7 @@ test("C3: an empty or malformed fleet.json keeps the last good view, sets loadEr
   await r.deck.render("demo");
   assert.match(liveHtml(r.live), /keep me visible/, "an empty fleet.json does not empty the page");
   assert.equal(readPageJson(join(r.pdir, "page.json")).loadError, "fleet.json: file is empty");
-  assert.match(readFileSync(r.page, "utf8"), /Task state could not be read \(fleet\.json\): showing the last good view/);
+  assert.match(liveHtml(r.live), /Task state could not be read \(fleet\.json\): showing the last good view/);
   assert.match((await r.deck.summary()).projects[0].banner ?? "", /Task state could not be read \(fleet\.json\)/);
   writeFileSync(fleet, '{"tasks":[{"id":"t1","intent":"half');
   await r.deck.render("demo");
@@ -393,7 +398,7 @@ test("C3: an empty or malformed fleet.json keeps the last good view, sets loadEr
   await r.deck.render("demo");
   assert.match(liveHtml(r.live), /back to normal/);
   assert.equal(readPageJson(join(r.pdir, "page.json")).loadError, null);
-  assert.ok(!/Task state could not be read/.test(readFileSync(r.page, "utf8")), "the banner goes away");
+  assert.ok(!/Task state could not be read/.test(liveHtml(r.live)), "the banner goes away");
   r.deck.stop();
 });
 
@@ -402,7 +407,7 @@ test("C3: with no last good view (plugin just started) a broken fleet.json rende
   writeFileSync(join(r.root, "state", "fleet.json"), "{ nope");
   await r.deck.configure();
   await r.deck.render("demo");
-  assert.match(readFileSync(r.page, "utf8"), /Task state could not be read \(fleet\.json\)/);
+  assert.match(liveHtml(r.live), /Task state could not be read \(fleet\.json\)/);
   assert.match(readPageJson(join(r.pdir, "page.json")).loadError ?? "", /^fleet\.json: invalid JSON/);
   r.deck.stop();
 });

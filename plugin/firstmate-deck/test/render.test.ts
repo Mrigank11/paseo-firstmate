@@ -73,10 +73,12 @@ test("URLs in the ask line and its context markdown are clickable, in a new tab"
   assert.ok(live.includes(`<code>${url}</code>`));
 });
 
-test("replying changes the signature", () => {
+test("replying changes the live payload, not the page file's signature", () => {
   const m = structuredClone(model);
   delete m.tasks.find((x) => x.id === "ask-fm")!.asks[0].repliedAt;
-  assert.notEqual(renderProject(m, agents, opts).signature, r.signature);
+  const out = renderProject(m, agents, opts);
+  assert.equal(out.signature, r.signature);
+  assert.notEqual(out.live, r.live);
 });
 
 test("failed marker, done collapsed, dependency across the archive", () => {
@@ -92,7 +94,9 @@ test("live block shape", () => {
   assert.ok(r.page.includes("<div id=\"live\"><!--LIVE-START-->" + r.live.replace("{TS}", "10:15:30") + "<!--LIVE-END--></div>"));
   assert.match(liveJs("a\"b"), /^window\.__fdLive&&window\.__fdLive\("a\\"b"\);\n$/);
   assert.match(r.page, /page\.live\.js/);
-  assert.match(r.page, /last update <b>2026-10-21 10:15 UTC<\/b>/);
+  assert.match(r.page, /last update <b data-slot="stamp">2026-10-21 10:15 UTC<\/b>/);
+  assert.match(r.live, /<div data-slot-for="stamp">2026-10-21 10:15 UTC<\/div>/, "the stamp rides in the live payload");
+  assert.match(r.live, /<div data-slot-for="banner"><\/div>/);
 });
 
 test("sections and nav", () => {
@@ -102,16 +106,25 @@ test("sections and nav", () => {
   assert.match(r.page, /<a href="#how">How it runs<\/a>/);
 });
 
-test("signature ignores step text, tracks status and task data", () => {
+test("signature covers the page's frame only: tasks, agents and stages never move it", () => {
   const a2 = structuredClone(agents);
   a2["ag-api"].recent = ["Something else entirely"];
   a2["ag-api"].stepCount = 99;
   assert.equal(renderProject(model, a2, opts).signature, r.signature);
   a2["ag-api"].status = "idle";
-  assert.notEqual(renderProject(model, a2, opts).signature, r.signature);
+  assert.equal(renderProject(model, a2, opts).signature, r.signature, "agent status");
   const m2 = structuredClone(model);
   m2.tasks[0].notes = "changed";
-  assert.notEqual(renderProject(m2, agents, opts).signature, r.signature);
+  m2.tasks[0].state = "done";
+  assert.equal(renderProject(m2, agents, opts).signature, r.signature, "task data");
+  assert.equal(renderProject(model, agents, { ...opts, now: new Date("2026-10-21T11:00:00Z"), banner: { kind: "ended", text: "x" } }).signature, r.signature, "stamp and banner");
+  const m3 = structuredClone(model);
+  m3.title = "Another title";
+  assert.notEqual(renderProject(m3, agents, opts).signature, r.signature, "title");
+  const m4 = structuredClone(model);
+  m4.sections[0].content += "\nmore";
+  assert.notEqual(renderProject(m4, agents, opts).signature, r.signature, "section content");
+  assert.notEqual(renderProject(model, agents, { ...opts, canvas: { status: "ok", css: ".x{}", summaries: {}, cards: {} } }).signature, r.signature, "canvas css");
 });
 
 test("agent step text is escaped; banner renders", () => {
@@ -121,6 +134,7 @@ test("agent step text is escaped; banner renders", () => {
   assert.ok(!out.live.includes("<script>x"));
   assert.match(out.live, /&lt;script&gt;x/);
   assert.match(out.page, /<div class="banner b-bad" role="status">Plugin &lt;down&gt;<\/div>/);
+  assert.match(out.live, /<div data-slot-for="banner"><div class="banner b-bad" role="status">Plugin &lt;down&gt;<\/div><\/div>/);
 });
 
 test("loader: missing is empty; a broken fleet.json is reported, not thrown; a broken archive line is skipped", () => {

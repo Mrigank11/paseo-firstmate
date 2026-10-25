@@ -6,6 +6,7 @@ import { inline, markdown } from "./markdown.ts";
 import { ICON, svg } from "./icons.ts";
 import { navScript } from "./nav-script.ts";
 import { pageScript } from "./page-script.ts";
+import { IDIOMORPH_SOURCE } from "./morph-source.ts";
 import { CSS } from "./style.ts";
 import type { ProjectModel, Task, TrailComment } from "./state.ts";
 import { computeStage, currentAgent, stageAgentsFor, type GroupKey, type LabeledAgent, type Stage, type StageFlag } from "./stage.ts";
@@ -490,6 +491,8 @@ function renderLive(model: ProjectModel, agents: Record<string, AgentView>, o: R
     .map((k) => [k, trailHtml(model.comments, k, o.now)] as const).filter(([, h]) => h)
     .map(([k, h]) => `<div data-trail-for="${esc(k)}">${h}</div>`).join("");
   parts.push(`<div hidden data-trails>${slots}</div>`);
+  // The two time-varying bits of the shell travel here too, so page.html stays still while the page is live.
+  parts.push(`<div hidden data-slots><div data-slot-for="stamp">${esc(stampLong(o.now))}</div><div data-slot-for="banner">${bannerHtml(o.banner)}</div></div>`);
   parts.push(`<div hidden data-tn>${navHtml(buckets)}</div>`);
   return parts.join("\n");
 }
@@ -519,31 +522,21 @@ export function liveJs(liveHtml: string, iso?: string, seq?: number): string {
 
 export const STALE_TEXT = "This page stopped updating. Your comments may not reach the first mate until it's fixed (the first mate can run bin/page heal).";
 
+function bannerHtml(b: RenderOpts["banner"]): string {
+  return b ? `<div class="banner ${b.kind === "ended" ? "b-off" : "b-bad"}" role="status">${esc(b.text)}</div>` : "";
+}
+
 export function renderProject(model: ProjectModel, agents: Record<string, AgentView>, opts: RenderOpts): Rendered {
   const live = renderLive(model, agents, opts);
   const pageFile = opts.pageFile ?? (model.page ? model.page.slice(model.page.lastIndexOf("/") + 1) : "page.html");
   const liveFile = pageFile.replace(/\.[^./]*$/, "") + ".live.js";
 
-  const sig = createHash("sha1")
-    .update(JSON.stringify([
-      { ...model, comments: undefined },
-      opts.banner ?? null,
-      opts.marksUrl ?? null,
-      createHash("sha1").update(opts.canvas?.css ?? "").digest("hex"),
-      Object.keys(agents).sort().map((id) => [id, agents[id].status]),
-      [...stagesOf(model, agents, opts)].map(([id, st]) => [id, st.stage, st.agentId, st.flags.map((f) => f.key)]),
-    ]))
-    .digest("hex");
-
   const names = model.sections.map((s) => s.name);
   const nav = [`<a href="#tasks">Tasks</a>`, ...names.map((n) =>
     `<a href="#${esc(n)}">${esc(model.sectionTitles[n] ?? DEFAULT_TITLES[n] ?? titleCase(n))}</a>`)].join("");
-  const banner = opts.banner
-    ? `<div class="banner ${opts.banner.kind === "ended" ? "b-off" : "b-bad"}" role="status">${esc(opts.banner.text)}</div>`
-    : "";
-  const stamped = live.replace(/\{TS\}/g, stampShort(opts.now));
-
-  const page = `<!doctype html>
+  // The shell is everything except the three things that change while the page is live: the task snapshot in #live,
+  // the "last update" stamp and the session banner (the live payload carries the latter two in slots).
+  const shell = (snapshot: string, stamp: string, banner: string) => `<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>${esc(model.title)} · status</title>
 <style>
@@ -557,24 +550,30 @@ ${CSS}
 <div class="tn-sheet" id="tn-sheet" role="dialog" aria-modal="true" aria-label="Tasks by stage" data-lavish-action hidden><div class="tn-sb" id="tn-sl"></div><div class="tn-sf"><button class="tn-fx tn-fxl" type="button" aria-pressed="false">${svg(ICON.focus)}<span>Focus view</span></button><button class="tn-sx" id="tn-sx" type="button">Close</button></div></div>
 <main>
 <h1>${esc(model.title)}</h1>
-<div class="sub">Kept current by the firstmate-deck plugin · last update <b>${esc(stampLong(opts.now))}</b></div>
+<div class="sub">Kept current by the firstmate-deck plugin · last update <b data-slot="stamp">${stamp}</b></div>
 <p class="chan"><b>This page is our channel.</b> Comment on any card or block, then Send; the first mate answers here.</p>
 <div class="trail-slot" data-trail-slot="page"></div>
 <div class="banner b-bad" id="fd-stale" role="status" hidden>${esc(STALE_TEXT)}</div>
-${banner}
+<div data-slot="banner">${banner}</div>
 <nav>${nav}</nav>
 <button class="tn-bar" id="tn-bar" type="button" data-lavish-action aria-haspopup="dialog" aria-expanded="false" aria-controls="tn-sheet" hidden></button>
 
 <h2 id="tasks">Tasks</h2>
 <div class="m">Each task once: its state, its crew agent live, and what it depends on. Titles and “Open in Paseo” go to the agent in the Paseo web UI.</div>
 <div class="tn-fbar" id="tn-fbar" role="status" data-lavish-action hidden></div>
-<div id="live"><!--LIVE-START-->${stamped}<!--LIVE-END--></div>
+<div id="live"><!--LIVE-START-->${snapshot}<!--LIVE-END--></div>
 ${names.map((n) => renderSection(model, n)).join("\n")}
 <script>
 ${navScript()}
+${IDIOMORPH_SOURCE.replace(/<\/script/gi, "<\\/script")}
 ${pageScript(model.project, liveFile, opts.tickSeconds, opts.marksUrl)}
 </script>
 </main></body></html>
 `;
-  return { page, live, signature: sig };
+  // The signature is the shell with its volatile parts blanked, so any change to the frame (title, sections, CSS,
+  // scripts, marks url) moves it and a task, agent or stage change does not: Lavish reloads the page when page.html is
+  // rewritten, so that file must stay still while crews work.
+  const signature = createHash("sha1").update(shell("", "", "")).digest("hex");
+  const page = shell(live.replace(/\{TS\}/g, stampShort(opts.now)), esc(stampLong(opts.now)), bannerHtml(opts.banner));
+  return { page, live, signature };
 }

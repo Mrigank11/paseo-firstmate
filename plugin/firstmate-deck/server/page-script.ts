@@ -24,7 +24,7 @@ export function pageScript(project: string, liveFile: string, tickSeconds: numbe
   function place(box,list){var kids=[].slice.call(box.children),same=kids.length===list.length;
     for(var i=0;same&&i<list.length;i++)if(kids[i]!==list[i])same=false;
     if(!same)list.forEach(function(t){box.appendChild(t)})}
-  function arrange(){var u=document.getElementById("g-doneu"),d=document.getElementById("g-done");if(!u||!d)return;
+  function arrange(root){root=root||document;var g=function(i){return root===document?document.getElementById(i):root.querySelector("#"+i)},u=g("g-doneu"),d=g("g-done");if(!u||!d)return;
     // cards the server already placed in Done are read (it applied the stored marks): adopt that, so an unreachable endpoint does not undo it
     [].slice.call(d.querySelectorAll(".task[data-h]")).forEach(function(t){if(!(t.id in R))R[t.id]=t.getAttribute("data-h")});
     var all=[].slice.call(u.querySelectorAll(".task")).concat([].slice.call(d.querySelectorAll(".task")));
@@ -34,8 +34,8 @@ export function pageScript(project: string, liveFile: string, tickSeconds: numbe
       (unread?ul:dl).push(t);if(!bad){if(unread)cu++;else cd++}});
     place(ur,ul);place(dr,dl);
     u.querySelector(".cn").textContent=ul.length;d.querySelector(".cn").textContent=dl.length;u.hidden=!ul.length;d.hidden=!dl.length;
-    [].slice.call(document.querySelectorAll(".sum[data-k]")).forEach(function(a){var un=a.getAttribute("data-k")==="u",n=un?cu:cd;
-      a.hidden=!n;a.textContent=n+(un?" done, unread":" done")});tn()}
+    [].slice.call(root.querySelectorAll(".sum[data-k]")).forEach(function(a){var un=a.getAttribute("data-k")==="u",n=un?cu:cd;
+      a.hidden=!n;a.textContent=n+(un?" done, unread":" done")});if(root===document)tn()}
   // the task navigator (nav-script.ts) rebuilds from the live block's data-tn template and re-reads the unread marks
   function tn(){if(window.__tn)try{window.__tn()}catch(e){}}
   var pt=null;
@@ -54,7 +54,11 @@ export function pageScript(project: string, liveFile: string, tickSeconds: numbe
   document.addEventListener("click",function(e){var a=e.target.closest&&e.target.closest('a[href^="#"]');if(a)reveal(a.getAttribute("href").slice(1))});
   function fill(){var el=live();if(!el)return;document.querySelectorAll("[data-trail-slot]").forEach(function(s){
     var k=s.getAttribute("data-trail-slot"),src=null;el.querySelectorAll("[data-trail-for]").forEach(function(x){if(x.getAttribute("data-trail-for")===k)src=x});
-    s.innerHTML=src?src.innerHTML:""});tn()}
+    var h=src?src.innerHTML:"";if(s.innerHTML!==h)s.innerHTML=h});
+    // the "last update" stamp and the session banner live in the shell and arrive with every payload
+    document.querySelectorAll("[data-slot]").forEach(function(s){var k=s.getAttribute("data-slot"),src=null;
+      el.querySelectorAll("[data-slot-for]").forEach(function(x){if(x.getAttribute("data-slot-for")===k)src=x});
+      if(src&&s.innerHTML!==src.innerHTML)s.innerHTML=src.innerHTML});tn()}
   var Q={};
   function mark(box,opt,msg){box.querySelectorAll("button.opt").forEach(function(b){var on=b.getAttribute("data-opt")===opt;
       b.classList.toggle("on",on);b.setAttribute("aria-pressed",on?"true":"false");
@@ -88,7 +92,17 @@ export function pageScript(project: string, liveFile: string, tickSeconds: numbe
   window.__fdLive=function(html,iso,seq){var tk=seq!==undefined&&seq!==null?"s"+seq:(iso?"i"+iso:null);
     if(tk!==null&&tk!==token){token=tk;changedAt=Date.now();stale()}
     var el=live();if(!el||html===last)return;last=html;
-    var fk=fkey();snapshot();var y=window.scrollY,M="<!--LIVE-";el.innerHTML=M+"START-->"+html+M+"END-->";restore(el);arrange();reapply(el);fill();refocus(fk);window.scrollTo(0,y)};
+    var fk=fkey();snapshot();var y=window.scrollY,M="<!--LIVE-",I=window.Idiomorph;
+    if(I&&I.morph&&window.Element&&el instanceof window.Element){
+      // Morph, do not replace: build the new block off-screen, bring it in line with what this browser has done to the
+      // page (open folds, read marks, picked options), then let the morph touch only the nodes that differ. Nothing
+      // unchanged is re-created or moved, so embedded canvas frames do not reload and scroll, hover and selection stay.
+      var nx=document.createElement("div");nx.innerHTML=html;restore(nx);arrange(nx);reapply(nx);
+      I.morph(el,nx,{morphStyle:"innerHTML",restoreFocus:true,callbacks:{
+        beforeAttributeUpdated:function(a,n){if(a==="open"&&n.id&&n.id in S)return false},
+        beforeNodeMorphed:function(n,m){if(n.nodeName==="IFRAME"&&m.nodeName==="IFRAME"&&n.getAttribute("srcdoc")===m.getAttribute("srcdoc"))return false}}});
+      arrange();fill();refocus(fk);if(window.scrollY!==y)window.scrollTo(0,y);return}
+    el.innerHTML=M+"START-->"+html+M+"END-->";restore(el);arrange();reapply(el);fill();refocus(fk);window.scrollTo(0,y)};
   function tick(){var s=document.createElement("script");s.src=F+"?t="+Date.now();s.onload=s.onerror=function(){s.remove()};document.head.appendChild(s)}
   tick();setInterval(tick,${Math.max(1, Math.round(tickSeconds)) * 1000});
 })();`;
