@@ -44,6 +44,7 @@ export function pageScript(project: string, liveFile: string, tickSeconds: numbe
   function pull(){if(!MU)return;try{fetch(MU).then(function(r){return r.json()}).then(function(j){var ch=false,rr=(j&&j.r)||{},oo=(j&&j.o)||{};
     Object.keys(rr).forEach(function(k){if(R[k]!==rr[k]){R[k]=rr[k];ch=true}});
     Object.keys(oo).forEach(function(k){if(!(k in S)){S[k]=oo[k];ch=true}});
+    if(j&&j.s&&j.s.at>SA){SA=j.s.at;SEEN=j.s.keys||{};attn()}
     if(ch){save();restore(document);arrange();tn()}}).catch(function(){})}catch(e){}}
   document.addEventListener("click",function(e){var b=e.target.closest&&e.target.closest("button.mr,button.mra");if(!b)return;
     if(b.classList.contains("mr")){var t=b.closest(".task"),h=t&&t.getAttribute("data-h");if(h)R[t.id]=h}
@@ -58,7 +59,41 @@ export function pageScript(project: string, liveFile: string, tickSeconds: numbe
     // the "last update" stamp and the session banner live in the shell and arrive with every payload
     document.querySelectorAll("[data-slot]").forEach(function(s){var k=s.getAttribute("data-slot"),src=null;
       el.querySelectorAll("[data-slot-for]").forEach(function(x){if(x.getAttribute("data-slot-for")===k)src=x});
-      if(src&&s.innerHTML!==src.innerHTML)s.innerHTML=src.innerHTML});tn()}
+      if(src&&s.innerHTML!==src.innerHTML)s.innerHTML=src.innerHTML});tn();attn()}
+  // ---- the browser tab and the "new" dots. The live block carries (data-attn) the Needs-you count, one attention key per
+  // task and the keys the captain last saw. Unseen = keys that differ from the seen ones (nothing is unseen until
+  // something has been stored). Looking at the page for 3 s while its tab is visible marks what it showed as seen, and
+  // that is shared through the marks endpoint. The tab itself is set through Lavish's window.lavish.setDocumentMeta when
+  // the Lavish serving this page has it (stock Lavish does not: then only the dots work).
+  var A=null,SEEN=null,SA="",SV=null,metaSig=null,staleNow=false;
+  function unseen(){var u=[];if(!A||!SEEN)return u;Object.keys(A.keys).forEach(function(k){if(SEEN[k]!==A.keys[k])u.push(k)});return u}
+  function dots(u){var st=document.getElementById("fd-new");
+    if(!st){st=document.createElement("style");st.id="fd-new";document.head.appendChild(st)}
+    var css=u.filter(function(k){return /^t-[\\w.-]+$/.test(k)}).map(function(k){
+      return '[id="'+k+'"] .ttl::after{content:"new";margin-left:8px;padding:1px 6px;border-radius:9px;background:#2563eb;color:#fff;font:600 10px/14px system-ui,sans-serif;letter-spacing:.04em;text-transform:uppercase;vertical-align:2px}'+
+        '.tn-a[data-t="'+k+'"]::after{content:"";position:absolute;right:7px;top:50%;width:7px;height:7px;margin-top:-3.5px;border-radius:50%;background:#2563eb}'}).join("");
+    if(st.textContent!==css)st.textContent=css}
+  function icon(n,newer){var bad=staleNow,s='<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32"><rect width="32" height="32" rx="7" fill="'+(bad?"#9ca3af":"#1c1b19")+'"/>'+
+      '<text x="16" y="23" text-anchor="middle" font-family="sans-serif" font-weight="700" font-size="20" fill="#fff">F</text>';
+    if(!bad&&n>0)s+='<circle cx="22" cy="22" r="10" fill="#d97706"/><text x="22" y="26.5" text-anchor="middle" font-family="sans-serif" font-weight="700" font-size="13" fill="#fff">'+(n>9?"9+":n)+'</text>';
+    if(!bad&&newer)s+='<circle cx="25" cy="7" r="6" fill="#2563eb" stroke="#fff" stroke-width="2"/>';
+    return "data:image/svg+xml,"+encodeURIComponent(s+"</svg>")}
+  function meta(){if(!A)return;var u=unseen(),lv=window.lavish;if(!lv||!lv.setDocumentMeta)return;
+    var t=staleNow?"\u26a0 "+A.title:(A.n>0?"("+A.n+") ":"")+(u.length?"* ":"")+A.title,sig=t+"|"+(staleNow?"s":A.n+"/"+(u.length?1:0));
+    if(sig===metaSig)return;try{lv.setDocumentMeta({title:t,icon:icon(A.n,u.length>0)});metaSig=sig}catch(e){}}
+  function seeSoon(u){if(SV&&(!u.length||document.visibilityState!=="visible")){clearTimeout(SV);SV=null}
+    if(SV||!u.length||document.visibilityState!=="visible")return;var shown=JSON.parse(JSON.stringify(A.keys));
+    SV=setTimeout(function(){SV=null;if(document.visibilityState!=="visible")return;
+      var at=new Date().toISOString();if(at<=SA)at=new Date(Date.parse(SA)+1).toISOString();SA=at;SEEN=shown;
+      if(MU)try{fetch(MU,{method:"POST",headers:{"Content-Type":"text/plain"},body:JSON.stringify({s:{at:at,keys:shown}})}).catch(function(){})}catch(e){}
+      attn()},3000)}
+  function attn(){var el=live(),a=el&&el.querySelector&&el.querySelector("[data-attn]");if(!a)return;var keys={},seen=null;
+    try{keys=JSON.parse(a.getAttribute("data-keys")||"{}")}catch(e){}
+    try{var sj=a.getAttribute("data-seen");seen=sj?JSON.parse(sj):null}catch(e){}
+    if(seen&&seen.at&&seen.at>SA){SA=seen.at;SEEN=seen.keys||{}}
+    A={n:parseInt(a.getAttribute("data-n"),10)||0,title:a.getAttribute("data-title")||"",keys:keys};
+    var u=unseen();dots(u);meta();seeSoon(u)}
+  document.addEventListener("visibilitychange",function(){attn()});
   var Q={};
   function mark(box,opt,msg){box.querySelectorAll("button.opt").forEach(function(b){var on=b.getAttribute("data-opt")===opt;
       b.classList.toggle("on",on);b.setAttribute("aria-pressed",on?"true":"false");
@@ -87,7 +122,7 @@ export function pageScript(project: string, liveFile: string, tickSeconds: numbe
   // Staleness is measured on THIS browser's clock only: how long ago the payload last CHANGED (the plugin stamps every
   // render with a growing sequence number and re-renders at least every 20 s). The daemon's timestamp is never compared
   // with the browser's, so a skewed phone clock cannot raise a false alarm or hide a real stall.
-  function stale(){var b=document.getElementById("fd-stale");if(b)b.hidden=!((Date.now()-changedAt)>STALE)}
+  function stale(){var b=document.getElementById("fd-stale");staleNow=(Date.now()-changedAt)>STALE;if(b)b.hidden=!staleNow;meta()}
   setInterval(stale,5000);
   window.__fdLive=function(html,iso,seq){var tk=seq!==undefined&&seq!==null?"s"+seq:(iso?"i"+iso:null);
     if(tk!==null&&tk!==token){token=tk;changedAt=Date.now();stale()}

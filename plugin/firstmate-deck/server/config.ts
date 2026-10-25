@@ -3,13 +3,15 @@ import { existsSync, realpathSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 
-export type SettingsValues = { firstmateRoot?: string; firstmateLabel?: string; lavishPort?: number; lavishStateDir?: string; readMarksPort?: number; readMarksHost?: string; canvasUrl?: string; canvasDir?: string };
+export type SettingsValues = { firstmateRoot?: string; firstmateLabel?: string; lavishPort?: number; lavishStateDir?: string; lavishBin?: string; readMarksPort?: number; readMarksHost?: string; canvasUrl?: string; canvasDir?: string };
 
 export type DeckConfig = {
   root: string;
   firstmateLabel: string;
   lavishPort?: string;
   lavishStateDir?: string;
+  /** Absolute path of a lavish-axi cli.mjs to use instead of the default lookup (settings only, no environment). */
+  lavishBin?: string;
   /** Port of the read-marks endpoint (default 4398). 0 turns it off. */
   readMarksPort?: number;
   /** Fallback tailnet host to bind when `tailscale ip -4` finds none. */
@@ -39,6 +41,7 @@ export function resolveConfig(s: SettingsValues, env: Record<string, string | un
     firstmateLabel: s.firstmateLabel || "firstmate=true",
     lavishPort: port,
     lavishStateDir: s.lavishStateDir || env.LAVISH_AXI_STATE_DIR || undefined,
+    lavishBin: s.lavishBin?.trim() || undefined,
     readMarksPort: Number.isInteger(s.readMarksPort) && (s.readMarksPort as number) >= 0 && (s.readMarksPort as number) < 65536 ? (s.readMarksPort as number) : READ_MARKS_DEFAULT_PORT,
     readMarksHost: s.readMarksHost || "",
   };

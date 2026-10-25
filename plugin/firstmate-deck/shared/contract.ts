@@ -13,6 +13,8 @@ export const deckSettings = defineSettings({
     firstmateLabel: z.string().default("firstmate=true"),
     lavishPort: z.number().int().default(4387),
     lavishStateDir: z.string().default(""),
+    // Absolute path of a lavish-axi cli.mjs to run instead of the PATH / npx-cache copy (e.g. a local fork). Empty = the default lookup.
+    lavishBin: z.string().default(""),
     // Read marks ("Done, unread" cards): the port of the plugin's tiny CORS endpoint, bound to 127.0.0.1 and the tailnet IP.
     // 4398, so it does not collide with a hand-run page's own 4399 while both run.
     readMarksPort: z.number().int().default(4398),

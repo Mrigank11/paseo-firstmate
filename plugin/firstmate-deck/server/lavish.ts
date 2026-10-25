@@ -47,7 +47,12 @@ function whichGlobal(): string | null {
 
 let cachedBin: string | null = null;
 /** Real path of lavish-axi's cli.mjs. Falls back to one `npx -y lavish-axi --version` to populate the cache. */
-export async function resolveLavishBin(): Promise<string> {
+export async function resolveLavishBin(override?: string): Promise<string> {
+  if (override) {
+    const p = override.startsWith("~/") ? join(homedir(), override.slice(2)) : override;
+    if (!existsSync(p)) throw new Error(`lavishBin ${p} does not exist`);
+    return realpathSync(p);
+  }
   if (cachedBin && existsSync(cachedBin)) return cachedBin;
   const env = process.env.LAVISH_AXI_BIN;
   if (env && existsSync(env)) return (cachedBin = env);

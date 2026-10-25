@@ -10,6 +10,7 @@ import { IDIOMORPH_SOURCE } from "./morph-source.ts";
 import { CSS } from "./style.ts";
 import type { ProjectModel, Task, TrailComment } from "./state.ts";
 import { computeStage, currentAgent, stageAgentsFor, type GroupKey, type LabeledAgent, type Stage, type StageFlag } from "./stage.ts";
+import { attentionOf, type Attention } from "./attention.ts";
 import { canvasInput, clickedPick, SAFE_ASK } from "./canvas-view.ts";
 import type { CanvasData, FmSummary } from "./canvas-port.ts";
 
@@ -51,7 +52,7 @@ export type RenderOpts = {
   canvas?: CanvasData;
 };
 
-export type Rendered = { page: string; live: string; signature: string };
+export type Rendered = { page: string; live: string; signature: string; attention: Attention };
 
 const GROUPS = [
   ["you", "Needs you"],
@@ -427,7 +428,7 @@ export function stagesOf(model: ProjectModel, agents: Record<string, AgentView>,
   return out;
 }
 
-function renderLive(model: ProjectModel, agents: Record<string, AgentView>, o: RenderOpts): string {
+function renderLive(model: ProjectModel, agents: Record<string, AgentView>, o: RenderOpts): { html: string; attention: Attention } {
   const liveIds = new Set(model.tasks.map((t) => t.id));
   const archive = model.archive.filter((t) => !liveIds.has(t.id)).reverse(); // newest first
   const all = [...model.tasks, ...archive];
@@ -494,7 +495,11 @@ function renderLive(model: ProjectModel, agents: Record<string, AgentView>, o: R
   // The two time-varying bits of the shell travel here too, so page.html stays still while the page is live.
   parts.push(`<div hidden data-slots><div data-slot-for="stamp">${esc(stampLong(o.now))}</div><div data-slot-for="banner">${bannerHtml(o.banner)}</div></div>`);
   parts.push(`<div hidden data-tn>${navHtml(buckets)}</div>`);
-  return parts.join("\n");
+  // What the browser tab says: the Needs-you count, the attention keys, and the keys the captain last saw (see attention.ts).
+  // No stored "seen" yet (first render) means nothing is new: the runtime seeds it from these keys.
+  const attention = attentionOf(model, [...model.tasks, ...archive], stages, o.canvas);
+  parts.push(`<div hidden data-attn data-n="${attention.needsYou}" data-title="${esc(model.title)}" data-keys="${esc(JSON.stringify(attention.keys))}"${model.seen ? ` data-seen="${esc(JSON.stringify(model.seen))}"` : ""}></div>`);
+  return { html: parts.join("\n"), attention };
 }
 
 function renderSection(model: ProjectModel, name: string): string {
@@ -527,7 +532,7 @@ function bannerHtml(b: RenderOpts["banner"]): string {
 }
 
 export function renderProject(model: ProjectModel, agents: Record<string, AgentView>, opts: RenderOpts): Rendered {
-  const live = renderLive(model, agents, opts);
+  const { html: live, attention } = renderLive(model, agents, opts);
   const pageFile = opts.pageFile ?? (model.page ? model.page.slice(model.page.lastIndexOf("/") + 1) : "page.html");
   const liveFile = pageFile.replace(/\.[^./]*$/, "") + ".live.js";
 
@@ -565,7 +570,7 @@ ${CSS}
 ${names.map((n) => renderSection(model, n)).join("\n")}
 <script>
 ${navScript()}
-${IDIOMORPH_SOURCE.replace(/<\/script/gi, "<\\/script")}
+${IDIOMORPH_SOURCE.replace(/<\/(script|body|head|html)/gi, "<\\/$1")}
 ${pageScript(model.project, liveFile, opts.tickSeconds, opts.marksUrl)}
 </script>
 </main></body></html>
@@ -575,5 +580,5 @@ ${pageScript(model.project, liveFile, opts.tickSeconds, opts.marksUrl)}
   // rewritten, so that file must stay still while crews work.
   const signature = createHash("sha1").update(shell("", "", "")).digest("hex");
   const page = shell(live.replace(/\{TS\}/g, stampShort(opts.now)), esc(stampLong(opts.now)), bannerHtml(opts.banner));
-  return { page, live, signature };
+  return { page, live, signature, attention };
 }

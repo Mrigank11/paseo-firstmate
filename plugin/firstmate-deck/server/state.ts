@@ -2,7 +2,7 @@
 // Missing files mean empty values. Malformed JSON throws a clear Error naming the file.
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { basename, join, resolve, sep } from "node:path";
-import { cleanUi } from "./marks.ts";
+import { cleanUi, type Seen } from "./marks.ts";
 import { askIdOf, canvasAskIdOf } from "./store.ts";
 import { archiveStateOf, stateOf, type TaskState } from "./stage.ts";
 
@@ -104,6 +104,8 @@ export type ProjectModel = {
   comments: TrailComment[];
   /** Read marks ("t-<task>" -> card hash) from state/projects/<p>/ui-state.json; the first paint applies them. */
   marks?: Record<string, string>;
+  /** What the captain last looked at (ui-state.json `s`); absent until the page has been rendered once. */
+  seen?: Seen;
   /** Live index tasks of this project, in file order. */
   tasks: Task[];
   /** The project's archived tasks, oldest first: the last 30, or project.json `archiveLimit`. A task archived twice (bin/fleet archive-update) appears once, as its newest line. */
@@ -333,11 +335,13 @@ export function loadProject(root: string, project: string): ProjectModel {
   }
 
   let marks: Record<string, string> = {};
-  try { marks = cleanUi(JSON.parse(readText(join(pdir, "ui-state.json")) || "{}")).r; } catch { /* a bad file means no marks */ }
+  let seen: Seen | undefined;
+  try { const ui = cleanUi(JSON.parse(readText(join(pdir, "ui-state.json")) || "{}")); marks = ui.r; seen = ui.s; } catch { /* a bad file means no marks */ }
 
   return {
     project,
     marks,
+    seen,
     title: typeof cfg.title === "string" && cfg.title ? cfg.title : project,
     page: typeof cfg.page === "string" && cfg.page ? cfg.page : undefined,
     sectionTitles: cfg.sectionTitles && typeof cfg.sectionTitles === "object" ? cfg.sectionTitles : {},

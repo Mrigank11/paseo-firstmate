@@ -861,3 +861,21 @@ test("canvas: 'off' in settings means no requests at all", async () => {
   assert.ok(!/Open canvas/.test(readFileSync(r.live, "utf8")));
   deck.stop(); await fc.stop();
 });
+
+test("first render seeds what the captain has seen; a later change is unseen; the page file stays still", async () => {
+  const r = rig(FLEET);
+  await r.deck.configure();
+  await r.deck.render("demo");
+  const ui = () => JSON.parse(readFileSync(join(r.pdir, "ui-state.json"), "utf8"));
+  assert.deepEqual(Object.keys(ui().s.keys).sort(), ["page", "t-t1"], "seeded with the keys of the first render");
+  const seeded = ui().s.keys["t-t1"];
+  await r.deck.render("demo");
+  assert.match(readFileSync(r.live, "utf8"), /data-seen=/, "the next payload carries the seen keys");
+  assert.equal(ui().s.keys["t-t1"], seeded, "the seed is not re-written");
+  writeFileSync(join(r.root, "state", "fleet.json"), JSON.stringify({ version: 2, tasks: [{ ...FLEET.tasks[0], state: "done" }] }));
+  await r.deck.render("demo");
+  const m = /data-keys="([^"]*)"/.exec(readFileSync(r.live, "utf8").replace(/\\"/g, '"'))!;
+  assert.notEqual(JSON.parse(m[1].replace(/&quot;/g, '"'))["t-t1"], seeded, "a stage change moves the key");
+  assert.equal(ui().s.keys["t-t1"], seeded, "the stored seen keys stay what the captain saw");
+  r.deck.stop();
+});

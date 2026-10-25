@@ -14,7 +14,7 @@ import { Relay, newEntries, parseTarget, type AskLookup, type TargetInfo } from 
 import { CanvasPort, type FmSummary } from "./canvas-port.ts";
 import { liveJs, renderProject, stagesOf, type AgentView, type Banner } from "./render.ts";
 import { currentAgent, type LabeledAgent } from "./stage.ts";
-import { MarksServer } from "./marks-server.ts";
+import { MarksServer, readUi, updateUi } from "./marks-server.ts";
 import { loadProject, type ProjectModel, type Task } from "./state.ts";
 import { appendInbox, inboxPath, pageJsonPath, patchPageJson, pidPath, projectDir, readInbox, readPageJson, updateInbox, writeAtomic, type InboxEntry, type PageJson } from "./store.ts";
 
@@ -244,7 +244,8 @@ export class Deck {
     const norm = normalizeRoot(raw.root);
     const next: DeckConfig = { ...raw, root: norm.root, rootProblem: norm.problem };
     const rootChanged = next.root !== this.cfg.root;
-    const lavishChanged = next.lavishPort !== this.cfg.lavishPort || next.lavishStateDir !== this.cfg.lavishStateDir;
+    const lavishChanged = next.lavishPort !== this.cfg.lavishPort || next.lavishStateDir !== this.cfg.lavishStateDir || next.lavishBin !== this.cfg.lavishBin;
+    if (next.lavishBin !== this.cfg.lavishBin) this.lavishBin = null;
     if (rootChanged || lavishChanged) {
       for (const e of this.pollers.values()) killEntry(e);
       this.pollers.clear();
@@ -611,6 +612,8 @@ export class Deck {
       now, tickSeconds: 1, refreshSeconds: Math.round((this.o.tickMs ?? TICK_MS) / 1000), paseoAgentUrl: this.agentUrl, banner, pageFile: basename(target),
       marksUrl: this.marksUrl(project, pj), labeled: this.labeledFor(model), canvas: this.canvas.data(ids),
     });
+    // first render of a page that has never stored what the captain saw: seed it, so turning this on does not light every page
+    if (!model.seen && !readUi(this.cfg.root, project).s) updateUi(this.cfg.root, project, { o: {}, r: {}, s: { at: now.toISOString(), keys: r.attention.keys } });
     const p2 = (n: number) => String(n).padStart(2, "0");
     const ts = `${p2(now.getHours())}:${p2(now.getMinutes())}:${p2(now.getSeconds())}`;
     let rewrote = false;
@@ -695,7 +698,7 @@ export class Deck {
       this.stalePollsChecked.add(project);
       if (killStalePoll(pidFile, page)) this.log(`killed a stale poll for ${project}`);
     }
-    try { this.lavishBin ??= await resolveLavishBin(); } catch (e) { this.log(`${e}`); this.setListener(project, "error", String(e instanceof Error ? e.message : e)); return; }
+    try { this.lavishBin ??= await resolveLavishBin(this.cfg.lavishBin); } catch (e) { this.log(`${e}`); this.setListener(project, "error", String(e instanceof Error ? e.message : e)); return; }
     if (this.stopped || this.pollers.has(project)) return;
     const bin = this.lavishBin;
     const env = lavishEnv({ LAVISH_AXI_PORT: this.cfg.lavishPort, LAVISH_AXI_STATE_DIR: this.cfg.lavishStateDir });

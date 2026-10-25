@@ -8,7 +8,10 @@ import { createHash } from "node:crypto";
 export const cardHash = (card: string): string => createHash("sha1").update(card).digest("hex").slice(0, 8);
 
 /** What the endpoint stores per project (and live.py's ui-state.json format): `o` = open/closed sections, `r` = read marks. */
-export type UiState = { o: Record<string, number>; r: Record<string, string> };
+export type UiState = { o: Record<string, number>; r: Record<string, string>; s?: Seen };
+
+/** What the captain had in front of them when they last looked at the page: attention key per task ("t-<id>", "page"), stamped with the browser's time. */
+export type Seen = { at: string; keys: Record<string, string> };
 
 export function emptyUi(): UiState {
   return { o: {}, r: {} };
@@ -24,10 +27,18 @@ export function cleanUi(raw: unknown): UiState {
   for (const [k, v] of Object.entries(src.r && typeof src.r === "object" ? src.r : {})) {
     if (/^t-[\w.-]{1,120}$/.test(k) && typeof v === "string" && /^[0-9a-f]{1,64}$/.test(v)) out.r[k] = v;
   }
+  const s = src.s && typeof src.s === "object" ? src.s : null;
+  if (s && typeof s.at === "string" && /^\d{4}-\d\d-\d\dT[\d:.]+Z$/.test(s.at) && s.keys && typeof s.keys === "object") {
+    const keys: Record<string, string> = {};
+    for (const [k, v] of Object.entries(s.keys)) if (/^[\w.-]{1,120}$/.test(k) && typeof v === "string" && /^[0-9a-f]{1,64}$/.test(v)) keys[k] = v;
+    out.s = { at: s.at, keys };
+  }
   return out;
 }
 
 /** Merge an incoming state into the stored one. Read marks only ever add (an incoming hash replaces an older one for the same card). */
 export function mergeUi(cur: UiState, inc: UiState): UiState {
-  return { o: { ...cur.o, ...inc.o }, r: { ...cur.r, ...inc.r } };
+  // "seen" is one snapshot: the newest `at` wins whole, so a tab that has been in the background cannot un-see what another one saw
+  const s = inc.s && (!cur.s || inc.s.at >= cur.s.at) ? inc.s : cur.s;
+  return { o: { ...cur.o, ...inc.o }, r: { ...cur.r, ...inc.r }, ...(s ? { s } : {}) };
 }
