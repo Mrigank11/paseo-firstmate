@@ -36,7 +36,7 @@ export function navScript(): string {
     if(want&&!id){var a=(cur&&fl.querySelector('.tn-a[data-t="'+cur+'"]'))||fl.querySelector(".tn-a");if(a){id=a.getAttribute("data-t");select(id)}}
     var on=want&&!!id;body.classList.toggle("tn-focus",on);
     q(d,".task.tn-sel").forEach(function(t){if(t.id!==id)t.classList.remove("tn-sel")});
-    if(on){var t=$(id);t.classList.add("tn-sel");for(var p=t.parentElement;p;p=p.parentElement)if(p.tagName==="DETAILS"&&!p.open)p.open=true}
+    if(on){var t=$(id);t.classList.add("tn-sel");q(t,"details.cv-d").forEach(function(x){x.open=true});for(var p=t.parentElement;p;p=p.parentElement)if(p.tagName==="DETAILS"&&!p.open)p.open=true}
     q(d,".tn-fx").forEach(function(b){b.setAttribute("aria-pressed",on?"true":"false")});
     if(fbar){fbar.hidden=!on;if(on){var l=fl.querySelector('.tn-a[data-t="'+id+'"]'),name=l?l.textContent:id,key=fbar.getAttribute("data-id")+"|"+name;
       if(key!==id+"|"+name){fbar.setAttribute("data-id",id);fbar.innerHTML=${JSON.stringify(svg(ICON.focus))}+'<span>Focus view: <b></b></span><button type="button" class="tn-fall">Show all tasks</button>';fbar.querySelector("b").textContent=name}}}}

@@ -170,7 +170,7 @@ const verdictTone = (label: string) => (label === "Error" ? "bad" : label === "N
 
 /**
  * The agent's canvas inside its card: verdict, BLUF, steps strip with the Now row. `compact` is what a grouped list shows;
- * the full embed card (agent-canvas `/api/fm/card`) rides along hidden and replaces it in the focus view (style.ts).
+ * the full embed card (agent-canvas `/api/fm/card`) sits in a collapsed "Full canvas" fold, open and replacing it in the focus view (style.ts, nav-script.ts).
  */
 export function canvasFragment(s: FmSummary, card?: string): string {
   const flags = s.verdict.flags.map((f) => `<span class="fl" title="${esc(f.signal)}">${esc(f.text)}</span>`).join("");
@@ -183,7 +183,7 @@ export function canvasFragment(s: FmSummary, card?: string): string {
   const compact =
     `<div class="cv-c"><div class="cv-top"><span class="cv-v cv-${verdictTone(s.verdict.label)}">${esc(s.verdict.label)}</span>${flags}${s.auto ? `<span class="fl" title="no canvas was written: this is the one agent-canvas drew from the agent's timeline">auto canvas</span>` : ""}</div>` +
     `${s.bluf ? `<div class="cv-bluf">${esc(cut(s.bluf, 280))}</div>` : ""}${steps}</div>`;
-  return `<div class="cv${card ? " has-full" : ""}" data-rev="${s.rev}">${compact}${card ? `<div class="cv-f acv">${card}</div>` : ""}</div>`;
+  return `<div class="cv${card ? " has-full" : ""}" data-rev="${s.rev}">${compact}${card ? `<details class="cnotes cv-d" id="cvd-${esc(s.agentId)}"><summary>Full canvas</summary><div class="cv-f acv">${card}</div></details>` : ""}</div>`;
 }
 
 /**
@@ -280,6 +280,10 @@ function cardHtml(t: Task): string {
   return `${markdown(t.card.slice(0, i))}<details class="cnotes" id="n-${esc(t.id)}"><summary>Notes</summary>${markdown(t.card.slice(i + NOTES_MARK.length))}</details>`;
 }
 
+/** The final canvas snapshot of a done task, expanded in the card: a sandboxed frame keeps its stylesheet off the page. */
+const finalCanvas = (t: Task): string =>
+  `<details class="cnotes cv-d" id="cvf-${esc(t.id)}" open><summary>Final canvas</summary><iframe class="cv-final" title="Final canvas" sandbox srcdoc="${esc(t.canvasFinal)}"></iframe></details>`;
+
 /** A done task whose card the captain can mark read: it has a non-empty card.md. */
 export const markable = (t: Task): boolean => t.card.trim() !== "";
 
@@ -362,7 +366,11 @@ function row(t: Task, group: GroupKey, ctx: Ctx, idx = 0): string {
   } else out.push(agentBlock(t, group, aid ? ctx.agents[aid] : undefined, ctx.o, st));
   if (group === "blocked") out.push(`<div class="bo"><b>Blocked on:</b> ${esc(t.blocked_on || "an outside dependency")}</div>`);
   const body = t.card.trim() ? cardHtml(t) : esc(t.notes);
-  if (body) out.push(`<div class="nt">${body}</div>`);
+  // a done task with a final canvas shows it expanded; the short card is the fallback when there is none, else it folds away
+  if (group === "done" && t.canvasFinal) {
+    out.push(finalCanvas(t));
+    if (body) out.push(`<details class="cnotes" id="cd-${esc(t.id)}"><summary>Card</summary><div class="nt">${body}</div></details>`);
+  } else if (body) out.push(`<div class="nt">${body}</div>`);
   // a done card with a card.md keeps its notes in the same place; a report on disk is pointed at, not inlined
   if (group === "done" && t.card.trim() && t.notes.trim() && !t.card.includes(t.notes.trim())) {
     out.push(`<details class="cnotes" id="fn-${esc(t.id)}"><summary>Notes</summary>${markdown(t.notes)}</details>`);

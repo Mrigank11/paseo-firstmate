@@ -64,6 +64,7 @@ test("canvas-snippet: the agent-canvas recipe for the configured port, the shape
   assert.match(ship.out, /RECIPE port 6791/);
   assert.match(ship.out, /<Step id="implement"/);
   assert.match(ship.out, /BLOCKED: canvas ask <id>/);
+  assert.match(ship.out, /### What your canvas must say[\s\S]*BLUF first[\s\S]*No stale material[\s\S]*Pick the visual[\s\S]*### Set your canvas first/);
   const scout = await run(["snippet", r.root, "scout"], env);
   assert.match(scout.out, /<Markdown id="findings">/);
   assert.doesNotMatch(scout.out, /id="implement"/);

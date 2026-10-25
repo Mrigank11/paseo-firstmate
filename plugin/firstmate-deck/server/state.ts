@@ -64,6 +64,8 @@ export type Task = {
   card: string;
   /** Asks the first mate has answered (state/tasks/<id>/asks.jsonl, written by `bin/fleet answer`), oldest first; context files left without a record come last with no text. */
   answered: AnsweredAsk[];
+  /** state/tasks/<id>/canvas.final.html (the crew canvas snapshot `bin/page canvas-snapshot` keeps; "" when absent). */
+  canvasFinal: string;
   /** state/tasks/<id>/report.md exists: the page points at it. */
   hasReport: boolean;
   /** `since` as epoch ms (0 when absent): what the Done group sorts by. */
@@ -252,6 +254,7 @@ function toTask(raw: any, root: string, label: string, inbox: Comment[] = [], ar
     pr: raw.pr || undefined,
     branch: raw.branch || undefined,
     card: slug ? readText(join(root, "state", "tasks", raw.id, "card.md")) : "",
+    canvasFinal: slug ? readText(join(root, "state", "tasks", raw.id, "canvas.final.html")) : "",
     answered: loadAnswered(root, raw.id).filter((a) => !answeredIds.has(a.id)),
     hasReport: slug && existsSync(join(root, "state", "tasks", raw.id, "report.md")),
     updatedMs: Date.parse(raw.since ?? (archived ? raw.lastEvent : "") ?? "") || 0,

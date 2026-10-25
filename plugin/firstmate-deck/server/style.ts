@@ -186,10 +186,11 @@ body.tn-focus #live .task:not(.tn-sel),body.tn-focus #live .grp:not(:has(.tn-sel
 .cv-steps{display:flex;flex-wrap:wrap;align-items:center;gap:4px 10px;margin-top:6px;font-size:12.5px;color:var(--mut)}
 .cv-bar{display:inline-flex;gap:2px}.cv-bar i{width:14px;height:5px;border-radius:2px;background:var(--line)}.cv-bar i.on{background:var(--ok)}.cv-bar i.now{background:var(--run)}
 .cv-n{font-variant-numeric:tabular-nums}.cv-now b{color:var(--fg);margin-right:4px}
-.cv-f{display:none;margin-top:4px}
+.cv-f{margin-top:4px}
+.cv-final{display:block;width:100%;height:520px;margin-top:8px;border:1px solid var(--line,#e4e0d4);border-radius:8px;background:#fff}
 /* the embedded canvas wears the deck's own surface: its tokens are re-pointed at the page's (agent-canvas's .acv sets its own, so two classes) */
 .cv-f.acv,.cv-f .acv{--bg:#f7f6f2;--raised:#fff;--well:#f1efe8;--line:#e4e0d4;--line-strong:#d6d1c2;--fg:#1c1b19;--muted:#625f57;--faint:#8a857a;--sans:inherit;background:transparent;font-size:14px}
-body.tn-focus .task.tn-sel .cv.has-full .cv-f{display:block}body.tn-focus .task.tn-sel .cv.has-full .cv-c{display:none}
+body.tn-focus .task.tn-sel .cv.has-full .cv-c{display:none}
 .cv-links{display:flex;flex-wrap:wrap;gap:4px 14px;margin-top:8px;font-size:12.5px}.cv-open{font-weight:600}.cv-links .open{margin-left:0}
 .askbox.raw{border-left:3px solid #f3d5bc;padding-left:10px;margin-top:8px}.cv-down{background:#fef3c7;color:#92400e}
 @media (max-width:560px){.open{margin-left:0}main{padding:18px 14px 60px}nav{margin:12px -14px 0;padding:8px 14px}h1{font-size:20px}.tt{flex-direction:column;gap:4px}.s-you{padding:12px}.tw table{min-width:480px}}`;

@@ -15,8 +15,9 @@ const NOW = new Date("2026-10-24T12:00:00Z");
 const opts = { now: NOW, paseoAgentUrl: (id: string) => `http://paseo.test/agent/${id}`, tickSeconds: 20 };
 const agent = { status: "running" as const, stepCount: 3, recent: ["ran npm test"], createdAt: "2026-10-24T11:00:00Z", updatedAt: "2026-10-24T11:59:00Z" };
 
+let lastRoot = "";
 function project(tasks: object[], inbox: object[] = []) {
-  const root = mkdtempSync(join(tmpdir(), "deck-cv-"));
+  const root = lastRoot = mkdtempSync(join(tmpdir(), "deck-cv-"));
   const pdir = join(root, "state", "projects", "demo");
   mkdirSync(pdir, { recursive: true });
   writeFileSync(join(pdir, "project.json"), JSON.stringify({ title: "Demo", sections: [] }));
@@ -43,13 +44,14 @@ test("the card pulls in the canvas: verdict, BLUF, steps strip with the Now row,
   assert.ok(!html.includes("stp") && !html.includes("<iframe"));
 });
 
-test("the full embed card rides along for the focus view only, and its stylesheet is inlined once in the page head", () => {
+test("the full embed card sits in a collapsed fold (the focus view opens it), and its stylesheet is inlined once in the page head", () => {
   const r = render(project([T]), data());
   const html = card(r.live);
-  assert.match(html, /<div class="cv-f acv"><div class="blk">FULL<\/div><\/div>/);
+  assert.match(html, /<details class="cnotes cv-d" id="cvd-ag-1"><summary>Full canvas<\/summary><div class="cv-f acv"><div class="blk">FULL<\/div><\/div><\/details>/);
   assert.equal(r.page.split(".acv .blk{color:red}").length - 1, 1);
   assert.ok(r.page.indexOf(".acv .blk") < r.page.indexOf("<body>"));
-  assert.match(r.page, /body\.tn-focus \.task\.tn-sel \.cv\.has-full \.cv-f\{display:block\}/);
+  assert.match(r.page, /body\.tn-focus \.task\.tn-sel \.cv\.has-full \.cv-c\{display:none\}/);
+  assert.match(r.page, /q\(t,"details\.cv-d"\)\.forEach\(function\(x\)\{x\.open=true\}\)/, "the focus view opens the fold");
   assert.ok(!r.live.includes(".acv .blk{color:red}"), "css is page-level, not per card");
 });
 
@@ -147,6 +149,23 @@ test("Disputed and Stale show as the verdict chip and a non-drift flag", () => {
 test("a done card keeps its own shape: no live canvas, no links row", () => {
   const html = card(render(project([{ ...T, state: "done" }]), data()).live);
   assert.ok(!html.includes('class="cv') && !html.includes("cv-links"));
+});
+
+test("a done card with a canvas.final.html shows it expanded; card.md folds below, and is the fallback when there is no snapshot", () => {
+  const snap = `<!doctype html><html><body><div class="cv-snap">FINAL "canvas"</div></body></html>`;
+  const withSnap = (files: Record<string, string>) => {
+    project([{ ...T, state: "done" }]);
+    const dir = join(lastRoot, "state", "tasks", "t1");
+    mkdirSync(dir, { recursive: true });
+    for (const [f, c] of Object.entries(files)) writeFileSync(join(dir, f), c);
+    return loadProject(lastRoot, "demo");
+  };
+  const both = card(render(withSnap({ "canvas.final.html": snap, "card.md": "short card text" })).live);
+  assert.match(both, /<details class="cnotes cv-d" id="cvf-t1" open><summary>Final canvas<\/summary><iframe class="cv-final" title="Final canvas" sandbox srcdoc="[^"]*FINAL &quot;canvas&quot;/);
+  assert.ok(both.indexOf("cv-final") < both.indexOf("short card text"), "canvas first");
+  assert.match(both, /<details class="cnotes" id="cd-t1"><summary>Card<\/summary>.*short card text/s);
+  const cardOnly = card(render(withSnap({ "card.md": "short card text" })).live);
+  assert.ok(!cardOnly.includes("cv-final") && /<div class="nt">.*short card text/s.test(cardOnly));
 });
 
 test("canvasFragment: long step lists are scaled, a missing BLUF or steps is simply absent, HTML is escaped", () => {

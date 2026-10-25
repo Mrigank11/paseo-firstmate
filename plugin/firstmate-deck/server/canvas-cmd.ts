@@ -43,8 +43,8 @@ const keyFile = () => process.env.AGENT_CANVAS_KEY_FILE || join(process.env.PASE
 
 const SHAPE: Record<string, string> = {
   ship: `<Canvas title="<what you are building>" status="working">
-  <Bluf>Reading the brief.</Bluf>
-  <Steps title="Plan">
+  <Bluf>Starting: <one-line goal in plain words>.</Bluf>
+  <Steps title="Plan">  (replace these with your real 3-6 step plan within your first few minutes)
     <Step id="understand" state="active">Understand the brief</Step>
     <Step id="implement" state="pending">Implement</Step>
     <Step id="test" state="pending">Test</Step>
@@ -53,7 +53,7 @@ const SHAPE: Record<string, string> = {
 </Canvas>
 Add <Diff file="path">…</Diff> once you have a change worth showing. Add an <Ask> only when you need the captain.`,
   scout: `<Canvas title="<what you are finding out>" status="working">
-  <Bluf>Reading the brief.</Bluf>
+  <Bluf>Starting: <one-line goal in plain words>.</Bluf>
   <Steps title="Plan">
     <Step id="read" state="active">Read</Step>
     <Step id="analyse" state="pending">Analyse</Step>
@@ -75,6 +75,20 @@ export function snippet(root: string, shape: string): string {
   return `## Your canvas
 
 ${recipe}
+
+### What your canvas must say
+
+The captain reads your canvas *instead of* your chat, often days later, in under 30 seconds. Write for that reader.
+
+1. **BLUF first, always current.** One or two plain sentences: the outcome, then the one thing the captain must know or do. No tool names, no narration of what you are reading.
+   - Bad: \`Running colmena build, checking module source filters.\`
+   - Good: \`Deployed bot rev 69b9704 to skylake; all 4 services healthy. One config fix was needed and is not committed yet.\`
+   - While running: \`Root cause found (missing src/shared in web build); fixing now, about 2 steps left.\`
+2. **Replace the template plan.** Within your first few minutes, rewrite the Steps with the real plan, 3-6 steps named by outcome ("Web build includes shared types"), not by activity ("Implement").
+3. **No stale material.** When something is superseded, \`remove\` it or rewrite it; do not append beneath it. Dead ends get one line under "Ruled out" (what you tried, why it failed) or vanish. The canvas shows the current truth, not a log.
+4. **Pick the visual before writing prose.** Numbers or pass/fail: \`<Metric>\` in a \`<Grid>\`. A code or config change: \`<Diff>\` (the key hunk, not the whole file). How parts fit, a flow or before/after: \`<Svg>\` (a big graph: \`<Diagram>\`). A trend or comparison: \`<Chart>\`. A choice you made: \`<Decision>\`. \`<Markdown>\` is for the few sentences no component can carry; a paragraph over about 5 lines or a list over about 6 items goes in a \`<Collapse>\`.
+5. **Running vs final.** Running (\`status="working"\`): the BLUF, live Steps, what is in progress or blocking. Final (\`status="done"\`): rewrite it top to bottom, not just patched: the BLUF, what changed (Diff, files or key findings), verification as Metrics, a short "Not verified" list and a short "Needs you" list (omit either when empty), one figure where it helps, the report or PR path. Evidence, logs and command output go inside \`<Collapse>\`. Drop the Steps list unless it tells a story (a failed or skipped step).
+6. **Length test.** If the captain would have to scroll to learn the outcome, cut until they don't.
 
 ### Set your canvas first
 
