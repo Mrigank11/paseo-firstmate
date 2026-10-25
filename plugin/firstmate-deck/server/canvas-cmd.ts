@@ -78,17 +78,18 @@ ${recipe}
 
 ### What your canvas must say
 
-The captain reads your canvas *instead of* your chat, often days later, in under 30 seconds. Write for that reader.
+The captain reads your canvas *instead of* your chat, often days later, in under 30 seconds. Write for that reader: outcomes, decisions, status and what they must do, in plain language.
 
-1. **BLUF first, always current.** One or two plain sentences: the outcome, then the one thing the captain must know or do. No tool names, no narration of what you are reading.
-   - Bad: \`Running colmena build, checking module source filters.\`
-   - Good: \`Deployed bot rev 69b9704 to skylake; all 4 services healthy. One config fix was needed and is not committed yet.\`
-   - While running: \`Root cause found (missing src/shared in web build); fixing now, about 2 steps left.\`
-2. **Replace the template plan.** Within your first few minutes, rewrite the Steps with the real plan, 3-6 steps named by outcome ("Web build includes shared types"), not by activity ("Implement").
+1. **BLUF first, always current.** One or two plain sentences: the outcome, then the one thing the captain must know or do. No tool names, file paths, function names, hashes or narration.
+   - Bad: \`Running colmena build; patched web/vite.config.ts at 3f2a1c.\`
+   - Good: \`The bot is deployed to skylake and all 4 services are healthy. One config fix is needed and is not committed yet.\`
+   - While running: \`Found why the web build fails (it skips the shared types); fixing now, about 2 steps left.\`
+2. **Replace the template plan.** Within your first few minutes, rewrite the Steps with the real plan: 3-6 steps named by outcome ("Web build includes shared types"), not by activity or file.
 3. **No stale material.** When something is superseded, \`remove\` it or rewrite it; do not append beneath it. Dead ends get one line under "Ruled out" (what you tried, why it failed) or vanish. The canvas shows the current truth, not a log.
-4. **Pick the visual before writing prose.** Numbers or pass/fail: \`<Metric>\` in a \`<Grid>\`. A code or config change: \`<Diff>\` (the key hunk, not the whole file). How parts fit, a flow or before/after: \`<Svg>\` (a big graph: \`<Diagram>\`). A trend or comparison: \`<Chart>\`. A choice you made: \`<Decision>\`. \`<Markdown>\` is for the few sentences no component can carry; a paragraph over about 5 lines or a list over about 6 items goes in a \`<Collapse>\`.
-5. **Running vs final.** Running (\`status="working"\`): the BLUF, live Steps, what is in progress or blocking. Final (\`status="done"\`): rewrite it top to bottom, not just patched: the BLUF, what changed (Diff, files or key findings), verification as Metrics, a short "Not verified" list and a short "Needs you" list (omit either when empty), one figure where it helps, the report or PR path. Evidence, logs and command output go inside \`<Collapse>\`. Drop the Steps list unless it tells a story (a failed or skipped step).
-6. **Length test.** If the captain would have to scroll to learn the outcome, cut until they don't.
+4. **Pick the visual before writing prose.** Numbers or pass/fail: \`<Metric>\` in a \`<Grid>\`. A choice you made: \`<Decision>\`. How parts fit or before/after: \`<Svg>\` (a big graph: \`<Diagram>\`). A trend: \`<Chart>\`. \`<Markdown>\` is for the few sentences no component can carry; anything over about 5 lines or 6 items goes in a \`<Collapse>\`.
+5. **Code detail only when it passes the audience test.** Show file paths, function names, diffs, line numbers, hashes or command output only if (a) the task is about the code itself (a code review, an API or design audit, a "which file / what changed exactly" question), or (b) the brief or the captain asked for those specifics. Even then it goes inside a closed \`<Collapse>\` (a key \`<Diff>\` hunk, not whole files), never in the BLUF, Steps or Metrics. Otherwise describe what changed in behaviour.
+6. **Running vs final.** Running (\`status="working"\`): the BLUF, live Steps, what is in progress or blocking. Final (\`status="done"\`): rewrite it top to bottom: the BLUF, what changed in plain words, verification as Metrics, a short "Not verified" list and a short "Needs you" list (omit either when empty), one figure where it helps, and the report or PR link. Drop the Steps list unless it tells a story.
+7. **Length test.** If the captain would have to scroll, or read code, to learn the outcome, cut until they don't.
 
 ### Set your canvas first
 
