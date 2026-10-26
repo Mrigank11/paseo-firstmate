@@ -87,6 +87,16 @@ test("SdkPort.listAgents: label filter goes to the daemon, archived agents are n
   assert.equal((await port.listAgents()).find((x) => x.id === "perm")!.pendingPermissions, 2);
 });
 
+test("SdkPort.listAgents: background agents (created over MCP by another agent) are listed too", async () => {
+  const w = new FakeWorld().add(
+    { id: "fg", status: "running", labels: { "fm.task": "a" } },
+    { id: "bg", status: "running", labels: { "fm.task": "b" }, background: true },
+  );
+  const port = new SdkPort(fakePaseo(w));
+  assert.deepEqual((await port.listAgents({ label: "fm.task", includeArchived: true })).map((a) => a.id), ["fg", "bg"]);
+  assert.deepEqual((await port.listAgents({ label: "fm.task=b" })).map((a) => a.id), ["bg"]);
+});
+
 test("SdkPort.send steers instead of interrupting; appendTimelineRow writes the plugin row", async () => {
   const w = new FakeWorld().add({ id: "fm-1" });
   const port = new SdkPort(fakePaseo(w));

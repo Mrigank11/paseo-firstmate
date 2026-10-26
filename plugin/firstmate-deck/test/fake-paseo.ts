@@ -17,6 +17,8 @@ export type FakeAgent = {
   hasOlder?: boolean;
   pendingPermissions?: unknown[];
   cwd?: string;
+  /** A background agent (MCP `create_agent` from another agent): listed only when the filter says `includeBackground`. */
+  background?: boolean;
 };
 
 export type FakeSent = { id: string; text: string; options: unknown };
@@ -85,11 +87,11 @@ export function fakePaseo(world: FakeWorld): PaseoApi {
   };
   const agents = {
     ref: (id: string | PaseoAgent) => handle(typeof id === "string" ? id : id.id),
-    list: async (o?: { filter?: { labels?: Record<string, string>; includeArchived?: boolean } }) => {
+    list: async (o?: { filter?: { labels?: Record<string, string>; includeArchived?: boolean; includeBackground?: boolean } }) => {
       world.calls.push(`list${o?.filter?.labels ? ":" + JSON.stringify(o.filter.labels) : ""}`);
       const want = Object.entries(o?.filter?.labels ?? {});
       const entries = [...world.agents.values()]
-        .filter((a) => (o?.filter?.includeArchived || !a.archivedAt) && want.every(([k, v]) => a.labels?.[k] === v))
+        .filter((a) => (o?.filter?.includeArchived || !a.archivedAt) && (o?.filter?.includeBackground || !a.background) && want.every(([k, v]) => a.labels?.[k] === v))
         .map((a) => ({ agent: snapshot(a), project: null }));
       return { requestId: "r", entries, pageInfo: { nextCursor: null, prevCursor: null, hasMore: false } };
     },

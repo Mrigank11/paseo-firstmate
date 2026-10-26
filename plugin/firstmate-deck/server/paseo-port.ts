@@ -155,7 +155,8 @@ export class SdkPort implements PaseoPort {
     let cursor: string | undefined;
     for (let page = 0; page < MAX_PAGES; page++) {
       const r = await this.api.agents.list({
-        filter: { ...(key && value !== null ? { labels: { [key]: value } } : {}), ...(o.includeArchived ? { includeArchived: true } : {}) },
+        // includeBackground: crew an agent starts over MCP live in a background workspace, which the default listing hides
+        filter: { ...(key && value !== null ? { labels: { [key]: value } } : {}), ...(o.includeArchived ? { includeArchived: true } : {}), includeBackground: true },
         page: { limit: PAGE_LIMIT, ...(cursor ? { cursor } : {}) },
       });
       for (const { agent: a } of r.entries) {

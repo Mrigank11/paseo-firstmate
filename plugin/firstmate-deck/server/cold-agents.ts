@@ -10,7 +10,7 @@ import type { PortAgent } from "./paseo-port.ts";
 export async function coldLabelled(agentsDir: string, key: string, exec: Exec): Promise<PortAgent[]> {
   if (!existsSync(agentsDir)) return [];
   let status = new Map<string, string>();
-  try { status = new Map((JSON.parse((await exec(["ls", "-g", "--json"])) || "[]") as any[]).map((a) => [String(a.id), String(a.status)])); } catch {}
+  try { status = new Map((JSON.parse((await exec(["ls", "-g", "--background", "--json"])) || "[]") as any[]).map((a) => [String(a.id), String(a.status)])); } catch {}
   const out: PortAgent[] = [];
   for (const sub of readdirSync(agentsDir)) {
     let files: string[] = [];

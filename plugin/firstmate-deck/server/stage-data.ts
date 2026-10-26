@@ -41,7 +41,7 @@ export function labelledAgents(taskIds: string[]): Rec[] {
       id: String(a.id), task, status: String(a.status), archived: false, createdAt: null, lastActivityAt: null, pending: 0,
     })));
   }
-  const status = new Map<string, string>(paseoLs(["ls", "-g"]).map((a) => [String(a.id), String(a.status)]));
+  const status = new Map<string, string>(paseoLs(["ls", "-g", "--background"]).map((a) => [String(a.id), String(a.status)]));
   const out: Rec[] = [];
   for (const sub of readdirSync(dir)) {
     let files: string[] = [];
