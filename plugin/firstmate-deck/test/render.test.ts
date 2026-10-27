@@ -171,6 +171,26 @@ test("Done sorts by last update, newest first, live and archived together", () =
   assert.ok(d2.indexOf('id="t-arch-schema"') < d2.indexOf('id="t-arch-recon"'));
 });
 
+test("a migrated archive line's order does not pin it above newer Done work; a live task's order does", () => {
+  const noCard = { ...model, tasks: model.tasks.map((t) => (t.id === "done-live" ? { ...t, card: "" } : t)) };
+  const pos = (html: string, id: string) => html.indexOf(`id="t-${id}"`);
+  // newest first is recon, schema, done-live. A legacy order on the older archive lines must not lift them above newer work.
+  const m = structuredClone(noCard);
+  m.archive.find((t) => t.id === "arch-schema")!.order = 1;
+  m.archive.find((t) => t.id === "arch-recon")!.order = 2;
+  const d = renderProject(m, agents, opts).live;
+  assert.ok(pos(d, "arch-recon") < pos(d, "arch-schema") && pos(d, "arch-schema") < pos(d, "done-live"));
+  m.archive.find((t) => t.id === "arch-recon")!.updatedMs = 1;
+  m.archive.find((t) => t.id === "arch-recon")!.order = 0;
+  const d1 = renderProject(m, agents, opts).live;
+  assert.ok(pos(d1, "arch-schema") < pos(d1, "arch-recon"));
+  // the same order on a live done task (the oldest) pins it to the top of Done
+  const m2 = structuredClone(noCard);
+  m2.tasks.find((t) => t.id === "done-live")!.order = 1;
+  const d2 = renderProject(m2, agents, opts).live;
+  assert.ok(pos(d2, "done-live") < pos(d2, "arch-recon") && pos(d2, "done-live") < pos(d2, "arch-schema"));
+});
+
 test("an archived task keeps its answered ask, its context and a report pointer", () => {
   const t = model.archive.find((x) => x.id === "arch-schema")!;
   assert.deepEqual(t.answered.map((a) => [a.id, a.text]), [["a1", "Postgres or SQLite?"]]);

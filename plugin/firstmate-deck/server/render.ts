@@ -478,9 +478,12 @@ function renderLive(model: ProjectModel, agents: Record<string, AgentView>, o: R
   const buckets: Record<GroupKey, { t: Task; g: GroupKey }[]> = { you: [], fm: [], running: [], blocked: [], next: [], parked: [], done: [] };
   for (const t of model.tasks) buckets[stages.get(t.id)!.group].push({ t, g: stages.get(t.id)!.group });
   for (const t of archive) buckets.done.push({ t, g: "done" });
-  // Done: most recently updated (lastEvent) first, live and archived together. An explicit `order` still pins a task ahead of the rest in any group.
+  // Done: most recently updated (lastEvent) first, live and archived together. An explicit `order` on a live task still pins it
+  // ahead of the rest in any group. An archive line's `order` is ignored: it is the position the task had in a group of the
+  // hand-run page it was migrated from, and would otherwise pin every migrated task above all newer finished work.
   buckets.done.sort((a, b) => b.t.updatedMs - a.t.updatedMs);
-  for (const k of Object.keys(buckets) as GroupKey[]) buckets[k] = byOrder(buckets[k].map((x) => ({ ...x, order: x.t.order }))).map(({ t, g }) => ({ t, g }));
+  const archivedIds = new Set(archive.map((t) => t.id));
+  for (const k of Object.keys(buckets) as GroupKey[]) buckets[k] = byOrder(buckets[k].map((x) => ({ ...x, order: archivedIds.has(x.t.id) ? undefined : x.t.order }))).map(({ t, g }) => ({ t, g }));
 
   const busy = GROUPS.filter(([k]) => k !== "done").flatMap(([k]) => buckets[k])
     .filter(({ t }) => { const a = stages.get(t.id)?.agentId; return a && ACTIVE.has(agents[a]?.status ?? ""); }).length;
