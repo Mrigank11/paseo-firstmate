@@ -120,6 +120,8 @@ export class Deck {
   private late = new Set<ReturnType<typeof setTimeout>>();
   private rendering = new Map<string, { again: boolean }>();
   private sigs = new Map<string, string>();
+  /** pageStamp of the page.html this deck last wrote, per project. */
+  private stamps = new Map<string, string>();
   private usedViews = new Map<string, string>();
   private agentProjects = new Map<string, Set<string>>();
   private pollers = new Map<string, PollerEntry>();
@@ -592,6 +594,11 @@ export class Deck {
     return [...new Set(ids)];
   }
 
+  /** Cheap identity of the page on disk (mtime + size); "" when it is missing. */
+  private pageStamp(target: string): string {
+    try { const st = statSync(target); return `${st.mtimeMs}:${st.size}`; } catch { return ""; }
+  }
+
   private writePage(project: string, model: ProjectModel): void {
     // a project exists only while its project.json does; never resurrect a deleted project's dir
     if (!existsSync(join(projectDir(this.cfg.root, project), "project.json"))) return;
@@ -617,9 +624,11 @@ export class Deck {
     const p2 = (n: number) => String(n).padStart(2, "0");
     const ts = `${p2(now.getHours())}:${p2(now.getMinutes())}:${p2(now.getSeconds())}`;
     let rewrote = false;
-    if (r.signature !== this.sigs.get(project) || !existsSync(target)) {
+    // also rewrite when the file is not the one we wrote (`bin/page start` re-renders it without the canvas stylesheet)
+    if (r.signature !== this.sigs.get(project) || this.pageStamp(target) !== this.stamps.get(project)) {
       writeAtomic(target, r.page);
       this.sigs.set(project, r.signature);
+      this.stamps.set(project, this.pageStamp(target));
       rewrote = true;
     }
     writeAtomic(target.replace(/\.[^./]*$/, "") + ".live.js", liveJs(r.live.replace(/\{TS\}/g, ts), now.toISOString(), ++this.liveSeq));

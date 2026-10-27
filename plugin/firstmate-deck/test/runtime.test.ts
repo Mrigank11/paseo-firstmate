@@ -1,7 +1,7 @@
 process.env.TZ = "UTC";
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Deck } from "../server/runtime.ts";
@@ -74,26 +74,43 @@ test("page.html is rewritten only when the signature moves; live.js on every ren
   assert.ok(existsSync(r.page) && existsSync(r.live));
   assert.match(readFileSync(r.page, "utf8"), /Demo/);
 
-  writeFileSync(r.page, "MARKER");
+  // an untouched file is never rewritten: watch its identity
+  const stamp = () => { const st = statSync(r.page); return `${st.ino}:${st.mtimeMs}`; };
+  const before = stamp();
   writeFileSync(r.live, "MARKER");
+  await sleep(20);
   await r.deck.render("demo");
-  assert.equal(readFileSync(r.page, "utf8"), "MARKER", "same signature: html untouched");
+  assert.equal(stamp(), before, "same signature: html untouched");
   assert.notEqual(readFileSync(r.live, "utf8"), "MARKER", "live.js refreshed");
 
   r.world.status = "idle"; // agent status is part of the signature
   r.deck.onAgentEvent("ag-1");
   await r.deck.render("demo");
-  assert.equal(readFileSync(r.page, "utf8"), "MARKER", "agent status changed: html untouched (Lavish reloads the page when it is rewritten)");
+  assert.equal(stamp(), before, "agent status changed: html untouched (Lavish reloads the page when it is rewritten)");
 
 
   writeFileSync(join(r.root, "state", "fleet.json"), JSON.stringify({ version: 2, tasks: [{ ...FLEET.tasks[0], state: "done" }] }));
   await r.deck.render("demo");
-  assert.equal(readFileSync(r.page, "utf8"), "MARKER", "fleet change: html untouched");
+  assert.equal(stamp(), before, "fleet change: html untouched");
   assert.match(readFileSync(r.live, "utf8"), /done/, "the change reaches the page through live.js");
 
   writeFileSync(join(r.root, "state", "projects", "demo", "project.json"), JSON.stringify({ title: "Renamed", sections: ["endpoints"] }));
   await r.deck.render("demo");
-  assert.notEqual(readFileSync(r.page, "utf8"), "MARKER", "title change: html rewritten");
+  assert.notEqual(stamp(), before, "title change: html rewritten");
+  r.deck.stop();
+});
+
+test("a page.html someone else rewrote is corrected on the next tick; an unchanged one is left alone", async () => {
+  const r = rig(FLEET);
+  await r.deck.configure();
+  await r.deck.render("demo");
+  writeFileSync(r.page, "<html>no canvas stylesheet</html>"); // as bin/page start does
+  await r.deck.render("demo");
+  assert.match(readFileSync(r.page, "utf8"), /^<!doctype html>[\s\S]*Demo/, "external rewrite restored");
+  const st = statSync(r.page);
+  await sleep(20);
+  await r.deck.render("demo");
+  assert.equal(statSync(r.page).mtimeMs, st.mtimeMs, "unchanged file not rewritten");
   r.deck.stop();
 });
 
