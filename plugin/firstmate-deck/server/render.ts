@@ -486,6 +486,8 @@ function renderLive(model: ProjectModel, agents: Record<string, AgentView>, o: R
   // ahead of the rest in any group. An archive line's `order` is ignored: it is the position the task had in a group of the
   // hand-run page it was migrated from, and would otherwise pin every migrated task above all newer finished work.
   buckets.done.sort((a, b) => b.t.updatedMs - a.t.updatedMs);
+  // Parked: most recently parked (`since`, set when the state changed) first; an explicit `order` still pins a live task.
+  buckets.parked.sort((a, b) => b.t.updatedMs - a.t.updatedMs);
   const archivedIds = new Set(archive.map((t) => t.id));
   for (const k of Object.keys(buckets) as GroupKey[]) buckets[k] = byOrder(buckets[k].map((x) => ({ ...x, order: archivedIds.has(x.t.id) ? undefined : x.t.order }))).map(({ t, g }) => ({ t, g }));
 
