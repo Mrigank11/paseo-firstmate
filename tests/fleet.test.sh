@@ -424,6 +424,7 @@ eq "$($F get o1 | jq -c '[.order,.legacyId]')" '[3,"old-one"]'; check "order is 
 refused "order that is not a whole number" $F set o1 order=1.5
 refused "negative order" $F set o1 order=-1
 refused "legacyId that is not a slug" $F set o1 legacyId=Bad_Id
+$F add o2 intent=x shape=ship state=blocked blocked_on=waiting >/dev/null
 refused "unsetting blocked_on on a blocked task" $F set o2 blocked_on=
 $F set o2 state=parked blocked_on= >/dev/null; check "blocked_on= with a state off blocked" $?
 $F add u1 intent=x shape=ship state=queued order=3 legacyId=old-one >/dev/null
@@ -431,7 +432,6 @@ $F set u1 branch=b pr=http://x title=T >/dev/null
 $F set u1 order= branch= pr= title= >/dev/null; check "set key= removes order, branch, pr, title" $?
 eq "$($F get u1 | jq -c '[has("order"),has("branch"),has("pr"),has("title"),.legacyId]')" '[false,false,false,false,"old-one"]'; check "...and leaves other fields alone" $?
 $F set u1 order= >/dev/null; check "unsetting an absent field is a no-op" $?
-$F add o2 intent=x shape=ship state=blocked blocked_on=waiting >/dev/null
 printf 'card one\n' >"$T/c1"
 $F card o1 --file "$T/c1" >/dev/null; check "card writes a live task's card" $?
 eq "$(cat "$(dirname "$FLEET_FILE")/tasks/o1/card.md")" "card one"; check "...with the given content" $?
