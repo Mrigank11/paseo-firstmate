@@ -9,6 +9,7 @@ import { Deck } from "./server/runtime.ts";
 import { Gate } from "./server/gate.ts";
 import { fetchSummary } from "./server/canvas-port.ts";
 import { Permission } from "./server/permission.ts";
+import { Enforcer } from "./server/enforcer.ts";
 
 const AGENT_EVENTS = [
   "agent.turn_started",
@@ -52,6 +53,17 @@ export default function contribute(server: PluginServerContext) {
     deckFirstHandle?.();
     void gate.sweep().catch((e) => log(`gate sweep failed: ${e}`));
   };
+  // The enforcer: an idle first mate that still owns tasks is re-woken (twice at most per item), then the task shows as "first mate stalled".
+  // Timings can be shortened through the daemon's environment (the isolated demo does).
+  const num = (v: string | undefined) => (v && Number(v) > 0 ? Number(v) : undefined);
+  const enforcer = new Enforcer({
+    ports, root: () => deck.root(), snapshot: () => deck.snapshot(), log,
+    settleMs: num(process.env.FM_ENFORCER_SETTLE_MS), gapMs: num(process.env.FM_ENFORCER_GAP_MS),
+    onChange: (crews, stalled) => deck.setEnforcement(crews, stalled),
+  });
+  deck.onStages((snap) => enforcer.onStages(snap));
+  const enforcerTick = setInterval(() => enforcer.tick(), num(process.env.FM_ENFORCER_TICK_MS) ?? 30_000);
+  enforcerTick.unref?.();
   // The permission hook: classifies crew permission requests against state/decisions.md (shadow: log only; enforce: auto-allow the safe ones).
   const permission = new Permission({ ports, root: (): string => deck.root(), paseoHome: home ?? join(homedir(), ".paseo"), log });
   deck.start().catch((e) => log(`start failed: ${e?.stack ?? e}`));
@@ -67,7 +79,7 @@ export default function contribute(server: PluginServerContext) {
       ports.capture(ctx, `hook ${name}`);
       if (name === "agent.turn_started") deck.onTurnStarted(event.agent.id);
       deck.onAgentEvent(event.agent.id);
-      if (name === "agent.turn_ended") void gate.onTurnEnded(event as never);
+      if (name === "agent.turn_ended") { void gate.onTurnEnded(event as never); enforcer.onTurnEnded(event.agent.id); }
       if (name === "agent.permission_requested") void permission.onRequested(event as never);
       if (name === "agent.closed") void gate.onClosed(event as never);
     });
@@ -81,6 +93,8 @@ export default function contribute(server: PluginServerContext) {
     log("cleanup");
     unsub();
     gate.stop();
+    clearInterval(enforcerTick);
+    enforcer.stop();
     deck.stop();
   };
 }

@@ -919,3 +919,33 @@ test("stages.json: the plugin's one evaluation agrees with the page card for car
   assert.ok(snap.inputsMtimeMs > 0 && Date.now() - Date.parse(snap.writtenAt) < 60_000);
   r.deck.stop();
 });
+
+test("enforcement reaches the page and stages.json together: a stalled task moves to Needs you, only while its situation holds; a reminded crew reaches the first mate", async () => {
+  const r = rig({ tasks: [
+    { id: "l1", intent: "lost", state: "active", since: "2026-10-24T00:00:00Z", project: "demo", shape: "ship" },
+    { id: "r1", intent: "running", state: "active", project: "demo", shape: "ship" },
+  ] });
+  r.fw.add({ id: "ag-r", status: "idle", labels: { "fm.task": "r1" }, createdAt: "2026-10-24T10:00:00Z", items: [shell("ls")] });
+  await r.deck.configure();
+  await r.deck.render("demo");
+  await r.deck.publishStages();
+  const read = () => JSON.parse(readFileSync(join(r.root, "state", "stages.json"), "utf8")).rows;
+  const l1 = () => read().find((x: any) => x.id === "l1");
+  assert.deepEqual([l1().group, l1().owner], ["fm", "firstmate"]);
+  assert.deepEqual([read().find((x: any) => x.id === "r1").stage, read().find((x: any) => x.id === "r1").owner], ["Crew stopped · no hand-back", "crew"], "T7: an idle crew with no hand-back is the crew's");
+  const fp = l1().fp;
+  r.deck.setEnforcement(["ag-r"], { l1: { fp, why: "it did not act on 2 reminders" } });
+  await r.deck.render("demo");
+  await r.deck.publishStages();
+  assert.deepEqual([l1().stage, l1().group, l1().owner], ["Needs you · first mate stalled", "you", "captain"]);
+  assert.match(l1().reason, /did not act on 2 reminders/);
+  assert.equal(groupOfCard(readFileSync(r.live, "utf8"), "l1"), "you", "the page agrees");
+  const r1 = read().find((x: any) => x.id === "r1");
+  assert.deepEqual([r1.stage, r1.group, r1.owner], ["Idle", "fm", "firstmate"], "after the reminder the silent crew reaches the first mate");
+  assert.equal((await r.deck.summary()).projects[0].needsYou.length, 1, "the sidebar counts it");
+  // a stall judged in an earlier situation no longer applies
+  r.deck.setEnforcement([], { l1: { fp: "old", why: "x" } });
+  await r.deck.publishStages();
+  assert.equal(l1().group, "fm");
+  r.deck.stop();
+});
