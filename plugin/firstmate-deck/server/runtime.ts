@@ -198,6 +198,8 @@ export class Deck {
   /** The effective first-mate checkout root and label (for the finish gate). */
   root(): string { return this.cfg.root; }
   firstmateLabel(): string { return this.cfg.firstmateLabel; }
+  /** agent-canvas's base URL ("" = none), for the finish gate's needs-you bounce. */
+  canvasUrl(): string { return this.cfg.canvasUrl ?? ""; }
 
   async start(): Promise<void> {
     await this.configure();

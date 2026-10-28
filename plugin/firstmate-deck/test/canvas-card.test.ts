@@ -55,6 +55,25 @@ test("the full embed card sits in a collapsed fold (the focus view opens it), an
   assert.ok(!r.live.includes(".acv .blk{color:red}"), "css is page-level, not per card");
 });
 
+test("Needs you: the whole canvas is open and the BLUF is uncut; a running card keeps the compact strip", () => {
+  const long = "x".repeat(400);
+  const ask = { id: "db", question: "Q?", blocking: true, options: [{ value: "a", label: "A" }, { value: "b", label: "B" }] };
+  const idle = (bluf: string) => render(project([T]), data({}, summary("ag-1", { runState: "idle", bluf, openAsks: [ask] })), { "ag-1": { ...agent, status: "idle" } }, { t1: [{ ...labeled.t1[0], status: "idle" }] });
+  const r = idle(long);
+  assert.ok(r.live.indexOf('id="t-t1"') > r.live.indexOf('id="g-you"'));
+  const html = card(r.live);
+  assert.match(html, /<div class="cv has-full cv-whole"/);
+  assert.match(html, /<details class="cnotes cv-d" id="cvd-ag-1" open><summary>Full canvas<\/summary><div class="cv-f acv"><div class="blk">FULL<\/div>/);
+  assert.ok(!html.includes('class="cv-bluf"') && !html.includes('class="cv-steps"'), "the full card carries the BLUF and steps itself");
+  assert.match(html, /class="cv-v cv-mut">Working</, "the verdict row stays");
+  // no card fetched yet: the strip falls back, with the BLUF uncut
+  const bare = card(render(project([T]), data({ cards: {} }, summary("ag-1", { runState: "idle", bluf: long, openAsks: [ask] })), { "ag-1": { ...agent, status: "idle" } }, { t1: [{ ...labeled.t1[0], status: "idle" }] }).live);
+  assert.ok(bare.includes(`class="cv-bluf">${long}<`));
+  // a running card is still compact and folded, its BLUF cut
+  const run = card(render(project([T]), data({}, summary("ag-1", { bluf: long }))).live);
+  assert.ok(run.includes("cv-bluf") && !run.includes(long) && !run.includes("cv-whole") && !/id="cvd-ag-1" open/.test(run));
+});
+
 test("a canvas that moved changes live, and the css change moves the page signature", () => {
   const m = project([T]);
   const a = render(m, data()), b = render(m, data({}, summary("ag-1", { rev: 2, bluf: "Tests green" })));

@@ -3,13 +3,16 @@
 // (the first line of the final message starts DONE: / BLOCKED:) and, for agents carrying `fm.notify=plugin` while
 // state/decisions.md says `notify: plugin`, wakes the first mate with a `## Crew <VERDICT> · <task>` message.
 // Without the switch (or the label) it only audits: every decision is appended to state/gate-log.jsonl (shadow mode).
+// A strict crew (`canvas.strict=on`) that ends `BLOCKED: canvas ask <id>` with no such open Ask on its canvas (agent-canvas refused
+// the question, so the canvas lacks the structure) is sent back once with the plugin's error; it is neither logged as a verdict nor
+// woken on. The second time it is an ordinary BLOCKED.
 import { appendFileSync, mkdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { PortSelector } from "./paseo-port.ts";
 import { projectClaimedId, claimedId } from "./claims.ts";
 
 export type Verdict = "DONE" | "BLOCKED" | "ERROR" | "CANCELED" | "CLOSED" | "NARRATION";
-export type GateResult = "woke" | "shadow" | "deferred" | "failed" | "narration" | "near-miss" | "no-target";
+export type GateResult = "woke" | "shadow" | "deferred" | "failed" | "narration" | "near-miss" | "no-target" | "bounced";
 
 export type GateEntry = {
   at: string;
@@ -85,10 +88,27 @@ export type TurnEndedEvent = {
   timeline: readonly GateItem[];
 };
 
+/** What the bounce reads from agent-canvas: the agent's open asks and the last write it refused (`/api/fm/summary`). */
+export type CanvasLookup = (agentId: string) => Promise<{ openAsks: { id: string }[]; lastRejection?: unknown } | null>;
+
+/** The plugin's refusal text out of `lastRejection` (a string, or `{error}` / `{errors}` as agent-canvas returns it). */
+export function rejectionText(r: unknown): string {
+  if (typeof r === "string") return r;
+  if (r && typeof r === "object") {
+    const o = r as { error?: unknown; errors?: unknown; message?: unknown };
+    if (typeof o.error === "string") return o.error;
+    if (Array.isArray(o.errors)) return o.errors.map(String).join("\n");
+    if (typeof o.message === "string") return o.message;
+  }
+  return "";
+}
+
 export type GateOptions = {
   ports: PortSelector;
   root: () => string;
   firstmateLabel: () => string;
+  /** Where a strict crew's canvas is read for the needs-you bounce. Absent or null = no check (the BLOCKED goes through). */
+  canvas?: CanvasLookup;
   log: (m: string) => void;
   now?: () => number;
   settleMs?: number;
@@ -100,6 +120,7 @@ export class Gate {
   private o: GateOptions;
   private seen: Set<string> | null = null;
   private lastByAgent = new Map<string, { verdict: Verdict; line: string }>();
+  private bounced = new Set<string>(); // agentId|askId already sent back once (also from the log, so a restart keeps it)
   private timers = new Set<ReturnType<typeof setTimeout>>();
   private sweepTimer: ReturnType<typeof setInterval> | null = null;
   private sweeping = false;
@@ -144,6 +165,7 @@ export class Gate {
           const e = JSON.parse(l) as GateEntry;
           if (e.result === "woke" || e.result === "shadow") seen.add(this.key(e.agentId, e.turnId, e.verdict, e.line));
           if (e.result === "woke" || e.result === "shadow" || e.result === "narration") this.lastByAgent.set(e.agentId, { verdict: e.verdict, line: e.line });
+          if (e.result === "bounced" && e.note) this.bounced.add(`${e.agentId}|${e.note.split(" ")[0]}`);
         } catch {}
       }
     } catch {}
@@ -223,7 +245,41 @@ export class Gate {
       if (allowRecheck) this.later(() => this.enqueue(() => this.handleTurn(ev, false)), this.o.settleMs ?? SETTLE_RECHECK_MS);
       return;
     }
+    if (m.verdict === "BLOCKED" && (await this.bounce(id, task, ev.turnId, m.line, info.labels))) return;
     await this.decide({ ...base, verdict: m.verdict, line: m.line });
+  }
+
+  /**
+   * A strict crew's `BLOCKED: canvas ask <id>` while its canvas holds no such open Ask: send it back once with agent-canvas's
+   * refusal. True = bounced (the BLOCKED is not a finish). False = nothing to bounce (not strict, ask is open, canvas unreachable,
+   * or this ask was already bounced once), so the caller treats it as a normal BLOCKED.
+   */
+  private async bounce(agentId: string, task: string, turnId: string | null, line: string, labels: Record<string, string>): Promise<boolean> {
+    if (labels["canvas.strict"] !== "on" || !this.o.canvas) return false;
+    const askId = /^BLOCKED:\s*canvas ask\s+([\w-]+)/i.exec(line)?.[1];
+    if (!askId) return false;
+    this.load();
+    const key = `${agentId}|${askId}`;
+    if (this.bounced.has(key)) return false;
+    const s = await this.o.canvas(agentId).catch(() => null);
+    if (!s || s.openAsks.some((a) => a.id === askId)) return false;
+    const why = rejectionText(s.lastRejection) || "agent-canvas has no refusal on record: the canvas has no open Ask with that id.";
+    const message = [
+      `## Canvas question not accepted · ${task}`,
+      `You ended with "${line}", but your canvas has no open Ask "${askId}", so it was not put in front of the captain and nobody was woken.`,
+      "agent-canvas said:",
+      why,
+      `Fix the canvas (rewrite the sections, do not append), confirm the write succeeded, then end your turn with BLOCKED: canvas ask ${askId} again. This reminder is sent once.`,
+    ].join("\n");
+    try {
+      await this.o.ports.send(agentId, message);
+    } catch (e) {
+      this.append({ agentId, task, turnId, verdict: "BLOCKED", line, acted: false, result: "failed", note: `bounce not sent: ${(e as Error).message.slice(0, 160)}` });
+      return false;
+    }
+    this.bounced.add(key);
+    this.append({ agentId, task, turnId, verdict: "BLOCKED", line, acted: false, result: "bounced", note: `${askId} sent back to the crew; no wake` });
+    return true;
   }
 
   private later(fn: () => void, ms: number): void {

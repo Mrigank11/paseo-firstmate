@@ -7,6 +7,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { Deck } from "./server/runtime.ts";
 import { Gate } from "./server/gate.ts";
+import { fetchSummary } from "./server/canvas-port.ts";
 import { Permission } from "./server/permission.ts";
 
 const AGENT_EVENTS = [
@@ -44,7 +45,7 @@ export default function contribute(server: PluginServerContext) {
     },
   });
   // The finish gate: audits every crew turn end (state/gate-log.jsonl) and, behind `notify: plugin`, wakes the first mate.
-  const gate = new Gate({ ports, root: () => deck.root(), firstmateLabel: () => deck.firstmateLabel(), log });
+  const gate = new Gate({ ports, root: () => deck.root(), firstmateLabel: () => deck.firstmateLabel(), canvas: (id) => fetchSummary(deck.canvasUrl(), id), log });
   gate.start();
   const deckFirstHandle = ports.onFirstHandle;
   ports.onFirstHandle = () => {

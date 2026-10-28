@@ -36,7 +36,7 @@ The page re-renders on its own within seconds of any of these writes. Every task
 
 **Use `--options` whenever an ask has a fixed set of answers** (A/B/C, yes/no): `bin/fleet ask <id> "<question>" --options "A index card|B live console|C status board"` (2 to 6 options, each ≤60 chars; combine with `--context-file`; `reask` keeps or replaces them). The page shows them as buttons under the question and the captain answers with one click, no typing.
 
-**Asks are BLUF.** The ask text is the question the captain answers, readable on its own: "Ship without onboarding_path, or block staging on it?" The reasoning, options and evidence go in the context file, which opens under an expander.
+**Asks are BLUF.** The ask text is the question the captain answers, readable on its own: "Ship without onboarding_path, or block staging on it?" The reasoning, options and evidence go in the context file, which opens under an expander. The context file has the same structure as a crew canvas that asks: `bin/fleet ask-template` prints it (BLUF, Issue, Impact, Context and components, Changes by component, Fix plan, Ask as `##` headings). `bin/fleet ask` / `reask` refuse a file without those headings in that order and say what is missing.
 
 ## Answering page comments
 

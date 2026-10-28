@@ -173,8 +173,9 @@ const verdictTone = (label: string) => (label === "Error" ? "bad" : label === "N
 /**
  * The agent's canvas inside its card: verdict, BLUF, steps strip with the Now row. `compact` is what a grouped list shows;
  * the full embed card (agent-canvas `/api/fm/card`) sits in a collapsed "Full canvas" fold, open and replacing it in the focus view (style.ts, nav-script.ts).
+ * `full` (a Needs-you card) shows the whole canvas open, BLUF uncut, in place of the compact strip: the crew's canvas is structured and short by then.
  */
-export function canvasFragment(s: FmSummary, card?: string): string {
+export function canvasFragment(s: FmSummary, card?: string, full = false): string {
   const flags = s.verdict.flags.map((f) => `<span class="fl" title="${esc(f.signal)}">${esc(f.text)}</span>`).join("");
   const total = Math.min(s.steps.total, 24);
   const done = s.steps.total > 24 ? Math.round((s.steps.done / s.steps.total) * 24) : s.steps.done;
@@ -182,10 +183,12 @@ export function canvasFragment(s: FmSummary, card?: string): string {
   const steps = s.steps.total
     ? `<div class="cv-steps"><span class="cv-bar" aria-hidden="true">${segs}</span><span class="cv-n">${s.steps.done}/${s.steps.total} steps</span>${s.steps.current ? `<span class="cv-now"><b>Now</b> ${esc(cut(s.steps.current, 100))}</span>` : ""}</div>`
     : "";
+  const whole = full && !!card;
   const compact =
     `<div class="cv-c"><div class="cv-top"><span class="cv-v cv-${verdictTone(s.verdict.label)}">${esc(s.verdict.label)}</span>${flags}${s.auto ? `<span class="fl" title="no canvas was written: this is the one agent-canvas drew from the agent's timeline">auto canvas</span>` : ""}</div>` +
-    `${s.bluf ? `<div class="cv-bluf">${esc(cut(s.bluf, 280))}</div>` : ""}${steps}</div>`;
-  return `<div class="cv${card ? " has-full" : ""}" data-rev="${s.rev}">${compact}${card ? `<details class="cnotes cv-d" id="cvd-${esc(s.agentId)}"><summary>Full canvas</summary><div class="cv-f acv">${card}</div></details>` : ""}</div>`;
+    // a whole canvas carries its own BLUF and steps: the strip keeps only the verdict
+    `${whole ? "" : s.bluf ? `<div class="cv-bluf">${esc(full ? s.bluf : cut(s.bluf, 280))}</div>` : ""}${whole ? "" : steps}</div>`;
+  return `<div class="cv${card ? " has-full" : ""}${whole ? " cv-whole" : ""}" data-rev="${s.rev}">${compact}${card ? `<details class="cnotes cv-d" id="cvd-${esc(s.agentId)}"${whole ? " open" : ""}><summary>Full canvas</summary><div class="cv-f acv">${card}</div></details>` : ""}</div>`;
 }
 
 /**
@@ -349,7 +352,7 @@ function row(t: Task, group: GroupKey, ctx: Ctx, idx = 0): string {
     // card-level comments, plus comments on asks that are gone (an answered ask takes its own trail with it)
     trailHtml(ctx.comments, `t-${t.id}`, ctx.o.now, (c) => c.target.startsWith(`t-${t.id}#`) && !t.asks.some((a) => c.target === `t-${t.id}#${a.id}`) && !rawTargets.has(c.target)),
   ];
-  if (sum) out.push(agentBlock(t, group, aid ? ctx.agents[aid] : undefined, ctx.o, st, true), canvasFragment(sum, ctx.canvas?.cards[sum.agentId]));
+  if (sum) out.push(agentBlock(t, group, aid ? ctx.agents[aid] : undefined, ctx.o, st, true), canvasFragment(sum, ctx.canvas?.cards[sum.agentId], group === "you"));
   t.asks.forEach((a) => {
     const box: string[] = [];
     const asked = `<div class="ask asked">${inline(a.text)}</div>`;

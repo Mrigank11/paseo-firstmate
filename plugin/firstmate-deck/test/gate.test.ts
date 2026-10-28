@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { CliPort } from "../server/paseo-cli.ts";
 import { PortSelector, type TimelineItem } from "../server/paseo-port.ts";
-import { Gate, messageVerdict, notifySwitchOn, type GateEntry, type TurnEndedEvent } from "../server/gate.ts";
+import { Gate, messageVerdict, notifySwitchOn, rejectionText, type GateEntry, type TurnEndedEvent } from "../server/gate.ts";
 import { assistant, FakeWorld, fakePaseo, shell } from "./fake-paseo.ts";
 
 const user = (text: string) => ({ type: "user_message", text }) as TimelineItem;
@@ -207,4 +207,53 @@ test("start-up sweep without an SDK handle (CLI path): a DONE missed while down 
   assert.equal(entries[0].result, "woke");
   assert.deepEqual(sent, ["fm"]);
   assert.equal(await g.sweepCli(), 0); // handled once
+});
+
+// ---------- the needs-you bounce (canvas.strict) ----------
+
+const STRICT = { ...CREW, "canvas.strict": "on" };
+const sum = (openIds: string[], lastRejection?: unknown) => ({ openAsks: openIds.map((id) => ({ id })), lastRejection });
+
+test("a strict crew's BLOCKED naming a canvas ask that is not open is sent back once, not logged as a verdict, no wake", async () => {
+  const s = setup({ switchOn: true, labels: STRICT });
+  const g = new Gate({ ports: s.ports, root: () => s.root, firstmateLabel: () => "firstmate=true", log: () => {}, settleMs: 10, retryDelayMs: 1, canvas: async () => sum([], { code: "needs_you_structure", error: "missing: impact, fix" }) });
+  await g.onTurnEnded(s.end("BLOCKED: canvas ask q1"));
+  assert.deepEqual(s.world.sent.map((m) => m.id), ["crew"], "the crew is sent back, the first mate is not woken");
+  assert.match(s.world.sent[0].text, /^## Canvas question not accepted · t1\n/);
+  assert.match(s.world.sent[0].text, /missing: impact, fix/);
+  assert.match(s.world.sent[0].text, /BLOCKED: canvas ask q1 again/);
+  assert.deepEqual(s.log().map((e) => [e.verdict, e.result, e.acted]), [["BLOCKED", "bounced", false]]);
+  // the second time is an ordinary BLOCKED and wakes the first mate
+  await g.onTurnEnded(s.end("BLOCKED: canvas ask q1", { turnId: "turn-2" }));
+  assert.deepEqual(s.world.sent.map((m) => m.id), ["crew", "fm"]);
+  assert.equal(s.log().at(-1)!.result, "woke");
+});
+
+test("the bounce is remembered across a restart (from the log)", async () => {
+  const s = setup({ switchOn: true, labels: STRICT });
+  const mk = () => new Gate({ ports: s.ports, root: () => s.root, firstmateLabel: () => "firstmate=true", log: () => {}, settleMs: 10, retryDelayMs: 1, canvas: async () => sum([], "refused") });
+  await mk().onTurnEnded(s.end("BLOCKED: canvas ask q1"));
+  await mk().onTurnEnded(s.end("BLOCKED: canvas ask q1", { turnId: "turn-2" }));
+  assert.deepEqual(s.world.sent.map((m) => m.id), ["crew", "fm"]);
+});
+
+test("no bounce when the ask is open, the crew is not strict, the canvas is unreachable, or it is not a canvas ask", async () => {
+  for (const [labels, lookup, line] of [
+    [STRICT, async () => sum(["q1"]), "BLOCKED: canvas ask q1"],
+    [CREW, async () => sum([]), "BLOCKED: canvas ask q1"],
+    [STRICT, async () => null, "BLOCKED: canvas ask q1"],
+    [STRICT, async () => sum([]), "BLOCKED: which database?"],
+  ] as const) {
+    const s = setup({ switchOn: true, labels });
+    const g = new Gate({ ports: s.ports, root: () => s.root, firstmateLabel: () => "firstmate=true", log: () => {}, settleMs: 10, retryDelayMs: 1, canvas: lookup });
+    await g.onTurnEnded(s.end(line));
+    assert.deepEqual(s.world.sent.map((m) => m.id), ["fm"], line);
+  }
+});
+
+test("rejectionText reads a string, {error} or {errors}", () => {
+  assert.equal(rejectionText("a"), "a");
+  assert.equal(rejectionText({ code: "x", error: "b" }), "b");
+  assert.equal(rejectionText({ errors: ["c", "d"] }), "c\nd");
+  assert.equal(rejectionText(undefined), "");
 });

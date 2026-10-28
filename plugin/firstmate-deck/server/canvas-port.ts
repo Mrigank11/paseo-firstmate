@@ -184,3 +184,21 @@ export class CanvasPort {
     this.o.onChange(ids);
   }
 }
+
+/** One agent's summary straight from agent-canvas (the finish gate's needs-you bounce). Null when there is none or it is unreachable. */
+export async function fetchSummary(base: string, agentId: string, f: FetchLike = (globalThis as any).fetch): Promise<(FmSummary & { lastRejection?: unknown }) | null> {
+  const url = base.trim().replace(/\/+$/, "");
+  if (!url || !/^[\w-]+$/.test(agentId)) return null;
+  const ac = new AbortController();
+  const t = setTimeout(() => ac.abort(), TIMEOUT_MS);
+  try {
+    const r = await f(`${url}/api/fm/summary?agents=${encodeURIComponent(agentId)}`, { signal: ac.signal });
+    if (!r.ok) return null;
+    const list = (await r.json())?.agents;
+    return Array.isArray(list) ? list.find((s: FmSummary) => s?.agentId === agentId) ?? null : null;
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(t);
+  }
+}

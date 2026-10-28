@@ -103,11 +103,18 @@ refused "depend self" $F depend a a
 refused "depend bad id" $F depend a 'Bad Id'
 
 # ask context
-printf 'long context\n' >"$T/ctx.md"
+$F ask-template >"$T/ctx.md"
 $F ask a "first" >/dev/null
 $F ask a "second" --context-file "$T/ctx.md" >/dev/null
 eq "$($F get a | jq -r '.asks[1].context')" "tasks/a/asks/2.md"; check "ask context path stored" $?
-[[ -f "$T/tasks/a/asks/2.md" ]] && eq "$(cat "$T/tasks/a/asks/2.md")" "long context"; check "ask context file copied" $?
+[[ -f "$T/tasks/a/asks/2.md" ]] && eq "$(cat "$T/tasks/a/asks/2.md")" "$(cat "$T/ctx.md")"; check "ask context file copied" $?
+# the context file must carry the ask structure
+printf '## Issue\nx\n' >"$T/bad.md"
+refused "ask context without the structure" $F ask a "bare" --context-file "$T/bad.md"
+$F ask a "bare" --context-file "$T/bad.md" 2>&1 | grep -q "missing:.*BLUF.*Impact" && ok "refusal lists the missing headings" || bad "refusal lists the missing headings"
+printf '## BLUF\nx\n## Impact\nx\n## Issue\nx\n## Context and components\nx\n## Changes by component\nx\n## Fix plan\nx\n## Ask\nx\n' >"$T/order.md"
+$F ask a "bare" --context-file "$T/order.md" 2>&1 | grep -q "out of order: *Issue\|out of order: *Impact" && ok "refusal names the out-of-order heading" || bad "refusal names the out-of-order heading"
+$F ask-template | grep -c '^## ' | grep -qx 7 && ok "ask-template prints the 7 headings" || bad "ask-template prints the 7 headings"
 refused "ask missing context file" $F ask a "third" --context-file "$T/nope.md"
 refused "ask context + overlong text" $F ask a "$(printf 'x%.0s' $(seq 201))" --context-file "$T/ctx.md"
 [[ ! -e "$T/tasks/a/asks/3.md" ]]; check "refused ask leaves no file" $?
@@ -191,10 +198,10 @@ eq "$($F get q | jq -r '.asks[0].since')" "2020-01-01T00:00:00Z"; check "reask l
 eq "$($F get q | jq -r '.asks[1].text')" "second?"; check "reask keeps text" $?
 $F reask q 1 "sharper question?" >/dev/null
 eq "$($F get q | jq -r '.asks[0].text')" "sharper question?"; check "reask replaces text" $?
-echo "# details" >"$T/rctx.md"
+$F ask-template >"$T/rctx.md"
 $F reask q 1 "with details" --context-file "$T/rctx.md" >/dev/null
 rel="$($F get q | jq -r '.asks[0].context')"
-[[ -f "$T/$rel" ]] && eq "$(cat "$T/$rel")" "# details"; check "reask copies context file" $?
+[[ -f "$T/$rel" ]] && eq "$(cat "$T/$rel")" "$(cat "$T/rctx.md")"; check "reask copies context file" $?
 $F reask q 2 --context-file "$T/rctx.md" >/dev/null
 eq "$($F get q | jq -r '.asks[1].text')" "second?" && [[ -n "$($F get q | jq -r '.asks[1].context')" ]]; check "reask context only keeps text" $?
 refused "reask bad index (0)" $F reask q 0
@@ -208,7 +215,7 @@ refused "reask missing context file" $F reask q 1 "t" --context-file "$T/nope.md
 # options
 reset
 $F add o intent=x shape=scout state=active >/dev/null
-printf "ctx\n" >"$T/ctx.md"
+$F ask-template >"$T/ctx.md"
 $F ask o "Which design?" --options "A index card|B live console|C status board" >/dev/null
 eq "$($F get o | jq -c '.asks[0].options')" '["A index card","B live console","C status board"]'; check "ask --options stored" $?
 $F ask o "With ctx?" --context-file "$T/ctx.md" --options "yes|no" >/dev/null

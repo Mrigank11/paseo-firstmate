@@ -35,6 +35,10 @@
 #                                     the captain's follow-up was answered); optionally replace its text
 #                                     (<=200 chars), context file and options, the way ask does
 #                                     (options are kept when --options is absent)
+#                                     The context file must hold these headings in this order (the canvas structure, see ask-template)
+#                                     or ask/reask refuse and list what is missing or out of order
+#   bin/fleet ask-template            print the context-file skeleton (BLUF, Issue, Impact, Context and components,
+#                                     Changes by component, Fix plan, Ask) to fill in and pass as --context-file
 #   bin/fleet pending <id> <ask>      mark the ask as waiting on the first mate's follow-up (sets pendingSince):
 #                                     the page keeps it under "With the first mate" instead of Needs you.
 #                                     reask and answer clear it. `bin/page reply ... --followup <id>:<ask>` calls this
@@ -341,6 +345,58 @@ parse_options() {
   printf '%s' "$arr"
 }
 
+# The headings a task-ask context file carries, in order: the same structure the crew canvas has when it asks the captain.
+CTX_HEADINGS=("BLUF" "Issue" "Impact" "Context and components" "Changes by component" "Fix plan" "Ask")
+
+cmd_ask_template() {
+  cat <<'TPL'
+## BLUF
+The outcome in one or two plain sentences, then the one decision needed.
+
+## Issue
+What is wrong or undecided, in 2-4 plain lines.
+
+## Impact
+Who or what is affected, and what it costs if nothing is done.
+
+## Context and components
+The parts involved and how they relate, a short list. Name components, not files.
+
+## Changes by component
+One line per component: what changes in behaviour. No code.
+
+## Fix plan
+3-6 numbered steps in order, each with its cost or risk when it has one.
+
+## Ask
+The decision, and the options with the recommended one first.
+TPL
+}
+
+# refuse a context file without CTX_HEADINGS, each as a markdown heading, in order (case, trailing colon and **bold** ignored)
+check_context() {
+  local f="$1" got want i=0 missing=() misplaced=() h
+  got="$(sed -nE 's/^#{1,6}[[:space:]]+(.*[^[:space:]])[[:space:]]*$/\1/p' "$f" | sed -E 's/[*_`]//g; s/:$//' | tr 'A-Z' 'a-z')"
+  # walk the file's headings once, taking the required ones in order; a required heading found only earlier is out of order
+  for h in "${CTX_HEADINGS[@]}"; do
+    want="$(tr 'A-Z' 'a-z' <<<"$h")"
+    if grep -qxF "$want" <<<"$got"; then
+      local line; line="$(grep -nxF "$want" <<<"$got" | head -1 | cut -d: -f1)"
+      if ((line <= i)); then misplaced+=("$h"); else i="$line"; fi
+    else
+      missing+=("$h")
+    fi
+  done
+  ((${#missing[@]} + ${#misplaced[@]} == 0)) && return 0
+  {
+    echo "fleet: context file '$f' lacks the ask structure (markdown headings, in this order: $(printf '%s → ' "${CTX_HEADINGS[@]}" | sed 's/ → $//'))"
+    ((${#missing[@]} == 0)) || echo "  missing:      $(IFS=,; echo "${missing[*]}" | sed 's/,/, /g')"
+    ((${#misplaced[@]} == 0)) || echo "  out of order: $(IFS=,; echo "${misplaced[*]}" | sed 's/,/, /g')"
+    echo "  'bin/fleet ask-template' prints the skeleton"
+  } >&2
+  exit 1
+}
+
 cmd_ask() {
   local id="$1" text="$2" ctx="${3:-}" optraw="${4:-}" refraw="${5:-}"
   entry_exists "$id" || die "no task $id"
@@ -359,6 +415,7 @@ cmd_ask() {
   local rel=""
   if [[ -n "$ctx" ]]; then
     [[ -f "$ctx" ]] || die "context file '$ctx' not found"
+    check_context "$ctx"
     rel="tasks/$id/asks/$n.md"
     mkdir -p "$TASKS/$id/asks"
     cp "$ctx" "$STATE_DIR/$rel"
@@ -386,6 +443,7 @@ cmd_reask() {
   local rel="" k
   if [[ -n "$ctx" ]]; then
     [[ -f "$ctx" ]] || die "context file '$ctx' not found"
+    check_context "$ctx"
     k="$(next_ask_n "$id")"
     while [[ -e "$TASKS/$id/asks/$k.md" ]]; do k=$((k + 1)); done
     rel="tasks/$id/asks/$k.md"
@@ -691,6 +749,7 @@ case "$cmd" in
   asks)          cmd_asks;;
   add)           [[ $# -ge 1 ]] || die "usage: fleet add <id> k=v ..."; cmd_add "$@";;
   set)           [[ $# -ge 1 ]] || die "usage: fleet set <id> k=v ..."; cmd_set "$@";;
+  ask-template)  cmd_ask_template;;
   ask)           parse_ask_args "$@";;
   reask)         parse_reask_args "$@";;
   pending)       [[ $# -eq 2 ]] || die "usage: fleet pending <id> <ask>"; cmd_pending "$1" "$2";;
