@@ -257,3 +257,12 @@ test("rejectionText reads a string, {error} or {errors}", () => {
   assert.equal(rejectionText({ errors: ["c", "d"] }), "c\nd");
   assert.equal(rejectionText(undefined), "");
 });
+
+test("the turn-end event's timeline is empty (deprecated): the verdict comes from the agent's tail, and the bounce still works", async () => {
+  const s = setup({ switchOn: true, labels: STRICT });
+  s.world.agents.get("crew")!.items = [user("go"), shell("ls"), assistant("BLOCKED: canvas ask q1")];
+  const g = new Gate({ ports: s.ports, root: () => s.root, firstmateLabel: () => "firstmate=true", log: () => {}, settleMs: 10, retryDelayMs: 1, canvas: async () => sum([], "refused") });
+  await g.onTurnEnded(s.end("", { timeline: [] }));
+  assert.deepEqual(s.world.sent.map((m) => m.id), ["crew"]);
+  assert.equal(s.log().at(-1)!.result, "bounced");
+});

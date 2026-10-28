@@ -232,7 +232,9 @@ export class Gate {
     if (ev.outcome.kind === "failed") return this.decide({ ...base, verdict: "ERROR", line: ev.outcome.error.message });
     if (ev.outcome.kind === "canceled") return this.decide({ ...base, verdict: "CANCELED", line: ev.outcome.reason ?? "canceled" });
 
-    const m = messageVerdict(ev.timeline);
+    // the event's own timeline is deprecated and always empty on current daemons: read the tail on demand
+    const items = ev.timeline.length ? ev.timeline : ((await this.o.ports.sdkPort()?.tailItems(id).catch(() => null)) ?? ev.timeline);
+    const m = messageVerdict(items);
     if (m.verdict === "NARRATION") {
       this.append({ agentId: id, task, turnId: ev.turnId, verdict: "NARRATION", line: m.line, acted: false, result: "narration" });
       if (m.nearMiss) this.append({ agentId: id, task, turnId: ev.turnId, verdict: "NARRATION", line: m.nearMiss, acted: false, result: "near-miss", note: "DONE:/BLOCKED: not on the first line; not acted on" });
