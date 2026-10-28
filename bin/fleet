@@ -69,7 +69,8 @@
 # Run-state keys are refused with a pointer: status, agentId, workspaceId, lastEvent, notes, preview, provider.
 # Optional fields (add/set): project (kebab slug, empty = none), title (<=160 chars), order (integer: position on the
 # page within a group, lowest first; tasks without one keep file order), legacyId (kebab slug: the id the task had on a
-# hand-run page it was imported from). add also takes
+# hand-run page it was imported from). `set <id> key=` (empty value) removes order, branch, pr, title or blocked_on
+# (blocked_on only off a blocked task). add also takes
 # depends_on=a,b; a task added without project= inherits it from the first dependency that has one
 # (so does a later `depend`, when the task still has none).
 #
@@ -290,14 +291,23 @@ cmd_set() {
   local id="$1"; shift
   entry_exists "$id" || die "no task $id";
   [[ $# -gt 0 ]] || die "set needs at least one key=value"
-  local obj; obj="$(build_obj "$SETTABLE" "$@")"
+  # `key=` (empty) on an optional field removes it; everything else goes through build_obj
+  local kv rest=() unset_keys=()
+  for kv in "$@"; do
+    case "$kv" in
+      order=|branch=|pr=|title=|blocked_on=) unset_keys+=("${kv%=}");;
+      *) rest+=("$kv");;
+    esac
+  done
+  local obj; obj="$(build_obj "$SETTABLE" "${rest[@]}")"
   check_obj "$obj"  # validate BEFORE touching the file: a refusal changes nothing
   # blocked_on follows the state: required while blocked, dropped when the state moves off blocked
   local cur_st cur_bo new_st new_bo
   cur_st="$(jq -r --arg id "$id" '.tasks | map(select(.id == $id))[0].state' "$FLEET")"
   cur_bo="$(jq -r --arg id "$id" '.tasks | map(select(.id == $id))[0].blocked_on // ""' "$FLEET")"
   new_st="$(jq -r --arg d "$cur_st" '.state // $d' <<<"$obj")"
-  if jq -e 'has("blocked_on")' <<<"$obj" >/dev/null; then new_bo="$(jq -r '.blocked_on' <<<"$obj")"
+  if [[ " ${unset_keys[*]} " == *" blocked_on "* ]]; then new_bo=""
+  elif jq -e 'has("blocked_on")' <<<"$obj" >/dev/null; then new_bo="$(jq -r '.blocked_on' <<<"$obj")"
   elif [[ "$new_st" == "blocked" ]]; then new_bo="$cur_bo"
   else new_bo=""; fi
   check_blocked "$obj" "$new_st" "$new_bo"
@@ -305,8 +315,9 @@ cmd_set() {
   # `since` is when `state` last changed: stamped only on a real change
   local stamp="null"
   if [[ "$new_st" != "$cur_st" ]]; then stamp="\"$(now)\""; fi
-  atomic_jq --arg id "$id" --argjson o "$obj" --argjson stamp "$stamp" \
-    '.tasks |= map(if .id == $id then (. + $o + (if $stamp == null then {} else {since: $stamp} end)) | if .state != "blocked" then del(.blocked_on) else . end else . end)';
+  local unset_json; unset_json="$(printf '%s\n' "${unset_keys[@]}" | jq -R . | jq -sc 'map(select(length > 0))')"
+  atomic_jq --arg id "$id" --argjson o "$obj" --argjson stamp "$stamp" --argjson un "$unset_json" \
+    '.tasks |= map(if .id == $id then (. + $o + (if $stamp == null then {} else {since: $stamp} end)) | del(.[$un[]]) | if .state != "blocked" then del(.blocked_on) else . end else . end)';
   check_entry "$id";
 }
 
