@@ -456,16 +456,14 @@ test("failed tasks are counted as failed, not done, in the summary", async () =>
   r.deck.stop();
 });
 
-test("a comment on the ask itself moves it to 'With the first mate' at once; a comment on the card does not", async () => {
+test("a comment on the ask moves it to 'With the first mate' at once; so does one on the card of a single-ask task (T6)", async () => {
   const r = rig({ tasks: [{ id: "t1", intent: "x", title: "Pick one", state: "active", project: "demo", asks: [{ text: "Which design?", since: "2026-10-21T09:00:00Z" }] }] });
   await r.deck.configure();
   await r.deck.render("demo");
   r.deck.ingest("demo", [{ prompt: "why so slow?", selector: "article#t-t1 > div.tt" }]);
   await until(() => /why so slow/.test(liveHtml(r.live)), 1000);
-  assert.ok(/Needs you/.test(liveHtml(r.live)) && !/With the first mate/.test(liveHtml(r.live)), "a card comment does not move the ask");
-  r.deck.ingest("demo", [{ prompt: "show me both", selector: "article#t-t1 > div#a-t1-a1 > div.ask" }]);
   await until(() => /With the first mate/.test(liveHtml(r.live)), 1000);
-  assert.ok(!/Needs you/.test(liveHtml(r.live)));
+  assert.ok(!/Needs you/.test(liveHtml(r.live)), "the task has one ask, so a card comment can only be about it");
   const s = (await r.deck.summary()).projects[0];
   assert.deepEqual([s.counts.needsYou, s.counts.withFirstMate, s.needsYou.length], [0, 1, 0]);
   r.deck.stop();
@@ -777,7 +775,7 @@ test("stage: drift is shown, not hidden: a queued task with a running agent; a t
   await r.deck.configure();
   await r.deck.render("demo");
   const live = readFileSync(r.live, "utf8");
-  assert.equal(groupOfCard(live, "q1"), "next");
+  assert.equal(groupOfCard(live, "q1"), "running", "T4: the running agent decides the card");
   assert.match(taskCard(live, "q1"), /title=\\"queued-but-has-agent\\"/);
   assert.equal(groupOfCard(live, "l1"), "fm");
   assert.match(taskCard(live, "l1"), /title=\\"no-agent\\"/);

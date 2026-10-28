@@ -145,6 +145,8 @@ export class Deck {
   private relayLive: Set<string> | null = null;
   private labeledKey = "";
   private labeledFlight: { at: number; p: Promise<boolean> } | null = null;
+  /** When each agent's latest turn started (the `agent.turn_started` hook), in this process lifetime: what "the crew worked after the captain clicked" is measured against. */
+  private turnStarts = new Map<string, string>();
   /** Agents seen on an event that no page tracks: asked about once (a new crew agent), not on every turn of the first mate. */
   private unknownAgents = new Set<string>();
 
@@ -421,6 +423,11 @@ export class Deck {
     }, delayMs));
   }
 
+  /** `agent.turn_started`: remember when, unlike Paseo's updatedAt this does not move on a label change or a steer. */
+  onTurnStarted(agentId: string): void {
+    this.turnStarts.set(agentId, new Date().toISOString());
+  }
+
   /** Agent lifecycle event: that agent's view is refreshed (SDK) by the next render, which these projects get now. Re-render the projects whose tasks use that agent. */
   onAgentEvent(agentId: string): void {
     this.agents.markDirty(agentId);
@@ -468,7 +475,11 @@ export class Deck {
       const as = this.labeled.get(t.id);
       if (!as?.length) continue;
       // `canvas.relay` names the first mate that dispatched the crew; once that agent is gone, a pick on the canvas has nobody to go to
-      out[t.id] = as.map((a) => { const to = a.labels["canvas.relay"]; return to && this.relayLive && !a.archived && !this.relayLive.has(to) ? { ...a, relayGone: to } : a; });
+      out[t.id] = as.map((a) => {
+        const to = a.labels["canvas.relay"];
+        const started = this.turnStarts.get(a.id);
+        return { ...a, ...(to && this.relayLive && !a.archived && !this.relayLive.has(to) ? { relayGone: to } : {}), ...(started ? { turnStartedAt: started } : {}) };
+      });
     }
     return out;
   }
@@ -539,7 +550,7 @@ export class Deck {
 
   private viewsKey(project: string, ids: string[]): string {
     const model = this.lastGood.get(project);
-    return JSON.stringify([ids.map((id) => this.agents.peek(id) ?? null), model ? Object.entries(this.labeledFor(model)).map(([t, as]) => [t, as.map((a) => [a.id, a.status, a.archived, a.pendingPermissions, a.relayGone])]) : null]);
+    return JSON.stringify([ids.map((id) => this.agents.peek(id) ?? null), model ? Object.entries(this.labeledFor(model)).map(([t, as]) => [t, as.map((a) => [a.id, a.status, a.archived, a.pendingPermissions, a.relayGone, a.turnStartedAt, a.nudged])]) : null]);
   }
 
   /**

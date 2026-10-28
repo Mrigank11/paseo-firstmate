@@ -11,7 +11,7 @@ import { execFileSync } from "node:child_process";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { computeStage, currentAgent, type Stage, type StageAgent } from "./stage.ts";
+import { activeSinceOf, computeStage, currentAgent, type Stage, type StageAgent } from "./stage.ts";
 import { loadAllLive, type Task } from "./state.ts";
 import { canvasInput } from "./canvas-view.ts";
 import type { FmSummary } from "./canvas-port.ts";
@@ -100,7 +100,7 @@ export function rowOf(t: Task, recs: Rec[], now: Date, canvas: Record<string, Fm
   const mine = recs.filter((r) => r.task === t.id).map(toAgent);
   const cur = currentAgent(mine);
   const sum = cur && !cur.archived ? canvas[cur.id] : undefined;
-  const s = computeStage(t, mine, now, { finalKnown: false, canvas: canvasInput(sum, t.id, [], cur?.lastActivityAt) });
+  const s = computeStage(t, mine, now, { finalKnown: false, canvas: canvasInput(sum, t.id, [], activeSinceOf(cur)) });
   return {
     id: t.id, project: t.project ?? null, state: t.state, stage: s.stage, group: s.group, agentId: s.agentId, flags: s.flags,
     ...(s.stage === "Idle" ? { note: "final line unknown on CLI" } : {}),

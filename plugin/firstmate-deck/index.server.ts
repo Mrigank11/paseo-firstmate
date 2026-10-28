@@ -65,6 +65,7 @@ export default function contribute(server: PluginServerContext) {
   for (const name of AGENT_EVENTS) {
     server.on(name, (event, ctx) => {
       ports.capture(ctx, `hook ${name}`);
+      if (name === "agent.turn_started") deck.onTurnStarted(event.agent.id);
       deck.onAgentEvent(event.agent.id);
       if (name === "agent.turn_ended") void gate.onTurnEnded(event as never);
       if (name === "agent.permission_requested") void permission.onRequested(event as never);

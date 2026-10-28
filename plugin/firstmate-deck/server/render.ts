@@ -9,7 +9,7 @@ import { pageScript } from "./page-script.ts";
 import { IDIOMORPH_SOURCE } from "./morph-source.ts";
 import { CSS } from "./style.ts";
 import type { ProjectModel, Task, TrailComment } from "./state.ts";
-import { computeStage, currentAgent, stageAgentsFor, type GroupKey, type LabeledAgent, type Stage, type StageFlag } from "./stage.ts";
+import { activeSinceOf, computeStage, currentAgent, stageAgentsFor, type GroupKey, type LabeledAgent, type Stage, type StageFlag } from "./stage.ts";
 import { attentionOf, type Attention } from "./attention.ts";
 import { canvasInput, clickedPick, SAFE_ASK } from "./canvas-view.ts";
 import type { CanvasData, FmSummary } from "./canvas-port.ts";
@@ -110,7 +110,7 @@ export function stageOf(t: Task, live: boolean, o: { now: Date; labeled?: Render
   if (!live) return computeStage(t, t.agents?.length ? [{ id: t.agents[t.agents.length - 1], status: "idle", archived: false, pendingPermissions: 0 }] : [], o.now, { archived: true });
   const agents = stageAgentsFor(o.labeled?.[t.id], view);
   const cur = currentAgent(agents);
-  const canvas = cur && o.canvas?.status === "ok" ? canvasInput(o.canvas.summaries[cur.id], t.id, o.comments ?? [], cur.lastActivityAt) : undefined;
+  const canvas = cur && o.canvas?.status === "ok" ? canvasInput(o.canvas.summaries[cur.id], t.id, o.comments ?? [], activeSinceOf(cur)) : undefined;
   return computeStage(t, agents, o.now, { canvas });
 }
 
@@ -345,7 +345,7 @@ function row(t: Task, group: GroupKey, ctx: Ctx, idx = 0): string {
   // the agent's canvas, when agent-canvas has one for it: the card shows it under the stage line and answers its raw asks
   const sum = group === "done" || !aid ? undefined : ctx.canvas?.summaries[aid];
   const curAgent = currentAgent(ctx.o.labeled?.[t.id] ?? []);
-  const raw = sum ? rawAsks(t, sum, ctx.comments, ctx.o.now, curAgent?.lastActivityAt ?? curAgent?.updatedAt) : [];
+  const raw = sum ? rawAsks(t, sum, ctx.comments, ctx.o.now, activeSinceOf(curAgent)) : [];
   const rawTargets = new Set((sum?.openAsks ?? []).filter((a) => !t.asks.some((x) => x.ref?.block === a.id)).map((a) => `t-${t.id}#c-${a.id}`));
   const out = [
     `<article class="task s-${group}${failed ? " s-failed" : ""}" id="t-${esc(t.id)}"${data}>`,

@@ -41,7 +41,8 @@ test("stages: the canvas verdict and BLUF ride on the row, a canvas ask is a que
   const by = Object.fromEntries(rows.map((x: any) => [x.id, x]));
   assert.equal(by["t-run"].stage, "Running · 1 question");
   assert.deepEqual(by["t-run"].canvas, { verdict: "Working", bluf: "Wiring the routes", asks: 1 });
-  assert.deepEqual([by["t-ref"].stage, by["t-ref"].flags.map((f: any) => f.key)], ["With the first mate", ["ref-closed"]]);
+  // T3: its crew is still running, so the card is Running (not With the first mate) and carries the drift flag
+  assert.deepEqual([by["t-ref"].stage, by["t-ref"].flags.map((f: any) => f.key)], ["Running", ["ref-closed"]]);
   const table = (await run(["stages", r.root, "--table"], env)).out;
   assert.match(table, /canvas · Working · Wiring the routes/);
   assert.equal((await run(["drift", r.root], env)).out.trim(), "1", "ref-closed is drift: the first mate must run bin/fleet answer");
