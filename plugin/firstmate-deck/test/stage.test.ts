@@ -183,3 +183,23 @@ test("canvas: a crew whose canvas.relay first mate is gone carries the relay-tar
   assert.deepEqual(keys(stage(task({ state: "done" }), [agent({ status: "idle", relayGone: "fm-1" })])), [], "a finished task has nothing to relay");
   assert.deepEqual(keys(stage(task(), [agent({ archived: true, relayGone: "fm-1" })])), ["archived-agent-open-task"], "an archived agent has no canvas to relay: only its own flag");
 });
+
+// ---- honest stages: an idle crew is not "with the first mate" while it waits on something else ----
+test("honest: an idle crew with background jobs or sub-agents running (canvas Waiting) is Waiting, not with the first mate", () => {
+  const s = stage(task(), [agent({ status: "idle", final: "Starting the review sub-agents, back when they report." })], { canvas: cv([], "Waiting") });
+  assert.deepEqual([s.stage, s.group], ["Waiting", "running"]);
+  // the canvas said Working before Paseo's idle landed
+  assert.deepEqual([stage(task(), [agent({ status: "idle" })], { canvas: cv([], "Working") }).stage], ["Running"]);
+});
+
+test("honest: a DONE:/BLOCKED: hand-back is with the first mate even if the canvas still says Waiting; Idle canvas changes nothing", () => {
+  assert.equal(stage(task(), [agent({ status: "idle", final: "DONE: b @ c" })], { canvas: cv([], "Waiting") }).stage, "Review");
+  assert.equal(stage(task(), [agent({ status: "idle", final: "BLOCKED: which one?" })], { canvas: cv([], "Waiting") }).stage, "Blocked by crew");
+  assert.equal(stage(task(), [agent({ status: "idle" })], { canvas: cv([], "Idle") }).stage, "Idle");
+  assert.equal(stage(task(), [agent({ status: "idle" })]).stage, "Idle"); // canvas not read: nothing changes
+});
+
+test("honest: BLOCKED: canvas ask q1 with the ask open on the canvas is Needs you", () => {
+  const s = stage(task(), [agent({ status: "idle", final: "BLOCKED: canvas ask q1" })], { canvas: cv([{ id: "q1" }], "Needs you") });
+  assert.deepEqual([s.stage, s.group], ["Needs you", "you"]);
+});

@@ -110,7 +110,7 @@ export function stageOf(t: Task, live: boolean, o: { now: Date; labeled?: Render
   if (!live) return computeStage(t, t.agents?.length ? [{ id: t.agents[t.agents.length - 1], status: "idle", archived: false, pendingPermissions: 0 }] : [], o.now, { archived: true });
   const agents = stageAgentsFor(o.labeled?.[t.id], view);
   const cur = currentAgent(agents);
-  const canvas = cur && o.canvas?.status === "ok" ? canvasInput(o.canvas.summaries[cur.id], t.id, o.comments ?? []) : undefined;
+  const canvas = cur && o.canvas?.status === "ok" ? canvasInput(o.canvas.summaries[cur.id], t.id, o.comments ?? [], cur.lastActivityAt) : undefined;
   return computeStage(t, agents, o.now, { canvas });
 }
 
@@ -195,12 +195,12 @@ export function canvasFragment(s: FmSummary, card?: string, full = false): strin
  * The crew's own canvas questions that no curated ask mirrors yet: raw, clickable at once, and still delivered through the
  * first mate (their buttons use the option-click path, target `t-<task>#c-<id>`). A pick waits as "sent to the first mate".
  */
-function rawAsks(t: Task, s: FmSummary, comments: TrailComment[], now: Date): string[] {
+function rawAsks(t: Task, s: FmSummary, comments: TrailComment[], now: Date, activeSince?: string | null): string[] {
   const out: string[] = [];
   for (const a of s.openAsks) {
     if (t.asks.some((x) => x.ref?.block === a.id)) continue; // curated: the registry ask above is the one to answer
     const key = `ask-${t.id}-c-${a.id}`;
-    const clicked = clickedPick(t.id, a.id, comments);
+    const clicked = clickedPick(t.id, a.id, comments, activeSince);
     const picked = a.pending ?? clicked;
     const name = esc(t.title || t.intent || t.id);
     const tag = picked !== undefined ? "Sent to the first mate" : "Uncurated · from the crew";
@@ -344,7 +344,8 @@ function row(t: Task, group: GroupKey, ctx: Ctx, idx = 0): string {
   const btn = mark ? `<button class="mr" type="button">Mark read</button>` : "";
   // the agent's canvas, when agent-canvas has one for it: the card shows it under the stage line and answers its raw asks
   const sum = group === "done" || !aid ? undefined : ctx.canvas?.summaries[aid];
-  const raw = sum ? rawAsks(t, sum, ctx.comments, ctx.o.now) : [];
+  const curAgent = currentAgent(ctx.o.labeled?.[t.id] ?? []);
+  const raw = sum ? rawAsks(t, sum, ctx.comments, ctx.o.now, curAgent?.lastActivityAt ?? curAgent?.updatedAt) : [];
   const rawTargets = new Set((sum?.openAsks ?? []).filter((a) => !t.asks.some((x) => x.ref?.block === a.id)).map((a) => `t-${t.id}#c-${a.id}`));
   const out = [
     `<article class="task s-${group}${failed ? " s-failed" : ""}" id="t-${esc(t.id)}"${data}>`,

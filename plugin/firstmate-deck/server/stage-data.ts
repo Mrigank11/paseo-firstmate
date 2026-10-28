@@ -100,7 +100,7 @@ export function rowOf(t: Task, recs: Rec[], now: Date, canvas: Record<string, Fm
   const mine = recs.filter((r) => r.task === t.id).map(toAgent);
   const cur = currentAgent(mine);
   const sum = cur && !cur.archived ? canvas[cur.id] : undefined;
-  const s = computeStage(t, mine, now, { finalKnown: false, canvas: canvasInput(sum, t.id, []) });
+  const s = computeStage(t, mine, now, { finalKnown: false, canvas: canvasInput(sum, t.id, [], cur?.lastActivityAt) });
   return {
     id: t.id, project: t.project ?? null, state: t.state, stage: s.stage, group: s.group, agentId: s.agentId, flags: s.flags,
     ...(s.stage === "Idle" ? { note: "final line unknown on CLI" } : {}),

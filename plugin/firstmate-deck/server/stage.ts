@@ -142,7 +142,13 @@ export function computeStage(task: StageTask, agents: readonly StageAgent[], now
   }
   if (cur.status === "unknown") return out("Running", "running", [flag("status-unknown", "agent status unknown")]);
   if (cur.status === "error") return out("Failed (agent errored)", "fm", [], true);
-  // idle or closed
+  // idle or closed. A crew that ended its turn while its own background jobs or sub-agents run (its canvas verdict is Waiting, or
+  // Working before Paseo's idle lands) has not handed anything back: it is not "with the first mate". A DONE:/BLOCKED: line is a hand-back.
+  const handedBack = !!cur.final && /^(DONE|BLOCKED):/.test(cur.final);
+  if (canvas && !handedBack && cur.status === "idle") {
+    if (canvas.verdict === "Waiting") return out("Waiting", "running");
+    if (canvas.verdict === "Working") return out("Running", "running");
+  }
   if (cur.final?.startsWith("DONE:")) return out("Review", "fm");
   if (cur.final?.startsWith("BLOCKED:")) return out("Blocked by crew", "fm");
   if (opts.finalKnown === false) return out("Idle", "fm");
