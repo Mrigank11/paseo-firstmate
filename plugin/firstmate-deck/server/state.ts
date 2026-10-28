@@ -274,21 +274,27 @@ function toTask(raw: any, root: string, label: string, inbox: Comment[] = [], ar
   };
 }
 
-/** Every live task of every project (and those without one), for the CLI: the same Task model the page renders. */
-export function loadAllLive(root: string): Task[] {
+/** Every live task of every project (and those without one) with each project's inbox comments: the model the stage snapshot is built from. */
+export function loadLive(root: string): { tasks: Task[]; comments: Map<string, TrailComment[]> } {
   let live: any[] = [];
   try {
     const fleet = JSON.parse(readText(join(root, "state", "fleet.json")) || "{}");
     live = fleet?.tasks ?? [];
     if (live.length && fleet?.version !== 2) throw new Error(V1_MESSAGE);
-  } catch (e) { if ((e as Error).message === V1_MESSAGE) throw e; return []; }
+  } catch (e) { if ((e as Error).message === V1_MESSAGE) throw e; return { tasks: [], comments: new Map() }; }
   const inboxes = new Map<string, Comment[]>();
   const inboxOf = (p: unknown) => {
     if (typeof p !== "string" || !/^[a-z0-9][a-z0-9-]*$/.test(p)) return [];
     if (!inboxes.has(p)) inboxes.set(p, readInbox(join(root, "state", "projects", p, "inbox.jsonl")));
     return inboxes.get(p)!;
   };
-  return live.filter((t) => t && typeof t.id === "string").map((t) => toTask(t, root, "fleet.json", inboxOf(t.project)));
+  const tasks = live.filter((t) => t && typeof t.id === "string").map((t) => toTask(t, root, "fleet.json", inboxOf(t.project)));
+  return { tasks, comments: new Map([...inboxes].map(([p, cs]) => [p, cs.map(({ atMs: _a, ...c }) => c)])) };
+}
+
+/** Every live task, for the CLI: the same Task model the page renders. */
+export function loadAllLive(root: string): Task[] {
+  return loadLive(root).tasks;
 }
 
 export function loadProject(root: string, project: string): ProjectModel {

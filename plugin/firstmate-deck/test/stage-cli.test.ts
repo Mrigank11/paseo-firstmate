@@ -2,7 +2,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -69,4 +69,51 @@ test("stages: the URL the deck stamped into page.json is used when the environme
   const res = await run(["stages", r.root], { PASEO_HOME: r.root, STAGE_AGENTS_JSON: r.agents, AGENT_CANVAS_URL: "" });
   assert.equal(JSON.parse(res.out).find((x: any) => x.id === "t-run").canvas.bluf, "From the stamp");
   await fc.stop();
+});
+
+// ---------- the plugin's snapshot (state/stages.json) is what the CLI prints when it is fresh ----------
+
+const snapRow = (id: string, over: object = {}) => ({ id, project: "demo", state: "active", stage: "From the plugin", group: "fm", agentId: "ag-9", flags: [], owner: "firstmate", reason: "plugin says so", clears: "do x", fp: `S|${id}`, owedSince: "2026-10-24T10:00:00Z", ...over });
+const writeSnap = (root: string, over: object = {}, rows = ["t-run", "t-ref"]) => {
+  const fleet = statSync(join(root, "state", "fleet.json")).mtimeMs;
+  writeFileSync(join(root, "state", "stages.json"), JSON.stringify({ version: 1, writtenAt: new Date().toISOString(), pid: 1, inputsMtimeMs: fleet, owners: {}, rows: rows.map((r) => snapRow(r)), ...over }));
+};
+
+test("snapshot: a fresh stages.json is what stages and stage print (source plugin, owner and reason included)", async () => {
+  const r = rig();
+  writeSnap(r.root);
+  const env = { PASEO_HOME: r.root, STAGE_AGENTS_JSON: r.agents, AGENT_CANVAS_URL: "off" };
+  const rows = JSON.parse((await run(["stages", r.root], env)).out);
+  assert.deepEqual(rows.map((x: any) => [x.id, x.stage, x.owner, x.source, x.reason]), [["t-run", "From the plugin", "firstmate", "plugin", "plugin says so"], ["t-ref", "From the plugin", "firstmate", "plugin", "plugin says so"]]);
+  const one = JSON.parse((await run(["stage", r.root, "t-run"], env)).out);
+  assert.deepEqual([one.stage, one.source], ["From the plugin", "plugin"]);
+  const table = (await run(["stages", r.root, "--table"], env)).out;
+  assert.match(table, /OWNER/);
+  assert.ok(!/degraded/.test(table));
+});
+
+test("snapshot: a dead plugin (old writtenAt) or a missing task falls back to a local computation and says it is degraded", async () => {
+  const r = rig();
+  const env = { PASEO_HOME: r.root, STAGE_AGENTS_JSON: r.agents, AGENT_CANVAS_URL: "off", STAGE_SNAPSHOT_WAIT_MS: "300" };
+  writeSnap(r.root, { writtenAt: "2026-10-24T10:00:00Z" });
+  let res = await run(["stages", r.root, "--table"], env);
+  assert.match(res.out, /degraded/);
+  assert.deepEqual(JSON.parse((await run(["stages", r.root], env)).out).map((x: any) => x.source), ["local", "local"]);
+  writeSnap(r.root, {}, ["t-run"]); // the snapshot lacks t-ref: not every live task is covered
+  assert.deepEqual(JSON.parse((await run(["stages", r.root], env)).out).map((x: any) => x.source), ["local", "local"]);
+});
+
+test("snapshot: older than fleet.json it waits for the plugin to catch up, then uses it; if it never does, it degrades", async () => {
+  const r = rig();
+  const env = { PASEO_HOME: r.root, STAGE_AGENTS_JSON: r.agents, AGENT_CANVAS_URL: "off" };
+  writeSnap(r.root, { inputsMtimeMs: 1 }); // the registry changed after this snapshot
+  const slow = run(["stages", r.root], { ...env, STAGE_SNAPSHOT_WAIT_MS: "3000" });
+  await new Promise((res) => setTimeout(res, 700));
+  writeSnap(r.root); // the plugin re-evaluated
+  assert.deepEqual(JSON.parse((await slow).out).map((x: any) => x.source), ["plugin", "plugin"], "caught up within the wait");
+  writeSnap(r.root, { inputsMtimeMs: 1 });
+  const t0 = Date.now();
+  const gave = JSON.parse((await run(["stages", r.root], { ...env, STAGE_SNAPSHOT_WAIT_MS: "400" })).out);
+  assert.deepEqual(gave.map((x: any) => x.source), ["local", "local"]);
+  assert.ok(Date.now() - t0 < 3000, "the wait is bounded");
 });

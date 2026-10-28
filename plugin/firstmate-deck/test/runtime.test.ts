@@ -894,3 +894,28 @@ test("first render seeds what the captain has seen; a later change is unseen; th
   assert.equal(ui().s.keys["t-t1"], seeded, "the stored seen keys stay what the captain saw");
   r.deck.stop();
 });
+
+test("stages.json: the plugin's one evaluation agrees with the page card for card, and names owner, reason and owedSince", async () => {
+  const r = rig({ tasks: [
+    { id: "q1", intent: "queued", state: "queued", project: "demo", shape: "ship" },
+    { id: "l1", intent: "lost", state: "active", since: "2026-10-24T00:00:00Z", project: "demo", shape: "ship" },
+    { id: "r1", intent: "running", state: "active", project: "demo", shape: "ship" },
+    { id: "a1", intent: "asking", state: "active", project: "demo", shape: "ship", asks: [{ text: "which?", since: "2026-10-24T09:00:00Z" }] },
+  ] });
+  r.fw.add({ id: "ag-r", status: "running", labels: { "fm.task": "r1" }, createdAt: "2026-10-24T10:00:00Z", items: [shell("ls")] });
+  await r.deck.configure();
+  await r.deck.render("demo");
+  await r.deck.publishStages();
+  const snap = JSON.parse(readFileSync(join(r.root, "state", "stages.json"), "utf8"));
+  const live = readFileSync(r.live, "utf8");
+  assert.deepEqual(snap.rows.map((x: any) => [x.id, x.group]), [["q1", "next"], ["l1", "fm"], ["r1", "running"], ["a1", "you"]]);
+  for (const row of snap.rows) assert.equal(groupOfCard(live, row.id), row.group, `${row.id}: page and snapshot agree`);
+  const l1 = snap.rows.find((x: any) => x.id === "l1");
+  assert.deepEqual([l1.owner, /no agent/.test(l1.reason), typeof l1.owedSince, l1.clears.length > 0], ["firstmate", true, "string", true]);
+  const first = l1.owedSince;
+  await new Promise((res) => setTimeout(res, 20));
+  await r.deck.publishStages();
+  assert.equal(JSON.parse(readFileSync(join(r.root, "state", "stages.json"), "utf8")).rows.find((x: any) => x.id === "l1").owedSince, first, "owedSince holds while the situation does");
+  assert.ok(snap.inputsMtimeMs > 0 && Date.now() - Date.parse(snap.writtenAt) < 60_000);
+  r.deck.stop();
+});

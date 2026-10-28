@@ -15,6 +15,7 @@ import { activeSinceOf, computeStage, currentAgent, type Stage, type StageAgent 
 import { loadAllLive, type Task } from "./state.ts";
 import { canvasInput } from "./canvas-view.ts";
 import type { FmSummary } from "./canvas-port.ts";
+import { freshSnapshot, type StageRow } from "./stages-file.ts";
 
 export type Rec = { id: string; task: string; status: string; archived: boolean; createdAt: string | null; lastActivityAt: string | null; pending: number; labels?: Record<string, string>; relayGone?: string };
 
@@ -65,7 +66,7 @@ export function labelledAgents(taskIds: string[]): Rec[] {
 
 const toAgent = (r: Rec): StageAgent => ({ id: r.id, status: r.status, archived: r.archived, createdAt: r.createdAt, lastActivityAt: r.lastActivityAt, pendingPermissions: r.pending, relayGone: r.relayGone });
 
-export type Row = { id: string; project: string | null; state: string; stage: string; group: string; agentId: string | null; flags: Stage["flags"]; note?: string; canvas?: { verdict: string; bluf: string; asks: number } };
+export type Row = StageRow;
 
 /** agent-canvas's base URL, or "" when none is configured. */
 export function canvasUrl(root: string): string {
@@ -103,6 +104,7 @@ export function rowOf(t: Task, recs: Rec[], now: Date, canvas: Record<string, Fm
   const s = computeStage(t, mine, now, { finalKnown: false, canvas: canvasInput(sum, t.id, [], activeSinceOf(cur)) });
   return {
     id: t.id, project: t.project ?? null, state: t.state, stage: s.stage, group: s.group, agentId: s.agentId, flags: s.flags,
+    owner: s.owner, reason: s.reason, clears: s.clears, fp: s.fp, source: "local",
     ...(s.stage === "Idle" ? { note: "final line unknown on CLI" } : {}),
     ...(sum ? { canvas: { verdict: sum.verdict.label, bluf: sum.bluf.replace(/\s+/g, " ").slice(0, 80), asks: sum.openAsks.length } } : {}),
   };
@@ -118,24 +120,38 @@ export function archiveRow(root: string, id: string): Row | null {
   } catch { return null; }
   if (!hit) return null;
   const failed = hit.outcome === "failed" || hit.status === "failed";
-  return { id, project: hit.project ?? null, state: failed ? "failed" : "done", stage: failed ? "Failed" : "Done", group: "done", agentId: hit.agents?.at?.(-1) ?? hit.agentId ?? null, flags: [], note: "archived" };
+  return { id, project: hit.project ?? null, state: failed ? "failed" : "done", stage: failed ? "Failed" : "Done", group: "done", agentId: hit.agents?.at?.(-1) ?? hit.agentId ?? null, flags: [], owner: "nobody", reason: "finished", clears: "", fp: `${failed ? "Failed" : "Done"}|finished|`, note: "archived" };
 }
 
 export function table(rows: Row[]): string {
-  const head = ["TASK", "PROJECT", "STATE", "STAGE", "AGENT", "FLAGS"];
-  const body = rows.map((r) => [r.id, r.project ?? "-", r.state, r.stage + (r.note ? ` (${r.note})` : ""), r.agentId?.slice(0, 8) ?? "-", r.flags.map((f) => (f.drift ? "!" : "") + f.key).join(",") || "-"]);
+  const head = ["TASK", "PROJECT", "STATE", "STAGE", "OWNER", "AGENT", "FLAGS"];
+  const body = rows.map((r) => [r.id, r.project ?? "-", r.state, r.stage + (r.note ? ` (${r.note})` : ""), r.owner, r.agentId?.slice(0, 8) ?? "-", r.flags.map((f) => (f.drift ? "!" : "") + f.key).join(",") || "-"]);
   const w = head.map((_, i) => Math.max(head[i].length, ...body.map((b) => b[i].length)));
   const lines = [head, ...body].map((r) => r.map((c, i) => c.padEnd(w[i])).join("  ").trimEnd());
   // a running task's canvas verdict and BLUF, so "status?" needs no chat: an indented line under its row
-  return lines.flatMap((l, i) => (i && rows[i - 1].canvas ? [l, `    canvas · ${rows[i - 1].canvas!.verdict}${rows[i - 1].canvas!.bluf ? ` · ${rows[i - 1].canvas!.bluf}` : ""}`] : [l])).join("\n");
+  const out = lines.flatMap((l, i) => (i && rows[i - 1].canvas ? [l, `    canvas · ${rows[i - 1].canvas!.verdict}${rows[i - 1].canvas!.bluf ? ` · ${rows[i - 1].canvas!.bluf}` : ""}`] : [l]));
+  if (rows.some((r) => r.source === "local")) out.push("(degraded: no fresh plugin snapshot, so this was computed locally without comments or last messages and may differ from the page)");
+  return out.join("\n");
 }
 
+/** The plugin's snapshot rows for the live tasks that still exist (its source is the same engine the page uses), else a local computation. */
 export function stages(root: string, project?: string): Row[] {
   const tasks = loadAllLive(root).filter((t) => !project || t.project === project);
   if (!tasks.length) return [];
+  const snap = freshSnapshot(root, Number(process.env.STAGE_SNAPSHOT_WAIT_MS ?? 4000));
+  if (snap) {
+    const by = new Map(snap.rows.map((r) => [r.id, r]));
+    if (tasks.every((t) => by.has(t.id))) return tasks.map((t) => ({ ...by.get(t.id)!, source: "plugin" as const }));
+  }
   const recs = labelledAgents(tasks.map((t) => t.id));
   const canvas = canvasSummaries(root, recs.filter((r) => !r.archived).map((r) => r.id));
   const now = new Date();
   return tasks.map((t) => rowOf(t, recs, now, canvas));
 }
 
+/** One live task's row: the snapshot's, else local. Null when the task is not live. */
+export function stageRow(root: string, id: string): Row | null {
+  const t = loadAllLive(root).find((x) => x.id === id);
+  if (!t) return null;
+  return stages(root).find((r) => r.id === id) ?? null;
+}

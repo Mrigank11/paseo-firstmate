@@ -12,10 +12,13 @@ import { CliPort, type Exec } from "./paseo-cli.ts";
 import { NO_CLAIM_MESSAGE, NoFirstMateError, PortSelector, resolveFirstMate, sendToFirstMate, type CommentRowData, type FirstMate, type PortAgent } from "./paseo-port.ts";
 import { Relay, newEntries, parseTarget, type AskLookup, type TargetInfo } from "./relay.ts";
 import { CanvasPort, type FmSummary } from "./canvas-port.ts";
-import { liveJs, renderProject, stagesOf, type AgentView, type Banner } from "./render.ts";
+import { liveJs, renderProject, stageOf, stagesOf, type AgentView, type Banner } from "./render.ts";
 import { currentAgent, type LabeledAgent } from "./stage.ts";
+import { inputsMtimeMs, readSnapshot, writeSnapshot, type Snapshot, type StageRow } from "./stages-file.ts";
+import { ownerOf } from "./gate.ts";
+import { branchMerged } from "./merged.ts";
 import { MarksServer, readUi, updateUi } from "./marks-server.ts";
-import { loadProject, type ProjectModel, type Task } from "./state.ts";
+import { loadLive, loadProject, type ProjectModel, type Task } from "./state.ts";
 import { appendInbox, inboxPath, pageJsonPath, patchPageJson, pidPath, projectDir, readInbox, readPageJson, updateInbox, writeAtomic, type InboxEntry, type PageJson } from "./store.ts";
 
 export type Summary = {
@@ -147,6 +150,21 @@ export class Deck {
   private labeledFlight: { at: number; p: Promise<boolean> } | null = null;
   /** When each agent's latest turn started (the `agent.turn_started` hook), in this process lifetime: what "the crew worked after the captain clicked" is measured against. */
   private turnStarts = new Map<string, string>();
+  /** Tasks whose branch is already merged into the base (git, checked at most once a minute): a Review card then says so. */
+  private merged = new Set<string>();
+  private mergedAt = 0;
+  /** Crew agents the enforcer already reminded to hand back once (their stage then reaches the first mate). */
+  private nudgedCrews = new Set<string>();
+  /** Tasks the first mate ignored (enforcer.ts): shown as Needs you while still in the situation they were judged in. */
+  private stalled: Record<string, { fp: string; why: string }> = {};
+  /** When the current (owner, situation) of each task took over; survives a restart through stages.json. */
+  private owed = new Map<string, { key: string; since: string }>();
+  private owedLoaded = false;
+  private stagesTimer: ReturnType<typeof setTimeout> | null = null;
+  private stagesFlight: Promise<void> | null = null;
+  private stagesAgain = false;
+  private stagesListeners: ((s: Snapshot) => void)[] = [];
+  private ownerCache: { at: number; map: Record<string, string | null> } | null = null;
   /** Agents seen on an event that no page tracks: asked about once (a new crew agent), not on every turn of the first mate. */
   private unknownAgents = new Set<string>();
 
@@ -206,13 +224,15 @@ export class Deck {
   async start(): Promise<void> {
     await this.configure();
     this.timers.push(setInterval(() => void this.configure().catch((e) => this.log(`rescan failed: ${e}`)), this.o.rescanMs ?? RESCAN_MS));
-    this.timers.push(setInterval(() => this.scheduleAll("tick", 0), this.o.tickMs ?? TICK_MS));
+    this.timers.push(setInterval(() => { this.scheduleAll("tick", 0); this.scheduleStages(0); }, this.o.tickMs ?? TICK_MS));
+    this.scheduleStages(500);
   }
 
   stop(): void {
     this.stopped = true;
     for (const t of this.timers) clearInterval(t);
     for (const t of this.debounce.values()) clearTimeout(t);
+    if (this.stagesTimer) clearTimeout(this.stagesTimer);
     for (const t of this.late) clearTimeout(t);
     this.relay.stop();
     this.canvas.stop();
@@ -470,18 +490,130 @@ export class Deck {
   }
 
   private labeledFor(model: ProjectModel): Record<string, LabeledAgent[]> {
+    return this.labeledForTasks(model.tasks);
+  }
+
+  private labeledForTasks(tasks: readonly { id: string }[]): Record<string, LabeledAgent[]> {
     const out: Record<string, LabeledAgent[]> = {};
-    for (const t of model.tasks) {
+    for (const t of tasks) {
       const as = this.labeled.get(t.id);
       if (!as?.length) continue;
       // `canvas.relay` names the first mate that dispatched the crew; once that agent is gone, a pick on the canvas has nobody to go to
       out[t.id] = as.map((a) => {
         const to = a.labels["canvas.relay"];
         const started = this.turnStarts.get(a.id);
-        return { ...a, ...(to && this.relayLive && !a.archived && !this.relayLive.has(to) ? { relayGone: to } : {}), ...(started ? { turnStartedAt: started } : {}) };
+        return { ...a, ...(to && this.relayLive && !a.archived && !this.relayLive.has(to) ? { relayGone: to } : {}), ...(started ? { turnStartedAt: started } : {}), ...(this.nudgedCrews.has(a.id) ? { nudged: true } : {}) };
       });
     }
     return out;
+  }
+
+  /** The enforcer's two verdicts the stage engine needs: the crews already reminded, and the tasks the first mate ignored. */
+  setEnforcement(nudgedCrews: Iterable<string>, stalled: Record<string, { fp: string; why: string }>): void {
+    const next = new Set(nudgedCrews);
+    const changed = next.size !== this.nudgedCrews.size || [...next].some((x) => !this.nudgedCrews.has(x)) || JSON.stringify(stalled) !== JSON.stringify(this.stalled);
+    this.nudgedCrews = next;
+    this.stalled = stalled;
+    if (changed) { this.scheduleAll("enforcer", 0); this.scheduleStages(0); }
+  }
+
+  /** Called with every snapshot after it is written (the enforcer reads it). */
+  onStages(fn: (s: Snapshot) => void): void { this.stagesListeners.push(fn); }
+
+  /** The latest snapshot in memory-free form: what is on disk (null before the first write). */
+  snapshot(): Snapshot | null { return this.cfg.root ? readSnapshot(this.cfg.root) : null; }
+
+  scheduleStages(delayMs = DEBOUNCE_MS): void {
+    if (this.stopped || !this.cfg.root) return;
+    if (this.stagesTimer) clearTimeout(this.stagesTimer);
+    this.stagesTimer = setTimeout(() => {
+      this.stagesTimer = null;
+      void this.publishStages().catch((e) => this.log(`stages snapshot failed: ${(e as Error)?.stack ?? e}`));
+    }, delayMs);
+  }
+
+  /**
+   * The ONE evaluation of every live task, with the same inputs the pages use (Paseo agents by label, their last messages, the
+   * crews' canvases, the inbox), written to state/stages.json. `bin/fleet stage(s)` reads it, so the CLI and the page agree; the
+   * enforcer reads it too. Single-flight: a call during a run makes it go around once more.
+   */
+  publishStages(): Promise<void> {
+    if (this.stagesFlight) { this.stagesAgain = true; return this.stagesFlight; }
+    this.stagesFlight = (async () => {
+      try {
+        do {
+          this.stagesAgain = false;
+          await this.writeStages();
+        } while (this.stagesAgain && !this.stopped);
+      } finally {
+        this.stagesFlight = null;
+      }
+    })();
+    return this.stagesFlight;
+  }
+
+  private async writeStages(): Promise<void> {
+    const root = this.cfg.root;
+    if (!root || this.stopped) return;
+    const mtime = inputsMtimeMs(root); // read BEFORE the inputs: a write in between leaves the snapshot looking stale, never wrongly fresh
+    let live: ReturnType<typeof loadLive>;
+    try { live = loadLive(root); } catch { return; } // an unreadable registry: keep the last snapshot (its mtime goes stale on its own)
+    await this.refreshLabeled();
+    await this.refreshMerged(live.tasks);
+    for (const t of live.tasks) t.merged = this.merged.has(t.id);
+    const labeled = this.labeledForTasks(live.tasks);
+    const curIds = [...new Set(live.tasks.map((t) => currentAgent(labeled[t.id] ?? [])?.id).filter((x): x is string => !!x))];
+    const canvas = this.canvas.data(curIds);
+    const now = new Date();
+    if (!this.owedLoaded) {
+      this.owedLoaded = true;
+      for (const r of readSnapshot(root)?.rows ?? []) if (r.owedSince) this.owed.set(r.id, { key: `${r.owner}|${r.fp}`, since: r.owedSince });
+    }
+    const rows: StageRow[] = live.tasks.map((t) => {
+      const st = stageOf(t, true, { now, labeled, canvas, comments: live.comments.get(t.project ?? "") ?? [], stalled: this.stalled }, (id) => this.agents.peek(id) ?? STALE_UNKNOWN);
+      const key = `${st.owner}|${st.fp}`;
+      const prev = this.owed.get(t.id);
+      const owedSince = prev && prev.key === key ? prev.since : now.toISOString();
+      this.owed.set(t.id, { key, since: owedSince });
+      const sum = st.agentId ? canvas.summaries[st.agentId] : undefined;
+      return {
+        id: t.id, project: t.project ?? null, state: t.state, stage: st.stage, group: st.group, agentId: st.agentId, flags: st.flags,
+        owner: st.owner, reason: st.reason, clears: st.clears, fp: st.fp, owedSince,
+        ...(sum ? { canvas: { verdict: sum.verdict.label, bluf: sum.bluf.replace(/\s+/g, " ").slice(0, 80), asks: sum.openAsks.length } } : {}),
+      };
+    });
+    for (const id of [...this.owed.keys()]) if (!live.tasks.some((t) => t.id === id)) this.owed.delete(id);
+    const owners = await this.ownersOf([...new Set(live.tasks.map((t) => t.project ?? ""))]);
+    const snap: Snapshot = { version: 1, writtenAt: now.toISOString(), pid: process.pid, inputsMtimeMs: mtime, owners, rows };
+    writeSnapshot(root, snap);
+    for (const fn of this.stagesListeners) { try { fn(snap); } catch (e) { this.log(`stages listener failed: ${e}`); } }
+  }
+
+  /** The owning first mate of each project (claim, else checkout claim; live only), cached for a few seconds. */
+  private async ownersOf(projects: string[]): Promise<Record<string, string | null>> {
+    if (this.ownerCache && Date.now() - this.ownerCache.at < 5000 && projects.every((p) => p in this.ownerCache!.map)) return this.ownerCache.map;
+    const map: Record<string, string | null> = {};
+    for (const p of projects) {
+      try { map[p] = await ownerOf(this.ports, this.cfg.root, p || undefined); } catch { map[p] = null; }
+    }
+    this.ownerCache = { at: Date.now(), map };
+    return map;
+  }
+
+  /** Which open tasks have a branch that git already merged into the base. At most once a minute; a change re-renders. */
+  private async refreshMerged(tasks: Task[]): Promise<void> {
+    if (Date.now() - this.mergedAt < 60_000) return;
+    this.mergedAt = Date.now();
+    const next = new Set<string>();
+    for (const t of tasks) {
+      if (t.state !== "active" || !t.branch || !t.project) continue;
+      let repo = "", base = "main";
+      try { const cfg = JSON.parse(readFileSync(join(projectDir(this.cfg.root, t.project), "project.json"), "utf8")); repo = cfg.repo ?? ""; base = cfg.baseBranch ?? "main"; } catch { continue; }
+      if (repo && (await branchMerged(repo, t.branch, base))) next.add(t.id);
+    }
+    const changed = next.size !== this.merged.size || [...next].some((x) => !this.merged.has(x));
+    this.merged = next;
+    if (changed) this.scheduleAll("merged", 0);
   }
 
   pagePath(project: string): string {
@@ -539,6 +671,7 @@ export class Deck {
       } while (state.again && !this.stopped);
     } finally {
       this.rendering.delete(project);
+      this.scheduleStages();
     }
   }
 
@@ -578,6 +711,7 @@ export class Deck {
       problem = (e as Error).message;
       model = this.lastGood.get(project) ?? null;
     }
+    if (model) for (const t of model.tasks) t.merged = this.merged.has(t.id);
     if (!problem) this.lastGood.set(project, model!);
     this.setLoadError(project, problem);
     return model;
@@ -630,7 +764,7 @@ export class Deck {
     const banner = this.bannerFor(project, pj.session);
     const r = renderProject(model, views, {
       now, tickSeconds: 1, refreshSeconds: Math.round((this.o.tickMs ?? TICK_MS) / 1000), paseoAgentUrl: this.agentUrl, banner, pageFile: basename(target),
-      marksUrl: this.marksUrl(project, pj), labeled: this.labeledFor(model), canvas: this.canvas.data(ids),
+      marksUrl: this.marksUrl(project, pj), labeled: this.labeledFor(model), canvas: this.canvas.data(ids), stalled: this.stalled,
     });
     // first render of a page that has never stored what the captain saw: seed it, so turning this on does not light every page
     if (!model.seen && !readUi(this.cfg.root, project).s) updateUi(this.cfg.root, project, { o: {}, r: {}, s: { at: now.toISOString(), keys: r.attention.keys } });
@@ -918,7 +1052,7 @@ export class Deck {
       const tracked = this.trackedAgents(p, model);
       this.canvas.want(p, tracked);
       const canvas = this.canvas.data(tracked);
-      const stages = stagesOf({ ...model, archive: [] }, views, { now: new Date(), labeled: this.labeledFor(model), canvas });
+      const stages = stagesOf({ ...model, archive: [] }, views, { now: new Date(), labeled: this.labeledFor(model), canvas, stalled: this.stalled });
       const needsYou: Summary["needsYou"] = [];
       const running: Summary["running"] = [];
       for (const t of model.tasks) {
@@ -927,7 +1061,7 @@ export class Deck {
         if (g === "you") {
           counts.needsYou++;
           if (t.asks.length) for (const a of t.asks.filter((a) => !a.repliedAt)) needsYou.push({ taskId: t.id, askId: a.id, taskTitle: plainTitle(t), text: a.text, since: a.since ?? "" });
-          else needsYou.push({ taskId: t.id, askId: null, taskTitle: plainTitle(t), text: canvasQuestion(canvas.summaries[st.agentId ?? ""]) || t.notes || "Needs your call", since: "" });
+          else needsYou.push({ taskId: t.id, askId: null, taskTitle: plainTitle(t), text: st.stage.endsWith("first mate stalled") ? st.reason : canvasQuestion(canvas.summaries[st.agentId ?? ""]) || t.notes || "Needs your call", since: "" });
         } else if (g === "fm") {
           counts.withFirstMate++; // the next move is the first mate's, so it does not count as needing the captain
         } else if (g === "running") {
