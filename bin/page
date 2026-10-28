@@ -29,7 +29,7 @@
 #                                     VERIFY the plugin is polling this page (exit 3 with the reason if not).
 #                                     Idempotent. Prints {"project","page","url"}. Exit 2 when the captain ended the
 #                                     session and --reopen was not given
-#   bin/page reply <project> "<text>"|- [--followup <task>:<askId>]... [--keep-open <task>#<askId>]...
+#   bin/page reply <project> "<text>"|- [--task <id>]... [--followup <task>:<askId>]... [--keep-open <task>#<askId>]...
 #                                     answer the captain's comments on the page (- reads stdin). First applies every delivered
 #                                     option pick (bin/fleet answer <task> <askId>) unless it is named by --keep-open or
 #                                     --followup; then marks the delivered comments (those present when the reply started)

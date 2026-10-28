@@ -13,7 +13,9 @@ state/
   backup/               # fleet.v1.<ts>.json + fleet-archive.<ts>.jsonl, written by bin/migrate-fleet-v2 --apply
   firstmate.json        # {"agentId","claimedAt"}: the checkout-wide first mate (fallback for pages with no claim.json), written by plain bin/page claim
   # projects/<project>/claim.json  {"agentId","claimedAt"}: that page's own first mate, written by bin/page claim <project> / start
-  decisions.md          # captain prefs, routing lanes, permission + merge policy
+  decisions.md          # captain prefs, routing lanes, permission + merge policy; `notify: off` / `enforcer: off` switch the plugin's wake / enforcer off
+  stages.json           # DERIVED, plugin-written: every live task's owner, reason, stage (what bin/fleet stage(s) print); never edited
+  enforcer.json         # plugin-owned: reminder counts per item, stalled items, reminded crews; safe to delete
   tasks/
     <id>/
       brief.md          # captain's intent + firstmate spec (see writing-briefs skill)
@@ -145,33 +147,63 @@ Paseo pushes finish/error/permission events, so you do not poll. The one gap it 
 
 ## Computed stage
 
-A task's stage is never stored. `computeStage()` (`plugin/firstmate-deck/server/stage.ts`) derives it live from three inputs: the registry's intent (`state`), the task's open asks, and the Paseo agents carrying the label `fm.task=<task id>`. The page, the sidebar summary, `bin/fleet stage <id>` / `bin/fleet stages [--project p] [--table]` and the DRIFT column of `bin/page status` all call it, so they cannot disagree. The **current agent** is the newest non-archived one; if all are archived, the newest archived one. Rules run top to bottom, the first match wins:
+A task's stage is never stored. `computeStage()` (`plugin/firstmate-deck/server/stage.ts`) derives it live from the registry's intent (`state`), the task's open asks, and the Paseo agents carrying the label `fm.task=<task id>`. Every stage is a pair: an **owner** (who owes the next move: `captain`, `firstmate`, `crew`, `outside`, `nobody`) and a **reason** (the facts that make it so: the comment time, the crew's final line). The page group is the owner: Needs you = captain, With the first mate = `firstmate`, Running = crew, Blocked = outside, Next up / Parked / Done = nobody. Each stage also carries `clears` (the command or skill that ends it) and a fingerprint `fp` (stage + reason + agent) that changes whenever the situation does. The **current agent** is the newest non-archived one; if all are archived, the newest archived one. Rules run top to bottom, the first match wins:
 
-| # | Condition | Stage | Page group |
+| # | Condition | Stage | Owner |
 |---|---|---|---|
-| 1 | the task is in the archive | Done / Failed (frozen) | Done |
-| 2 | `state` done / failed | Done / Failed (an open ask keeps it in Needs you / With the first mate) | Done |
-| 3 | an open ask with no reply (any state) | Needs you | Needs you |
-| 4 | every open ask replied or pending | With the first mate | With the first mate |
-| 5 | `parked` (an agent still running → flag `parked-but-running`) | Parked | Parked |
-| 6 | `blocked` | Blocked (shows `blocked_on`) | Blocked |
-| 7 | `queued` (an agent exists → flag `queued-but-has-agent`) | Next up | Next up |
-| 8 | `active`, the current agent has a pending permission | Needs you · permission | Needs you |
-| 9 | `active`, no agent, `since` < 10 min ago | Dispatching | Running |
-| 10 | `active`, no agent, ≥ 10 min | Lost (flag `no-agent`) | With the first mate |
-| 11 | `active`, agent archived | Agent archived (flag `archived-agent-open-task`) | With the first mate |
-| 12 | `active`, agent running / initializing | Running (no activity > 30 min → flag `silent`) | Running |
-| 13 | `active`, agent error | Failed (agent errored) | With the first mate |
-| 14 | `active`, agent idle/closed, its last message starts `DONE:` | Review | With the first mate |
-| 15 | same, starts `BLOCKED:` | Blocked by crew | With the first mate |
-| 16 | same, neither (flag `idle-no-done`) | Idle | With the first mate |
+| 1 | the current agent has a pending permission (any state; an open ask is flagged beside it) | Needs you · permission | captain |
+| 2 | the task is in the archive | Done / Failed (frozen) | nobody |
+| 3 | `state` done / failed | Done / Failed (an open ask keeps it in Needs you / With the first mate) | nobody |
+| 4 | an open ask with no reply — unless its captain comment was answered and the crew has started a turn since (flag `ask-open-after-reply`: Running) | Needs you | captain |
+| 5 | every open ask replied or pending | With the first mate | first mate |
+| 6 | `parked` / `blocked` / `queued`, no agent running (agent existing → flag `queued-but-has-agent`) | Parked / Blocked / Next up | nobody / outside / nobody |
+| 7 | the same states with an agent running: the agent decides, plus a drift flag (`parked-but-running`, `blocked-but-running`, `queued-but-has-agent`) | Running | crew |
+| 8 | `active`, no agent, `since` < 10 min ago / ≥ 10 min | Dispatching / Lost (flag `no-agent`) | crew / first mate |
+| 9 | `active`, agent archived | Agent archived (flag `archived-agent-open-task`) | first mate |
+| 10 | `active`, agent running / initializing | Running (no activity > 30 min → flag `silent`) | crew |
+| 11 | `active`, agent error | Failed (agent errored) | first mate |
+| 12 | idle/closed, last message starts `DONE:` (flag `merged` when git shows its branch merged) / `BLOCKED:` | Review / Blocked by crew | first mate |
+| 13 | idle, neither, and the crew's canvas says Waiting / Working | Waiting / Running | crew |
+| 14 | idle, neither (flag `idle-no-done`) | Crew stopped · no hand-back; after the plugin's one reminder, or when the agent is closed: Idle | crew; then first mate |
 | — | any live stage, the current agent's `canvas.relay` first mate no longer exists | (unchanged) + flag `relay-target-gone` | (unchanged) |
+| — | a curated ask whose canvas question is answered or gone (flag `ref-closed`) | With the first mate, or Running while the crew runs | first mate / crew |
+| — | a card with 2+ asks and an unanswered comment on its body | (unchanged) + flag `comment-waiting` (a card with one ask: the comment counts against it) | (unchanged) |
+
+**First mate stalled.** The enforcer (below) can turn a With-the-first-mate task into **Needs you · first mate stalled** (owner captain; `reason` says why). It applies only while the task is still in the situation (`fp`) it was judged in.
+
+"The crew worked since" (rules 4 and the canvas pick) is measured from the crew's last **turn start** (the `agent.turn_started` hook, in the plugin's memory), not Paseo's `updatedAt`, which also moves on a label change or a steer; without a turn start it falls back to the last activity.
+
+### One evaluation: `state/stages.json`
+
+The deck plugin is the only evaluator with all the inputs (registry, inbox comments, agents with their last messages, canvases, the owner first mate's status). On every render, tick and enforcement change it evaluates every live task with the same function the page uses and writes `state/stages.json`: `{version, writtenAt, pid, inputsMtimeMs, owners, rows}`, one row per task with `stage, group, owner, reason, clears, fp, owedSince, flags, agentId`. `owedSince` is when the current (owner, situation) took over; it survives a restart. `owners` maps each project (`""` = no project) to the first mate that owns it: the project claim, else the checkout claim, only while live.
+
+`bin/fleet stage <id>` / `bin/fleet stages [--project p] [--table]` print that snapshot (each row has `source: "plugin"`) whenever it is fresh: written within 2 minutes and not older than `fleet.json` or any inbox. A write made a moment ago (`bin/fleet ask`, a comment) is waited for, up to 4 s (`STAGE_SNAPSHOT_WAIT_MS`), because the plugin re-evaluates within a second. Otherwise (plugin down, snapshot stale or missing a task) the CLI computes locally from the registry and Paseo's agent files (`source: "local"`, no comments, no last messages, so a finished crew reads Idle) and the table says **degraded**. `stages.json` is derived data: never edit it, safe to delete.
+
+### The enforcer: if the first mate is idle, no task is with the first mate
+
+`plugin/firstmate-deck/server/enforcer.ts`. After each snapshot, and on every turn end of an owner first mate (after a 60 s settle: it must still be idle), the plugin looks at the owner's tasks in the With-the-first-mate group and, for any it has not reminded about, sends the owner one digest per project:
+
+```
+## With you · <project>
+You are idle, but these tasks are still with you. Clear each one (the "clears" line says how), then end your turn.
+- <task> · <stage>
+  why: <reason> (since <time>)
+  clears: <command or skill>
+```
+
+Rules (the loop is bounded):
+- An **item** is a task in one situation (`fp`). Each item gets **at most 2 reminders**, the second no sooner than 30 min after the first, and never while the owner is working or while a reminder's own turn is still running. A reminder that could not be delivered is not counted.
+- When the turn a reminder started ends idle and the item is unchanged, that was the answer. After the **second**, the task is stalled: **Needs you · first mate stalled** on the page, in `stages.json` and in the sidebar count. It stays so until the situation changes (a new reply, a new final line, the first mate acting), which also resets the count.
+- No live owner (no claim, or the claimed agent is gone): the task is stalled at once, with no message sent.
+- An idle crew that ended without `DONE:`/`BLOCKED:` gets one reminder to hand back (stage **Crew stopped · no hand-back**, owner crew); if it stays silent the task reaches the first mate as Idle.
+- State (counts, awaiting flags, stalled items, reminded crews) is in `state/enforcer.json`, plugin-owned and safe to delete, so a restart does not start over. The settle, gap and tick can be shortened through the daemon's environment (`FM_ENFORCER_SETTLE_MS`, `FM_ENFORCER_GAP_MS`, `FM_ENFORCER_TICK_MS`; the isolated demo does). Rollback: a line `enforcer: off` in `state/decisions.md`.
+- What the first mate does with a digest line is in its skills: a reply or pick → `project-page`; a finished crew → `ship-delivery` / `scout-report`; BLOCKED, errored, archived or lost → `stuck-crew-recovery`.
 
 **Canvas (Phase 5).** A crew member dispatched with the labels `canvas=on` and `canvas.relay=<first mate agent id>` has a live canvas in agent-canvas. The brief's `## Your canvas` section comes from `bin/page canvas-snippet <scout|ship>`; a captain's pick on a canvas ask reaches the first mate as `## Canvas answer · …` and goes to the crew only through `bin/page canvas-answer <task> <askId> <value>` (or `--decline "<why>"`). `bin/page claim` re-points `canvas.relay` on the open crews; when the relay agent is gone the task carries the drift flag `relay-target-gone`. Before a task's agent is archived, `bin/page canvas-snapshot <task>` writes `tasks/<id>/canvas.final.html` (+ `.tsx`): agent-canvas stops serving a canvas once its agent is archived. The canvas settings `canvasUrl` / `canvasDir` of the deck are stamped into `page.json`, which is how `bin/page` finds agent-canvas (`AGENT_CANVAS_URL`, `AGENT_CANVAS_DIR` and `AGENT_CANVAS_KEY_FILE` override; the relay key is `<paseo home>/agent-canvas/relay.key`).
 
 **Needs-you structure.** A crew dispatched with `canvas.strict=on` (and `canvas.nudge=on`, agent-canvas's stale reminder) is held to one canvas shape before it may ask: BLUF → issue → impact → context and components → changes by component → fix plan → ask, then closed folds only, rewritten in place (the brief's canvas section, `canvas-cmd.ts`, carries the template; agent-canvas enforces it and answers a refused write with `"code":"needs_you_structure"`). The finish gate reads the label: a strict crew ending `BLOCKED: canvas ask <id>` with no such open question on its canvas is sent back once with agent-canvas's last refusal (`lastRejection` in `/api/fm/summary`), logged as `bounced` in `state/gate-log.jsonl`, not put in Needs you and no wake; the second time is an ordinary BLOCKED. In Needs you the task card shows that crew's whole canvas open, BLUF uncut, instead of the compact strip. The first mate's own asks follow the same headings: `bin/fleet ask-template` prints the context-file skeleton and `ask`/`reask` refuse a file without those headings in order.
 
-A flag with `drift: true` means the registry and Paseo disagree and the first mate should act. A *running* agent never lands in Needs you unless an ask or a permission puts it there. On the CLI path the agent's last message is unknown, so a finished agent reads "Idle (final line unknown on CLI)" rather than a guessed "no DONE:". Agents are found by label only: with no `fm.task` label there is no agent (the v1 `agentId` hint is gone), so label every crew agent at `create_agent`.
+A flag with `drift: true` means the registry and Paseo disagree and the first mate should act. A *running* agent never lands in Needs you unless an ask or a permission puts it there. On the local (degraded) CLI path the agent's last message is unknown, so a finished agent reads "Idle (final line unknown on CLI)" rather than a guessed "no DONE:". Agents are found by label only: with no `fm.task` label there is no agent (the v1 `agentId` hint is gone), so label every crew agent at `create_agent`.
 
 ## Migrating a v1 registry
 
