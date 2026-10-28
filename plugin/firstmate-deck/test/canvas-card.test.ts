@@ -153,7 +153,7 @@ test("a curated ask with a ref replaces the raw one; once the canvas ask is gone
   const b = card(render(project([withRef]), data({}, summary("ag-1"))).live);
   assert.match(b, /Resolved on canvas · the first mate will close this/);
   assert.match(b, /title="ref-closed"/);
-  assert.match(b, /class="stg">With the first mate</);
+  assert.match(b, /class="stg">Running</, "T3: the crew is still running, so the card is Running with the flag, not With the first mate");
 });
 
 test("Disputed and Stale show as the verdict chip and a non-drift flag", () => {

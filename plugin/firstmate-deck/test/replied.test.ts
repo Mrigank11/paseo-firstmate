@@ -36,9 +36,31 @@ test("a comment that is not delivered yet still counts (the reaction is immediat
   assert.equal(ask(world({ comments: [c({ delivered: false })] })).repliedAt, "2026-10-21T09:05:00Z");
 });
 
-test("comments on the card body or steps (target t-<task>) never move an ask", () => {
-  const a = ask(world({ otherStatus: "running", comments: [c({ target: "t-pick" }), c({ id: "c2", target: "t-pick", answered: true })] }));
+test("T6: a comment on the card body counts against the ask when it is the card's only ask", () => {
+  const a = ask(world({ otherStatus: "running", comments: [c({ target: "t-pick" })] }));
+  assert.equal(a.repliedAt, "2026-10-21T09:05:00Z");
+  assert.equal(a.replyText, "show me more");
+});
+
+test("T6: with two asks a card-body comment cannot pick one: it moves neither and flags the card", () => {
+  const two = [{ text: "A or B?", since: SINCE }, { text: "C or D?", since: SINCE }];
+  const r = world({ asks: two, comments: [c({ target: "t-pick" })] });
+  const t = loadProject(r, "p").tasks.find((x) => x.id === "pick")!;
+  assert.deepEqual(t.asks.map((a) => a.repliedAt), [undefined, undefined]);
+  assert.equal(t.commentWaiting, "2026-10-21T09:05:00Z");
+  const done = world({ asks: two, comments: [c({ target: "t-pick", answered: true })] });
+  assert.equal(loadProject(done, "p").tasks.find((x) => x.id === "pick")!.commentWaiting, undefined, "an answered card comment is not waiting");
+});
+
+test("a comment on a step or section never moves an ask", () => {
+  const a = ask(world({ comments: [c({ target: "t-other" }), c({ id: "c2", target: "endpoints" })] }));
   assert.equal(a.repliedAt, undefined);
+});
+
+test("T1: an answered comment leaves answeredAt on the ask, for the stage engine", () => {
+  const a = ask(world({ comments: [c({ answered: true })] }));
+  assert.equal(a.repliedAt, undefined);
+  assert.equal(a.answeredAt, "2026-10-21T09:05:00Z");
 });
 
 test("comments on another ask of the same task, other tasks, sections and the page do not move this ask", () => {

@@ -1,8 +1,8 @@
 // The finish gate and notifier (S4). Paseo notifies a parent of a crew agent's finish only once, so a narration-only first
 // finish uses it up. The gate reads every `agent.turn_ended` of an `fm.task` agent, applies the completion gate from CLAUDE.md
 // (the first line of the final message starts DONE: / BLOCKED:) and, for agents carrying `fm.notify=plugin` while
-// state/decisions.md says `notify: plugin`, wakes the first mate with a `## Crew <VERDICT> · <task>` message.
-// Without the switch (or the label) it only audits: every decision is appended to state/gate-log.jsonl (shadow mode).
+// state/decisions.md does not say `notify: off`, wakes the first mate with a `## Crew <VERDICT> · <task>` message.
+// With the switch off (or without the label) it only audits: every decision is appended to state/gate-log.jsonl (shadow mode).
 // A strict crew (`canvas.strict=on`) that ends `BLOCKED: canvas ask <id>` with no such open Ask on its canvas (agent-canvas refused
 // the question, so the canvas lacks the structure) is sent back once with the plugin's error; it is neither logged as a verdict nor
 // woken on. The second time it is an ordinary BLOCKED.
@@ -37,13 +37,17 @@ export const SWEEP_EVERY_MS = 10 * 60_000;
 const SEND_ATTEMPTS = 3;
 const PARENT_LABEL = "paseo.parent-agent-id";
 
-/** `notify: plugin` in state/decisions.md (bullet, bold and backticks tolerated). Anything else, or no file, is off. */
+/**
+ * The finish wake is ON unless state/decisions.md says otherwise: a `notify:` line with `off`, `shadow`, `false` or `no` (bullet, bold
+ * and backticks tolerated) puts the gate back in shadow mode. `notify: plugin` is the same as no line (it was the opt-in switch
+ * before the wake was validated). No file, or no `notify:` line, is on.
+ */
 export function notifySwitchOn(root: string): boolean {
   try {
     const text = readFileSync(join(root, "state", "decisions.md"), "utf8");
-    return /^[ \t]*(?:[-*][ \t]+)?[*`_]*notify[*`_]*[ \t]*:[*`_]*[ \t]*plugin[*`_]*[ \t]*$/m.test(text);
+    return !/^[ \t]*(?:[-*][ \t]+)?[*`_]*notify[*`_]*[ \t]*:[*`_]*[ \t]*(?:off|shadow|false|no)[*`_]*[ \t]*$/im.test(text);
   } catch {
-    return false;
+    return true;
   }
 }
 
@@ -69,14 +73,24 @@ export function messageVerdict(items: readonly GateItem[]): { verdict: "DONE" | 
   return { verdict: "NARRATION", line, ...(late ? { nearMiss: late } : {}) };
 }
 
-/** The agent's parent while it is live, else the project's claimed first mate, else the checkout-wide claim. */
-export async function wakeTarget(ports: PortSelector, root: string, parentId: string | null, project: string | undefined): Promise<string | null> {
+/** The first mate that owns a project: its own claim, else the checkout-wide claim, and only a live (not archived) agent counts. */
+export async function ownerOf(ports: PortSelector, root: string, project: string | undefined): Promise<string | null> {
   const live = await ports.current().listAgents();
-  if (parentId && live.some((a) => a.id === parentId && !a.archived)) return parentId;
   for (const c of [project ? projectClaimedId(root, project) : null, claimedId(root)]) {
     if (c && live.some((a) => a.id === c && !a.archived)) return c;
   }
   return null;
+}
+
+/**
+ * Who a crew's finish is sent to: the project's owner (claim), else the agent's live parent. Paseo's parent label is only a hint:
+ * a crew dispatched by a first mate that has since been replaced still reports to the current owner.
+ */
+export async function wakeTarget(ports: PortSelector, root: string, parentId: string | null, project: string | undefined): Promise<string | null> {
+  const owner = await ownerOf(ports, root, project);
+  if (owner) return owner;
+  const live = await ports.current().listAgents();
+  return parentId && live.some((a) => a.id === parentId && !a.archived) ? parentId : null;
 }
 
 export type GateAgentInfo = { id: string; status: string; labels: Record<string, string>; archived: boolean; updatedAt: string | null };
@@ -297,7 +311,7 @@ export class Gate {
     const notify = d.labels["fm.notify"] === "plugin" && notifySwitchOn(this.root());
     const rec = { agentId: d.agentId, task: d.task, turnId: d.turnId, verdict: d.verdict, line: d.line };
     if (!notify) {
-      this.append({ ...rec, acted: false, result: "shadow", note: d.labels["fm.notify"] === "plugin" ? "switch off (decisions.md notify: plugin)" : "no fm.notify=plugin label" });
+      this.append({ ...rec, acted: false, result: "shadow", note: d.labels["fm.notify"] === "plugin" ? "switch off (decisions.md notify: off)" : "no fm.notify=plugin label" });
       return;
     }
     const message = [

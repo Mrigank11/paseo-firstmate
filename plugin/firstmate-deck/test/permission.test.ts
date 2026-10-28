@@ -99,7 +99,7 @@ test("non-crew agents are ignored; without fm.notify=plugin an escalation is log
   await t.perm.onRequested(t.ev("r1", { type: "fetch", url: "https://example.com" }));
   assert.deepEqual(t.log().map((e) => [e.decision, e.result, e.note]), [["escalate", "no-wake", "no fm.notify=plugin label"]]);
   assert.equal(t.world.sent.length, 0);
-  const u = setup({ decisions: RULES("shadow").replace("- notify: plugin", "") });
+  const u = setup({ decisions: RULES("shadow").replace("- notify: plugin", "- notify: off") });
   await u.perm.onRequested(u.ev("r1", { type: "fetch", url: "https://example.com" }));
   assert.match(u.log()[0].note ?? "", /switch off/);
 });

@@ -54,9 +54,9 @@ Given a profile `{ "provider": "claude", "model": "opus", "modeId": "build", "th
   "provider": "claude/opus",
   "workspaceId": "<worktree-id>",
   "initialPrompt": "<brief>",
-  "notifyOnFinish": true,
+  "notifyOnFinish": false,
   "settings": { "modeId": "build", "thinkingOptionId": "think-hard", "features": { "auto_accept": true } },
-  "labels": { "fm.task": "<id>", "fm.project": "<project>", "fm.shape": "ship", "canvas": "on", "canvas.relay": "<your own agent id>", "canvas.strict": "on", "canvas.nudge": "on" }
+  "labels": { "fm.task": "<id>", "fm.project": "<project>", "fm.shape": "ship", "canvas": "on", "canvas.relay": "<your own agent id>", "canvas.strict": "on", "canvas.nudge": "on", "fm.notify": "plugin" }
 }
 ```
 
@@ -64,9 +64,9 @@ Stamp the labels on every `create_agent`: `fm.task` (the task id, the join key f
 
 **Canvas labels.** Every firstmate crew member gets a live canvas, from its first step: stamp `"canvas": "on"` and `"canvas.relay": "<your own $PASEO_AGENT_ID>"` with the other labels. `canvas=on` is the per-agent switch (it beats agent-canvas's global one, so the captain's own agents stay untouched); `canvas.relay` makes a captain's pick on the canvas come to *you* first (a `## Canvas answer · …` message), not straight to the crew, so the guardrail check in `project-page` always runs. The agent only has the canvas recipe because its brief carries the `## Your canvas` section (`writing-briefs`): the two always go together. The exception is a one-shot chore (a quick lookup, a single command): label it `"canvas": "off"` instead, leave out `canvas.relay`, and leave the section out of its brief. Also stamp `"canvas.strict": "on"` and `"canvas.nudge": "on"` on every crew that has a canvas. `canvas.strict=on` makes agent-canvas refuse a crew's open question (and a `waiting`/`blocked` status) unless its canvas has the structure (BLUF → issue → impact → context and components → changes by component → fix plan → ask, then closed folds only) and refuse appends at the canvas root; the crew's brief teaches that shape. The deck's finish gate reads the same label: a strict crew that ends `BLOCKED: canvas ask <id>` while its canvas holds no such open question is sent back once with agent-canvas's error, is not put in Needs you and does not wake you; the second time it reaches you as a normal BLOCKED (`stuck-crew-recovery`). `canvas.nudge=on` turns on agent-canvas's single stale-canvas reminder. Leave both off for a `canvas=off` chore, or per crew when the captain asks for a looser canvas. Re-tasking (`update_agent`) keeps all of these labels, and tells the crew to `set` a fresh canvas (an old task's content would otherwise stay on it). A relaunch from `stuck-crew-recovery` copies them (all five canvas labels). When a new first mate takes over (`bin/page claim`), the claim re-points `canvas.relay` on the open crews itself; the page flags `relay-target-gone` for any it could not reach.
 
-Required fields on `mcp__paseo__create_agent` are `title`, `provider`, `initialPrompt`; `workspaceId` selects the workspace (below), `notifyOnFinish` stays true unless the captain says otherwise.
+Required fields on `mcp__paseo__create_agent` are `title`, `provider`, `initialPrompt`; `workspaceId` selects the workspace (below), `notifyOnFinish` is false when the plugin wake is on (the default; see below) and true only when `decisions.md` says `notify: off`.
 
-**Plugin-gated wake.** Only when `state/decisions.md` has the line `notify: plugin` (absent = off, the default until the gate is validated in shadow mode): also stamp `"fm.notify": "plugin"` and set `notifyOnFinish: false`. The deck plugin then wakes you with `## Crew <VERDICT> · <task>` only on a real `DONE:`/`BLOCKED:` first line (a narration-only first finish no longer uses up the one Paseo notification). With the switch off, never set `fm.notify` and leave `notifyOnFinish` true; the plugin still audits every crew turn in `state/gate-log.jsonl`.
+**Plugin-gated wake (on by default).** Stamp `"fm.notify": "plugin"` on every crew and set `notifyOnFinish: false`, unless `state/decisions.md` has the line `notify: off` (then never set `fm.notify` and leave `notifyOnFinish` true; the plugin still audits every crew turn in `state/gate-log.jsonl`). The deck plugin then wakes you, the project's claimed first mate, with `## Crew <VERDICT> · <task>` only on a real `DONE:`/`BLOCKED:` first line (a narration-only first finish no longer uses up the one Paseo notification). A crew launched without the label gets only Paseo's single notification, which a narration-only first finish can use up: that is how a later `DONE:` goes unheard, so never omit it.
 
 ## 4. Refresh the base before dispatch
 

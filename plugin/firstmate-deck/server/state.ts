@@ -30,6 +30,8 @@ export type Ask = {
   pendingSince?: string;
   /** The reply was a click on one of the options. */
   replyChoice?: string;
+  /** When the newest captain comment on this ask was answered (`bin/page reply`) while the ask stayed open: the crew may already be working on it. */
+  answeredAt?: string;
   /** Set when this ask mirrors a question on the crew's canvas (`bin/fleet ask --ref`): the canvas holds the live text and options. */
   ref?: { kind: "canvas"; agentId?: string; block: string };
 };
@@ -70,6 +72,10 @@ export type Task = {
   hasReport: boolean;
   /** `since` as epoch ms (0 when absent): what the Done group sorts by. */
   updatedMs: number;
+  /** Time of an unanswered captain comment on the card body when two or more asks make it ambiguous which one it is about. */
+  commentWaiting?: string;
+  /** The task's branch is merged into the base (filled by the plugin's snapshot, which can run git). */
+  merged?: boolean;
 };
 
 export type AnsweredAsk = { id: string; text: string; since?: string; answeredAt?: string; contextMd: string };
@@ -218,8 +224,9 @@ function toTask(raw: any, root: string, label: string, inbox: Comment[] = [], ar
     let latest: Comment | undefined; // newest comment on this ask since it was raised
     let open: Comment | undefined; // newest UNANSWERED one: the immediate "with the first mate" reaction
     if (!isNaN(since)) {
+      const single = Array.isArray(raw.asks) && raw.asks.length === 1; // a comment on the card body can only be about the one ask
       for (const c of inbox) {
-        if (c.target !== `t-${raw.id}#${id}` || c.atMs <= since || c.stale) continue;
+        if ((c.target !== `t-${raw.id}#${id}` && !(single && c.target === `t-${raw.id}`)) || c.atMs <= since || c.stale) continue;
         if (!latest || c.atMs >= latest.atMs) latest = c;
         if (!c.answered && (!open || c.atMs >= open.atMs)) open = c;
       }
@@ -233,9 +240,12 @@ function toTask(raw: any, root: string, label: string, inbox: Comment[] = [], ar
     } else if (ask.pendingSince) {
       ask.repliedAt = ask.pendingSince;
     }
+    if (!ask.repliedAt && latest?.answered) ask.answeredAt = latest.at;
     return ask;
   });
   const slug = /^[\w.-]+$/.test(raw.id);
+  // 2+ asks: a comment on the card body cannot be pinned to one of them, so it only flags the card
+  const bodyWaiting = asks.length > 1 ? inbox.filter((c) => c.target === `t-${raw.id}` && !c.answered && !c.stale && c.atMs > Math.min(...asks.map((a) => Date.parse(a.since ?? "")).filter((n) => !isNaN(n)), Infinity)).at(-1) : undefined;
   const answeredIds = new Set(asks.map((a) => a.id));
   return {
     id: raw.id,
@@ -260,24 +270,31 @@ function toTask(raw: any, root: string, label: string, inbox: Comment[] = [], ar
     answered: loadAnswered(root, raw.id).filter((a) => !answeredIds.has(a.id)),
     hasReport: slug && existsSync(join(root, "state", "tasks", raw.id, "report.md")),
     updatedMs: Date.parse(raw.since ?? (archived ? raw.lastEvent : "") ?? "") || 0,
+    ...(bodyWaiting ? { commentWaiting: bodyWaiting.at } : {}),
   };
 }
 
-/** Every live task of every project (and those without one), for the CLI: the same Task model the page renders. */
-export function loadAllLive(root: string): Task[] {
+/** Every live task of every project (and those without one) with each project's inbox comments: the model the stage snapshot is built from. */
+export function loadLive(root: string): { tasks: Task[]; comments: Map<string, TrailComment[]> } {
   let live: any[] = [];
   try {
     const fleet = JSON.parse(readText(join(root, "state", "fleet.json")) || "{}");
     live = fleet?.tasks ?? [];
     if (live.length && fleet?.version !== 2) throw new Error(V1_MESSAGE);
-  } catch (e) { if ((e as Error).message === V1_MESSAGE) throw e; return []; }
+  } catch (e) { if ((e as Error).message === V1_MESSAGE) throw e; return { tasks: [], comments: new Map() }; }
   const inboxes = new Map<string, Comment[]>();
   const inboxOf = (p: unknown) => {
     if (typeof p !== "string" || !/^[a-z0-9][a-z0-9-]*$/.test(p)) return [];
     if (!inboxes.has(p)) inboxes.set(p, readInbox(join(root, "state", "projects", p, "inbox.jsonl")));
     return inboxes.get(p)!;
   };
-  return live.filter((t) => t && typeof t.id === "string").map((t) => toTask(t, root, "fleet.json", inboxOf(t.project)));
+  const tasks = live.filter((t) => t && typeof t.id === "string").map((t) => toTask(t, root, "fleet.json", inboxOf(t.project)));
+  return { tasks, comments: new Map([...inboxes].map(([p, cs]) => [p, cs.map(({ atMs: _a, ...c }) => c)])) };
+}
+
+/** Every live task, for the CLI: the same Task model the page renders. */
+export function loadAllLive(root: string): Task[] {
+  return loadLive(root).tasks;
 }
 
 export function loadProject(root: string, project: string): ProjectModel {

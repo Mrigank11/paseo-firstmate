@@ -3,7 +3,7 @@
 //   page-tool.ts page-path <root> <project>
 //   page-tool.ts session <root> <project> <url>
 //   page-tool.ts answered <root> <project> [ids]  (prints how many entries were marked; ids = comma list, default every delivered one)
-//   page-tool.ts delivered-ids <root> <project>   (comma list of the delivered, unanswered comment ids: what a reply is about to answer)
+//   page-tool.ts delivered-ids <root> <project> [tasks]   (comma list of the delivered, unanswered comment ids: what a reply is about to answer; tasks = comma list narrows it to comments on those tasks)
 //   page-tool.ts choices <root> <project> [ids]   (one line per delivered, unanswered, non-stale option click: "<task> <askId> <commentId>")
 //   page-tool.ts note <root> <project> <section> <text>
 //   page-tool.ts status <root> [project]          (env PAGE_PLUGIN_STATUS names the plugin state)
@@ -190,7 +190,13 @@ switch (cmd) {
   }
   case "delivered-ids": {
     const project = slug(rest[0]);
-    console.log(readInbox(inboxPath(root, project)).filter((e) => e.delivered && !e.answered).map((e) => e.id).join(","));
+    const tasks = rest[1] ? rest[1].split(",").filter(Boolean) : null;
+    const taskOf = (t: string) => /^t-([^#]+)/.exec(t)?.[1] ?? "";
+    const hit = readInbox(inboxPath(root, project)).filter((e) => e.delivered && !e.answered && (!tasks || tasks.includes(taskOf(e.target))));
+    // without --task a reply answers every delivered comment: say which tasks that touches, so one reply cannot clear comments unseen
+    const touched = [...new Set(hit.map((e) => taskOf(e.target) || "(page)"))];
+    if (!tasks && touched.length > 1) console.error(`page: note: this reply answers delivered comments on ${touched.length} targets (${touched.join(", ")}); pass --task <id> to answer only some`);
+    console.log(hit.map((e) => e.id).join(","));
     break;
   }
   case "choices": {

@@ -456,16 +456,14 @@ test("failed tasks are counted as failed, not done, in the summary", async () =>
   r.deck.stop();
 });
 
-test("a comment on the ask itself moves it to 'With the first mate' at once; a comment on the card does not", async () => {
+test("a comment on the ask moves it to 'With the first mate' at once; so does one on the card of a single-ask task (T6)", async () => {
   const r = rig({ tasks: [{ id: "t1", intent: "x", title: "Pick one", state: "active", project: "demo", asks: [{ text: "Which design?", since: "2026-10-21T09:00:00Z" }] }] });
   await r.deck.configure();
   await r.deck.render("demo");
   r.deck.ingest("demo", [{ prompt: "why so slow?", selector: "article#t-t1 > div.tt" }]);
   await until(() => /why so slow/.test(liveHtml(r.live)), 1000);
-  assert.ok(/Needs you/.test(liveHtml(r.live)) && !/With the first mate/.test(liveHtml(r.live)), "a card comment does not move the ask");
-  r.deck.ingest("demo", [{ prompt: "show me both", selector: "article#t-t1 > div#a-t1-a1 > div.ask" }]);
   await until(() => /With the first mate/.test(liveHtml(r.live)), 1000);
-  assert.ok(!/Needs you/.test(liveHtml(r.live)));
+  assert.ok(!/Needs you/.test(liveHtml(r.live)), "the task has one ask, so a card comment can only be about it");
   const s = (await r.deck.summary()).projects[0];
   assert.deepEqual([s.counts.needsYou, s.counts.withFirstMate, s.needsYou.length], [0, 1, 0]);
   r.deck.stop();
@@ -777,7 +775,7 @@ test("stage: drift is shown, not hidden: a queued task with a running agent; a t
   await r.deck.configure();
   await r.deck.render("demo");
   const live = readFileSync(r.live, "utf8");
-  assert.equal(groupOfCard(live, "q1"), "next");
+  assert.equal(groupOfCard(live, "q1"), "running", "T4: the running agent decides the card");
   assert.match(taskCard(live, "q1"), /title=\\"queued-but-has-agent\\"/);
   assert.equal(groupOfCard(live, "l1"), "fm");
   assert.match(taskCard(live, "l1"), /title=\\"no-agent\\"/);
@@ -894,5 +892,60 @@ test("first render seeds what the captain has seen; a later change is unseen; th
   const m = /data-keys="([^"]*)"/.exec(readFileSync(r.live, "utf8").replace(/\\"/g, '"'))!;
   assert.notEqual(JSON.parse(m[1].replace(/&quot;/g, '"'))["t-t1"], seeded, "a stage change moves the key");
   assert.equal(ui().s.keys["t-t1"], seeded, "the stored seen keys stay what the captain saw");
+  r.deck.stop();
+});
+
+test("stages.json: the plugin's one evaluation agrees with the page card for card, and names owner, reason and owedSince", async () => {
+  const r = rig({ tasks: [
+    { id: "q1", intent: "queued", state: "queued", project: "demo", shape: "ship" },
+    { id: "l1", intent: "lost", state: "active", since: "2026-10-24T00:00:00Z", project: "demo", shape: "ship" },
+    { id: "r1", intent: "running", state: "active", project: "demo", shape: "ship" },
+    { id: "a1", intent: "asking", state: "active", project: "demo", shape: "ship", asks: [{ text: "which?", since: "2026-10-24T09:00:00Z" }] },
+  ] });
+  r.fw.add({ id: "ag-r", status: "running", labels: { "fm.task": "r1" }, createdAt: "2026-10-24T10:00:00Z", items: [shell("ls")] });
+  await r.deck.configure();
+  await r.deck.render("demo");
+  await r.deck.publishStages();
+  const snap = JSON.parse(readFileSync(join(r.root, "state", "stages.json"), "utf8"));
+  const live = readFileSync(r.live, "utf8");
+  assert.deepEqual(snap.rows.map((x: any) => [x.id, x.group]), [["q1", "next"], ["l1", "fm"], ["r1", "running"], ["a1", "you"]]);
+  for (const row of snap.rows) assert.equal(groupOfCard(live, row.id), row.group, `${row.id}: page and snapshot agree`);
+  const l1 = snap.rows.find((x: any) => x.id === "l1");
+  assert.deepEqual([l1.owner, /no agent/.test(l1.reason), typeof l1.owedSince, l1.clears.length > 0], ["firstmate", true, "string", true]);
+  const first = l1.owedSince;
+  await new Promise((res) => setTimeout(res, 20));
+  await r.deck.publishStages();
+  assert.equal(JSON.parse(readFileSync(join(r.root, "state", "stages.json"), "utf8")).rows.find((x: any) => x.id === "l1").owedSince, first, "owedSince holds while the situation does");
+  assert.ok(snap.inputsMtimeMs > 0 && Date.now() - Date.parse(snap.writtenAt) < 60_000);
+  r.deck.stop();
+});
+
+test("enforcement reaches the page and stages.json together: a stalled task moves to Needs you, only while its situation holds; a reminded crew reaches the first mate", async () => {
+  const r = rig({ tasks: [
+    { id: "l1", intent: "lost", state: "active", since: "2026-10-24T00:00:00Z", project: "demo", shape: "ship" },
+    { id: "r1", intent: "running", state: "active", project: "demo", shape: "ship" },
+  ] });
+  r.fw.add({ id: "ag-r", status: "idle", labels: { "fm.task": "r1" }, createdAt: "2026-10-24T10:00:00Z", items: [shell("ls")] });
+  await r.deck.configure();
+  await r.deck.render("demo");
+  await r.deck.publishStages();
+  const read = () => JSON.parse(readFileSync(join(r.root, "state", "stages.json"), "utf8")).rows;
+  const l1 = () => read().find((x: any) => x.id === "l1");
+  assert.deepEqual([l1().group, l1().owner], ["fm", "firstmate"]);
+  assert.deepEqual([read().find((x: any) => x.id === "r1").stage, read().find((x: any) => x.id === "r1").owner], ["Crew stopped · no hand-back", "crew"], "T7: an idle crew with no hand-back is the crew's");
+  const fp = l1().fp;
+  r.deck.setEnforcement(["ag-r"], { l1: { fp, why: "it did not act on 2 reminders" } });
+  await r.deck.render("demo");
+  await r.deck.publishStages();
+  assert.deepEqual([l1().stage, l1().group, l1().owner], ["Needs you · first mate stalled", "you", "captain"]);
+  assert.match(l1().reason, /did not act on 2 reminders/);
+  assert.equal(groupOfCard(readFileSync(r.live, "utf8"), "l1"), "you", "the page agrees");
+  const r1 = read().find((x: any) => x.id === "r1");
+  assert.deepEqual([r1.stage, r1.group, r1.owner], ["Idle", "fm", "firstmate"], "after the reminder the silent crew reaches the first mate");
+  assert.equal((await r.deck.summary()).projects[0].needsYou.length, 1, "the sidebar counts it");
+  // a stall judged in an earlier situation no longer applies
+  r.deck.setEnforcement([], { l1: { fp: "old", why: "x" } });
+  await r.deck.publishStages();
+  assert.equal(l1().group, "fm");
   r.deck.stop();
 });

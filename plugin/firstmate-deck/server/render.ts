@@ -9,7 +9,7 @@ import { pageScript } from "./page-script.ts";
 import { IDIOMORPH_SOURCE } from "./morph-source.ts";
 import { CSS } from "./style.ts";
 import type { ProjectModel, Task, TrailComment } from "./state.ts";
-import { computeStage, currentAgent, stageAgentsFor, type GroupKey, type LabeledAgent, type Stage, type StageFlag } from "./stage.ts";
+import { activeSinceOf, applyStalled, computeStage, currentAgent, stageAgentsFor, type GroupKey, type LabeledAgent, type Stage, type StageFlag } from "./stage.ts";
 import { attentionOf, type Attention } from "./attention.ts";
 import { canvasInput, clickedPick, SAFE_ASK } from "./canvas-view.ts";
 import type { CanvasData, FmSummary } from "./canvas-port.ts";
@@ -50,6 +50,8 @@ export type RenderOpts = {
   labeled?: Record<string, LabeledAgent[]>;
   /** What agent-canvas says about those agents (canvas-port.ts). Absent = no canvas: cards and stages are the registry's and Paseo's alone. */
   canvas?: CanvasData;
+  /** Tasks the enforcer gave up on: the first mate ignored them (enforcer.ts). Applied only while the task is still in the situation (`fp`) it was judged in. */
+  stalled?: Record<string, { fp: string; why: string }>;
 };
 
 export type Rendered = { page: string; live: string; signature: string; attention: Attention };
@@ -106,12 +108,14 @@ const stampShort = (d: Date) => `${pad(d.getHours())}:${pad(d.getMinutes())}:${p
 const titleCase = (s: string) => s.replace(/[-_]+/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
 
 /** The task's computed stage (stage.ts): from the registry's intent, its asks, and the Paseo agents carrying its label. */
-export function stageOf(t: Task, live: boolean, o: { now: Date; labeled?: RenderOpts["labeled"]; canvas?: CanvasData; comments?: TrailComment[] }, view: (id: string) => AgentView | undefined = () => undefined): Stage {
+export function stageOf(t: Task, live: boolean, o: { now: Date; labeled?: RenderOpts["labeled"]; canvas?: CanvasData; comments?: TrailComment[]; stalled?: RenderOpts["stalled"] }, view: (id: string) => AgentView | undefined = () => undefined): Stage {
   if (!live) return computeStage(t, t.agents?.length ? [{ id: t.agents[t.agents.length - 1], status: "idle", archived: false, pendingPermissions: 0 }] : [], o.now, { archived: true });
   const agents = stageAgentsFor(o.labeled?.[t.id], view);
   const cur = currentAgent(agents);
-  const canvas = cur && o.canvas?.status === "ok" ? canvasInput(o.canvas.summaries[cur.id], t.id, o.comments ?? [], cur.lastActivityAt) : undefined;
-  return computeStage(t, agents, o.now, { canvas });
+  const canvas = cur && o.canvas?.status === "ok" ? canvasInput(o.canvas.summaries[cur.id], t.id, o.comments ?? [], activeSinceOf(cur)) : undefined;
+  const st = computeStage(t, agents, o.now, { canvas });
+  const sl = o.stalled?.[t.id];
+  return sl && sl.fp === st.fp ? applyStalled(st, sl.why) : st;
 }
 
 export function groupOf(t: Task, live: boolean, now = new Date(), labeled?: RenderOpts["labeled"], view?: (id: string) => AgentView | undefined): GroupKey {
@@ -345,7 +349,7 @@ function row(t: Task, group: GroupKey, ctx: Ctx, idx = 0): string {
   // the agent's canvas, when agent-canvas has one for it: the card shows it under the stage line and answers its raw asks
   const sum = group === "done" || !aid ? undefined : ctx.canvas?.summaries[aid];
   const curAgent = currentAgent(ctx.o.labeled?.[t.id] ?? []);
-  const raw = sum ? rawAsks(t, sum, ctx.comments, ctx.o.now, curAgent?.lastActivityAt ?? curAgent?.updatedAt) : [];
+  const raw = sum ? rawAsks(t, sum, ctx.comments, ctx.o.now, activeSinceOf(curAgent)) : [];
   const rawTargets = new Set((sum?.openAsks ?? []).filter((a) => !t.asks.some((x) => x.ref?.block === a.id)).map((a) => `t-${t.id}#c-${a.id}`));
   const out = [
     `<article class="task s-${group}${failed ? " s-failed" : ""}" id="t-${esc(t.id)}"${data}>`,
@@ -461,7 +465,7 @@ export function byOrder<T extends { order?: number }>(items: T[]): T[] {
 }
 
 /** Stage of every task the page shows (live ones from Paseo + intent, archive lines frozen), keyed by task id. */
-export function stagesOf(model: ProjectModel, agents: Record<string, AgentView>, o: { now: Date; labeled?: RenderOpts["labeled"]; canvas?: CanvasData }): Map<string, Stage> {
+export function stagesOf(model: ProjectModel, agents: Record<string, AgentView>, o: { now: Date; labeled?: RenderOpts["labeled"]; canvas?: CanvasData; stalled?: RenderOpts["stalled"] }): Map<string, Stage> {
   const out = new Map<string, Stage>();
   const so = { ...o, comments: model.comments };
   for (const t of model.archive) out.set(t.id, stageOf(t, false, so));

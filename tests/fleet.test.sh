@@ -477,7 +477,8 @@ J
 J
   S() { "$F" stage "$1" | jq -r "$2"; }
   eq "$(S run-a '.stage+"|"+.group+"|"+.agentId')" "Running|running|ag-a"; check "stage: a labelled running agent is Running" $?
-  eq "$(S que-b '.stage+"|"+(.flags|map(.key)|join(","))')" "Next up|queued-but-has-agent"; check "stage: a queued task with an agent shows drift" $?
+  eq "$(S que-b '.stage+"|"+(.flags|map(.key)|join(","))')" "Running|queued-but-has-agent"; check "stage: a queued task with a RUNNING agent is Running, with the drift flag (T4)" $?
+  eq "$(S que-b '.owner+"|"+.source')" "crew|local"; check "stage: rows carry the owner of the next move, and say they were computed locally when no plugin snapshot exists" $?
   eq "$(S que-b '.flags[0].drift')" true; check "stage: ...marked drift:true" $?
   eq "$(S ask-c '.group')" you; check "stage: an open ask is Needs you even with a running agent" $?
   eq "$(S old-d '.stage+"|"+(.flags|map(.key)|join(","))')" "Lost|no-agent"; check "stage: an old active task with no agent is Lost, not Needs you" $?

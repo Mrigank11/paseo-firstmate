@@ -2,6 +2,8 @@
 state/fleet.json
 state/fleet-archive.jsonl
 state/gate-log.jsonl
+state/stages.json
+state/enforcer.json
 state/decisions.md
 state/tasks/
 state/projects/

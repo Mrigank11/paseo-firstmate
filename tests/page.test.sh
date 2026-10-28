@@ -138,6 +138,19 @@ grep -q "1 comment" <<<"$msg" && ok "reply reports the count" || bad "reply repo
 printf 'from stdin\nsecond line' | "$P" reply demo - >/dev/null
 grep -q "second line" "$FAKE_LOG" && ok "reply - reads stdin" || bad "reply - reads stdin"
 "$P" reply nope "x" >/dev/null 2>&1 && bad "reply to unknown project fails" || ok "reply to unknown project fails"
+# T12: --task answers only the comments on those tasks; without it the note names every task a reply touches
+cp "$PROJ/inbox.jsonl" "$PROJ/inbox.keep"
+{
+  echo '{"id":"d1","at":"'$now'","project":"demo","target":"t-aa#a1","text":"one","prompt":{},"delivered":true,"answered":false}'
+  echo '{"id":"d2","at":"'$now'","project":"demo","target":"t-bb","text":"two","prompt":{},"delivered":true,"answered":false}'
+} >"$PROJ/inbox.jsonl"
+"$P" reply demo "only aa" --task aa >/dev/null
+eq "$(jq -r '[.id,.answered]|join(":")' "$PROJ/inbox.jsonl" | paste -sd' ')" "d1:true d2:false" "T12: reply --task answers only that task's comments"
+sed -i 's/"answered":true/"answered":false/' "$PROJ/inbox.jsonl"
+note="$("$P" reply demo "all" 2>&1 >/dev/null)"
+grep -q "2 targets (aa, bb)" <<<"$note" && ok "T12: a reply without --task names the tasks it answers" || bad "T12: reply scope note" "$note"
+eq "$(jq -r '[.id,.answered]|join(":")' "$PROJ/inbox.jsonl" | paste -sd' ')" "d1:true d2:true" "...and without --task still answers every delivered comment"
+mv "$PROJ/inbox.keep" "$PROJ/inbox.jsonl"
 
 # ---- status: listener, banner, last render, the plugin's root, undelivered ----
 jq '.lastRender=(now-45|todate) | .banner="First mate unreachable, 1 comment queued" | .listener="ok" | .pluginRoot=$r' --arg r "$T/root" "$PROJ/page.json" >"$PROJ/p.tmp" && mv "$PROJ/p.tmp" "$PROJ/page.json"
