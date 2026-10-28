@@ -191,6 +191,17 @@ test("a migrated archive line's order does not pin it above newer Done work; a l
   assert.ok(pos(d2, "done-live") < pos(d2, "arch-recon") && pos(d2, "done-live") < pos(d2, "arch-schema"));
 });
 
+test("Parked sorts newest parked first; a live task's order still pins it", () => {
+  const m = structuredClone(model);
+  const ids = ["write-docs", "polish-ui", "ask-fm"];
+  const days = ["2026-10-10T00:00:00Z", "2026-10-12T00:00:00Z", "2026-10-11T00:00:00Z"];
+  ids.forEach((id, i) => { const t = m.tasks.find((x) => x.id === id)!; t.state = "parked"; t.asks = []; t.depends_on = []; t.updatedMs = Date.parse(days[i]); });
+  const parked = (mm: typeof m) => { const html = renderProject(mm, agents, opts).live; const g = html.slice(html.indexOf('id="g-parked"')); return ids.filter((id) => g.includes(`id="t-${id}"`)).sort((a, b) => g.indexOf(`id="t-${a}"`) - g.indexOf(`id="t-${b}"`)); };
+  assert.deepEqual(parked(m), ["polish-ui", "ask-fm", "write-docs"]);
+  m.tasks.find((x) => x.id === "write-docs")!.order = 1;
+  assert.deepEqual(parked(m), ["write-docs", "polish-ui", "ask-fm"]);
+});
+
 test("an archived task keeps its answered ask, its context and a report pointer", () => {
   const t = model.archive.find((x) => x.id === "arch-schema")!;
   assert.deepEqual(t.answered.map((a) => [a.id, a.text]), [["a1", "Postgres or SQLite?"]]);
