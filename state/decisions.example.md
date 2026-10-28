@@ -24,7 +24,7 @@ The first mate reads the profile with `list_profiles` and copies its fields into
 
 ## Notifications
 
-- `notify: plugin` — **off by default** (delete or change the line to turn it off). When on, new crew are launched with `fm.notify=plugin` + `notifyOnFinish: false` and the deck plugin wakes the first mate with `## Crew <VERDICT> · <task>`. Leave it off until `state/gate-log.jsonl` (shadow mode) agrees with the Paseo notifications over several finishes.
+- The crew-finish wake is **on by default**: new crew are launched with `fm.notify=plugin` + `notifyOnFinish: false` and the deck plugin wakes the first mate (the project's claimed owner, not Paseo's parent label) with `## Crew <VERDICT> · <task>` on a real `DONE:`/`BLOCKED:`. To turn it off (the gate goes back to shadow mode, logging only), add the line `notify: off`; crew launched without the label keep Paseo's own notification either way.
 
 ## Permission policy
 

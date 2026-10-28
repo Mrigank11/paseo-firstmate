@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { CliPort } from "../server/paseo-cli.ts";
@@ -11,10 +11,10 @@ import { assistant, FakeWorld, fakePaseo, shell } from "./fake-paseo.ts";
 const user = (text: string) => ({ type: "user_message", text }) as TimelineItem;
 const CREW = { "fm.task": "t1", "fm.project": "p", "fm.shape": "ship", "fm.notify": "plugin" };
 
-function setup(o: { switchOn?: boolean; labels?: Record<string, string>; status?: "idle" | "running" } = {}) {
+function setup(o: { switchOn?: boolean; switchOff?: boolean; labels?: Record<string, string>; status?: "idle" | "running" } = {}) {
   const root = mkdtempSync(join(tmpdir(), "gate-"));
   mkdirSync(join(root, "state"));
-  if (o.switchOn) writeFileSync(join(root, "state", "decisions.md"), "# d\n\n- notify: plugin\n");
+  if (o.switchOff) writeFileSync(join(root, "state", "decisions.md"), "# d\n\n- notify: off\n");
   const world = new FakeWorld().add(
     { id: "crew", labels: o.labels ?? CREW, status: o.status ?? "idle" },
     { id: "fm", labels: { firstmate: "true" } },
@@ -46,18 +46,18 @@ test("a DONE: line later in the text is a near-miss, not a verdict", () => {
   assert.equal(m.nearMiss, "DONE: abc");
 });
 
-test("notifySwitchOn reads decisions.md and is off by default", () => {
+test("notifySwitchOn is ON by default; decisions.md turns it off with notify: off / shadow", () => {
   const root = mkdtempSync(join(tmpdir(), "gate-sw-"));
   mkdirSync(join(root, "state"));
-  assert.equal(notifySwitchOn(root), false);
-  for (const [text, want] of [["notify: plugin", true], ["- **notify:** plugin", true], ["- `notify: plugin`", true], ["notify: off", false], ["# notify: plugin later", false], ["notify: plugins", false]] as const) {
+  assert.equal(notifySwitchOn(root), true, "no decisions.md");
+  for (const [text, want] of [["notify: plugin", true], ["- **notify:** plugin", true], ["- `notify: plugin`", true], ["no notify line", true], ["notify: off", false], ["- **notify:** off", false], ["notify: shadow", false], ["notify: Off", false], ["# notify: off later", true], ["notify: offline", true]] as const) {
     writeFileSync(join(root, "state", "decisions.md"), `# d\n${text}\n`);
     assert.equal(notifySwitchOn(root), want, text);
   }
 });
 
-test("shadow (switch off): narration and DONE are logged, nobody is woken", async () => {
-  const s = setup();
+test("shadow (decisions.md notify: off): narration and DONE are logged, nobody is woken", async () => {
+  const s = setup({ switchOff: true });
   const g = s.mk();
   await g.onTurnEnded(s.end("Starting the dev server"));
   await g.onTurnEnded(s.end("DONE: abc @ def", { turnId: "turn-2" }));
@@ -66,7 +66,7 @@ test("shadow (switch off): narration and DONE are logged, nobody is woken", asyn
 });
 
 test("notify mode: narration does not wake; a later DONE wakes the parent with the ## Crew DONE message", async () => {
-  const s = setup({ switchOn: true });
+  const s = setup();
   const g = s.mk();
   await g.onTurnEnded(s.end("Starting the dev server"));
   assert.equal(s.world.sent.length, 0);
@@ -80,20 +80,20 @@ test("notify mode: narration does not wake; a later DONE wakes the parent with t
 });
 
 test("without the fm.notify=plugin label the agent is only shadowed, even with the switch on", async () => {
-  const s = setup({ switchOn: true, labels: { "fm.task": "t1", "fm.shape": "scout" } });
+  const s = setup({ labels: { "fm.task": "t1", "fm.shape": "scout" } });
   await s.mk().onTurnEnded(s.end("DONE: x"));
   assert.equal(s.world.sent.length, 0);
   assert.equal(s.log()[0].result, "shadow");
 });
 
 test("agents without fm.task are not crew: nothing is logged", async () => {
-  const s = setup({ switchOn: true, labels: {} });
+  const s = setup({ labels: {} });
   await s.mk().onTurnEnded(s.end("DONE: x"));
   assert.equal(s.log().length, 0);
 });
 
 test("failed and canceled turns wake as ERROR and CANCELED", async () => {
-  const s = setup({ switchOn: true });
+  const s = setup();
   const g = s.mk();
   await g.onTurnEnded(s.end("", { outcome: { kind: "failed", error: { message: "boom" } }, turnId: "a" }));
   await g.onTurnEnded(s.end("", { outcome: { kind: "canceled", reason: "user" }, turnId: "b" }));
@@ -101,7 +101,7 @@ test("failed and canceled turns wake as ERROR and CANCELED", async () => {
 });
 
 test("settle rule: a DONE while the agent is still running is deferred, then woken once it is idle", async () => {
-  const s = setup({ switchOn: true, status: "running" });
+  const s = setup({ status: "running" });
   const g = s.mk();
   await g.onTurnEnded(s.end("DONE: step-scoped"));
   assert.equal(s.world.sent.length, 0);
@@ -114,15 +114,15 @@ test("settle rule: a DONE while the agent is still running is deferred, then wok
 });
 
 test("dedupe survives a re-created gate (restart): the same turn is not woken twice", async () => {
-  const s = setup({ switchOn: true });
+  const s = setup();
   await s.mk().onTurnEnded(s.end("DONE: x"));
   await s.mk().onTurnEnded(s.end("DONE: x"));
   assert.equal(s.world.sent.length, 1);
   assert.equal(s.log().filter((e) => e.verdict === "DONE").length, 1);
 });
 
-test("target: parent gone -> the project claim -> the checkout claim -> no-target", async () => {
-  const s = setup({ switchOn: true });
+test("target: the project claim -> the checkout claim -> the live parent -> no-target (the owner beats Paseo's parent label)", async () => {
+  const s = setup();
   s.world.add({ id: "fm2", labels: {} });
   const ev = (turnId: string) => s.end("DONE: x", { agentId: undefined, turnId, agent: { id: "crew", parentAgentId: "gone" } } as never);
   const g = s.mk();
@@ -135,10 +135,15 @@ test("target: parent gone -> the project claim -> the checkout claim -> no-targe
   writeFileSync(join(s.root, "state", "projects", "p", "claim.json"), JSON.stringify({ agentId: "fm" }));
   await g.onTurnEnded(ev("t-c"));
   assert.equal(s.world.sent.at(-1)!.id, "fm");
+  // a live parent that is NOT the owner does not get the wake: the claim wins
+  s.claim("fm2");
+  rmSync(join(s.root, "state", "projects", "p", "claim.json"));
+  await g.onTurnEnded(s.end("DONE: y", { turnId: "t-d" }));
+  assert.equal(s.world.sent.at(-1)!.id, "fm2");
 });
 
 test("a failing send is retried, then logged as failed (not deduped, so a later pass retries)", async () => {
-  const s = setup({ switchOn: true });
+  const s = setup();
   s.world.sendFails = true;
   const g = s.mk();
   await g.onTurnEnded(s.end("DONE: x"));
@@ -149,13 +154,13 @@ test("a failing send is retried, then logged as failed (not deduped, so a later 
 });
 
 test("agent.closed wakes a plugin-notified agent as CLOSED", async () => {
-  const s = setup({ switchOn: true });
+  const s = setup();
   await s.mk().onClosed({ agent: { id: "crew", parentAgentId: "fm" } });
   assert.match(s.world.sent[0].text, /^## Crew CLOSED · t1\n/);
 });
 
 test("startup sweep: a DONE that landed while the plugin was down is woken; handled ones and narration are not", async () => {
-  const s = setup({ switchOn: true });
+  const s = setup();
   const crew = s.world.agents.get("crew")!;
   crew.updatedAt = new Date().toISOString();
   crew.items = [user("go"), shell("ls"), assistant("DONE: missed")];
@@ -171,7 +176,7 @@ test("startup sweep: a DONE that landed while the plugin was down is woken; hand
 });
 
 test("sweep does not repeat a finish the turn hook already handled", async () => {
-  const s = setup({ switchOn: true });
+  const s = setup();
   const crew = s.world.agents.get("crew")!;
   crew.updatedAt = new Date().toISOString();
   crew.items = [user("go"), assistant("DONE: x")];
@@ -215,7 +220,7 @@ const STRICT = { ...CREW, "canvas.strict": "on" };
 const sum = (openIds: string[], lastRejection?: unknown) => ({ openAsks: openIds.map((id) => ({ id })), lastRejection });
 
 test("a strict crew's BLOCKED naming a canvas ask that is not open is sent back once, not logged as a verdict, no wake", async () => {
-  const s = setup({ switchOn: true, labels: STRICT });
+  const s = setup({ labels: STRICT });
   const g = new Gate({ ports: s.ports, root: () => s.root, firstmateLabel: () => "firstmate=true", log: () => {}, settleMs: 10, retryDelayMs: 1, canvas: async () => sum([], { code: "needs_you_structure", error: "missing: impact, fix" }) });
   await g.onTurnEnded(s.end("BLOCKED: canvas ask q1"));
   assert.deepEqual(s.world.sent.map((m) => m.id), ["crew"], "the crew is sent back, the first mate is not woken");
@@ -230,7 +235,7 @@ test("a strict crew's BLOCKED naming a canvas ask that is not open is sent back 
 });
 
 test("the bounce is remembered across a restart (from the log)", async () => {
-  const s = setup({ switchOn: true, labels: STRICT });
+  const s = setup({ labels: STRICT });
   const mk = () => new Gate({ ports: s.ports, root: () => s.root, firstmateLabel: () => "firstmate=true", log: () => {}, settleMs: 10, retryDelayMs: 1, canvas: async () => sum([], "refused") });
   await mk().onTurnEnded(s.end("BLOCKED: canvas ask q1"));
   await mk().onTurnEnded(s.end("BLOCKED: canvas ask q1", { turnId: "turn-2" }));
@@ -244,7 +249,7 @@ test("no bounce when the ask is open, the crew is not strict, the canvas is unre
     [STRICT, async () => null, "BLOCKED: canvas ask q1"],
     [STRICT, async () => sum([]), "BLOCKED: which database?"],
   ] as const) {
-    const s = setup({ switchOn: true, labels });
+    const s = setup({ labels });
     const g = new Gate({ ports: s.ports, root: () => s.root, firstmateLabel: () => "firstmate=true", log: () => {}, settleMs: 10, retryDelayMs: 1, canvas: lookup });
     await g.onTurnEnded(s.end(line));
     assert.deepEqual(s.world.sent.map((m) => m.id), ["fm"], line);
@@ -259,7 +264,7 @@ test("rejectionText reads a string, {error} or {errors}", () => {
 });
 
 test("the turn-end event's timeline is empty (deprecated): the verdict comes from the agent's tail, and the bounce still works", async () => {
-  const s = setup({ switchOn: true, labels: STRICT });
+  const s = setup({ labels: STRICT });
   s.world.agents.get("crew")!.items = [user("go"), shell("ls"), assistant("BLOCKED: canvas ask q1")];
   const g = new Gate({ ports: s.ports, root: () => s.root, firstmateLabel: () => "firstmate=true", log: () => {}, settleMs: 10, retryDelayMs: 1, canvas: async () => sum([], "refused") });
   await g.onTurnEnded(s.end("", { timeline: [] }));
