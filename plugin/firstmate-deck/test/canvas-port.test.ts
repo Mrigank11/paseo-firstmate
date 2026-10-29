@@ -98,3 +98,27 @@ test("it keeps polling by itself while an agent is wanted, and stops when none i
   assert.equal(r.fc.count("/api/fm/summary"), n);
   await r.done();
 });
+
+const PNG = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==", "base64");
+const H1 = "a".repeat(32), H2 = "b".repeat(32), H3 = "c".repeat(32);
+
+test("a card's pictures become data: URIs: a Markdown image (no host) and an <Image> (daemon address) both survive the page and the snapshot", async () => {
+  const r = await rig();
+  r.fc.assets.set(H1, { mime: "image/png", bytes: PNG });
+  r.fc.assets.set(H2, { mime: "image/png", bytes: PNG });
+  r.fc.set(summary("ag-1"));
+  r.fc.cardHtml.set("ag-1", `<figure class="fig"><img src="/asset/${H1}" alt="md" width="1" height="1" loading="lazy"></figure>`
+    + `<figure class="fig"><img src="http://127.0.0.1:6790/asset/${H2}" alt="tag" loading="lazy"></figure>`
+    + `<figure class="fig"><img src="/asset/${H3}" alt="gone"></figure>`);
+  r.port.want("demo", ["ag-1"]);
+  await r.port.poll();
+  const card = r.port.data(["ag-1"]).cards["ag-1"];
+  const uri = `data:image/png;base64,${PNG.toString("base64")}`;
+  assert.equal(card.split(uri).length - 1, 2, "both pictures are embedded");
+  assert.match(card, /alt="md"/);
+  assert.ok(!card.includes(`/asset/${H1}`) && !card.includes(`/asset/${H2}`), "no host-less or loopback asset link is left");
+  assert.ok(card.includes(`src="/asset/${H3}"`), "a picture the canvas no longer has keeps its link rather than breaking the card");
+  await r.port.poll();
+  assert.equal(r.fc.count(`/asset/${H1}`), 1, "assets are immutable by hash: fetched once");
+  await r.done();
+});

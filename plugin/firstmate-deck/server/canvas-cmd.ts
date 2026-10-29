@@ -13,6 +13,7 @@ import { canvasUrl, labelledAgents, type Rec } from "./stage-data.ts";
 import { projectClaimedId } from "./claims.ts";
 import { loadAllLive } from "./state.ts";
 import { currentAgent } from "./stage.ts";
+import { inlineImages } from "./canvas-images.ts";
 
 const DEFAULT_URL = "http://127.0.0.1:6790";
 
@@ -191,6 +192,10 @@ async function snapshot(root: string, args: string[]): Promise<void> {
   let card = await getText(`${base}/api/fm/card/${enc}`).catch(() => null);
   if (card && !card.ok) card = await getText(`${base}/api/fm/card/${enc}?archived=1`).catch(() => null);
   if (!card || !card.ok) die(`agent-canvas has no canvas for agent ${agentId} (is it running at ${base}?)`);
+  card = { ...card, text: await inlineImages(card.text, async (h) => {
+    const r = await fetch(`${base}/asset/${h}`, { signal: timeout(8000) });
+    return r.ok ? { mime: r.headers.get("content-type") ?? "", bytes: new Uint8Array(await r.arrayBuffer()) } : null;
+  }) };
   const css = await getText(`${base}/api/fm/css?theme=light`).catch(() => null);
   const src = await getText(`${base}/api/canvas/${enc}`).catch(() => null);
   const dir = join(root, "state", "tasks", task);

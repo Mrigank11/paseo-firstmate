@@ -3,6 +3,8 @@
 // pulls here and writes the result into the page. Polls every POLL_MS while some page tracks an agent, backs off while
 // agent-canvas is unreachable, and fetches a card only when its summary `rev` moved. It never throws: no canvas is a soft state.
 
+import { inlineImages, type LoadedImage } from "./canvas-images.ts";
+
 /** What `GET /api/fm/summary` returns per agent (agent-canvas server/hub.ts `FmSummary`). */
 export type FmSummary = {
   agentId: string;
@@ -40,7 +42,7 @@ export const POLL_MS = 3000;
 export const MAX_BACKOFF_MS = 60_000;
 const TIMEOUT_MS = 4000;
 
-type FetchLike = (url: string, init?: { signal?: AbortSignal }) => Promise<{ ok: boolean; status: number; text(): Promise<string>; json(): Promise<any> }>;
+type FetchLike = (url: string, init?: { signal?: AbortSignal }) => Promise<{ ok: boolean; status: number; text(): Promise<string>; json(): Promise<any>; arrayBuffer?(): Promise<ArrayBuffer>; headers?: { get(name: string): string | null } }>;
 
 export type CanvasPortOpts = {
   /** Base URL of agent-canvas, e.g. http://127.0.0.1:6790. "" = no canvas. Read on every poll, so a settings change applies. */
@@ -60,6 +62,7 @@ export class CanvasPort {
   private wanted = new Map<string, Set<string>>(); // owner (a project) -> agent ids
   private sums = new Map<string, FmSummary>();
   private cards = new Map<string, { rev: number; archived: boolean; html: string }>();
+  private pics = new Map<string, LoadedImage>(); // canvas assets are immutable by hash: fetched once
   private css = "";
   private st: CanvasStatus = "off";
   private fails = 0;
@@ -122,9 +125,20 @@ export class CanvasPort {
     return this.flight;
   }
 
+  private async picture(hash: string, base: string): Promise<LoadedImage | null> {
+    const had = this.pics.get(hash);
+    if (had) return had;
+    const r = await this.get(`/asset/${hash}`, base);
+    if (!r.ok || !r.arrayBuffer) return null;
+    const img = { mime: r.headers?.get("content-type") ?? "", bytes: new Uint8Array(await r.arrayBuffer()) };
+    if (this.pics.size >= 64) this.pics.delete(this.pics.keys().next().value!);
+    this.pics.set(hash, img);
+    return img;
+  }
+
   private log(m: string): void { this.o.log?.(m); }
 
-  private async get(path: string, base: string): Promise<{ ok: boolean; status: number; text(): Promise<string>; json(): Promise<any> }> {
+  private async get(path: string, base: string): ReturnType<FetchLike> {
     const f = this.o.fetch ?? ((globalThis as any).fetch as FetchLike);
     const ac = new AbortController();
     const t = setTimeout(() => ac.abort(), TIMEOUT_MS);
@@ -157,7 +171,7 @@ export class CanvasPort {
         this.sums.set(s.agentId, s);
         if (!card || card.rev !== s.rev || card.archived !== s.archived) {
           const c = await this.get(`/api/fm/card/${encodeURIComponent(s.agentId)}${s.archived ? "?archived=1" : ""}`, base);
-          if (c.ok) this.cards.set(s.agentId, { rev: s.rev, archived: s.archived, html: await c.text() });
+          if (c.ok) this.cards.set(s.agentId, { rev: s.rev, archived: s.archived, html: await inlineImages(await c.text(), (h) => this.picture(h, base)) });
         }
       }
       // agents the canvas no longer knows (or that nobody wants any more) leave the cache
