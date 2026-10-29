@@ -4,7 +4,7 @@ First mate deck gives each project run by a paseo-firstmate first mate a live pr
 
 The plugin reads the first mate's state (`state/fleet.json`, its archive, and `state/projects/<project>/`) and renders each project's page whenever that state changes or a crew agent's status changes. It owns the page's Lavish comment poll, saves each comment to `state/projects/<project>/inbox.jsonl`, and delivers it to the first mate through the Paseo SDK handle the plugin holds (steering it into the current turn when the first mate is busy). The `paseo` CLI is only a fallback for the cold start, before the first SDK handle exists. The plugin never writes the task list; the first mate stays its only writer, through `bin/fleet` and `bin/page`.
 
-In the Paseo app it adds a "Needs you" sidebar row with a count of open questions, a Project page workspace panel, and a card in the first mate's chat for each batch of page comments.
+In the Paseo app it adds a "Project pages" sidebar row (with a needs-you badge only when something waits on the captain) that opens a screen with one card per active project, each linking to its page, a Project page workspace panel, and a card in the first mate's chat for each batch of page comments.
 
 ## Setup
 
