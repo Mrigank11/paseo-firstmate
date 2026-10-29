@@ -3,6 +3,7 @@ import { useWorkspace } from "@getpaseo/plugin/client";
 import { ScrollView } from "@getpaseo/plugin/client/react-native";
 import { Text, View } from "react-native";
 import type { ProjectSummary } from "../shared/contract";
+import { ProjectCard } from "./project-card";
 import {
   Button,
   DeckProvider,
@@ -108,28 +109,9 @@ function PanelBody(props: PluginWorkspacePanelProps) {
           </View>
           {withPages.length > 0 ? (
             <View style={{ gap: 8 }}>
-              <Text style={{ color: theme.colors.foregroundMuted, fontSize: 12, fontWeight: "700", letterSpacing: 0.8 }}>PROJECTS WITH PAGES</Text>
+              <Text style={{ color: theme.colors.foregroundMuted, fontSize: 12, fontWeight: "700", letterSpacing: 0.8 }}>PROJECT PAGES</Text>
               {withPages.map((p) => (
-                <View
-                  key={p.project}
-                  style={{
-                    flexDirection: "row",
-                    alignItems: "center",
-                    justifyContent: "space-between",
-                    gap: 12,
-                    padding: 12,
-                    borderRadius: 10,
-                    borderWidth: 1,
-                    borderColor: theme.colors.border,
-                    backgroundColor: theme.colors.surface1,
-                  }}
-                >
-                  <View style={{ flex: 1, gap: 2 }}>
-                    <Text style={{ color: theme.colors.foreground, fontSize: 15, fontWeight: "600" }}>{p.title}</Text>
-                    <Muted theme={theme}>{countsLine(p)}</Muted>
-                  </View>
-                  <Button theme={theme} label="Open" onPress={() => openPage(p.pageUrl!, { navigation, workspaceId })} />
-                </View>
+                <ProjectCard key={p.project} p={p} theme={theme} nav={{ navigation, workspaceId }} />
               ))}
             </View>
           ) : (

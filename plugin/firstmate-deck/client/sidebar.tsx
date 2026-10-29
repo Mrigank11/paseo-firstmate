@@ -5,11 +5,11 @@ import { DeckProvider, totalAsks, useSummary } from "./common";
 
 export const NEEDS_YOU_SCREEN = "needs-you";
 
-function NeedsYouRow({ theme, openScreen, currentScreen }: PluginSidebarItemProps) {
+function ProjectPagesRow({ theme, openScreen, currentScreen }: PluginSidebarItemProps) {
   const { projects, unavailable } = useSummary();
   const n = totalAsks(projects);
   const hot = n > 0;
-  const label = unavailable ? "Needs you · unavailable" : `Needs you · ${n}`;
+  const label = unavailable ? "Project pages · unavailable" : "Project pages";
   // The row's own text color is host-owned, so the accent lives on the icon dot and the badge.
   return (
     <SidebarRow
@@ -18,6 +18,7 @@ function NeedsYouRow({ theme, openScreen, currentScreen }: PluginSidebarItemProp
       active={currentScreen?.screenId === NEEDS_YOU_SCREEN}
       onPress={() => openScreen({ screenId: NEEDS_YOU_SCREEN })}
       trailing={
+        !hot ? undefined : (
         <View
           style={{
             minWidth: 22,
@@ -27,28 +28,21 @@ function NeedsYouRow({ theme, openScreen, currentScreen }: PluginSidebarItemProp
             borderRadius: 11,
             alignItems: "center",
             justifyContent: "center",
-            backgroundColor: hot ? theme.colors.accent : "transparent",
+            backgroundColor: theme.colors.accent,
           }}
         >
-          <Text
-            style={{
-              fontSize: 12,
-              fontWeight: "700",
-              color: hot ? theme.colors.accentForeground : theme.colors.foregroundMuted,
-            }}
-          >
-            {unavailable ? "–" : n}
-          </Text>
+          <Text style={{ fontSize: 12, fontWeight: "700", color: theme.colors.accentForeground }}>{n}</Text>
         </View>
+        )
       }
     />
   );
 }
 
-export function NeedsYouItem(props: PluginSidebarItemProps) {
+export function ProjectPagesItem(props: PluginSidebarItemProps) {
   return (
     <DeckProvider>
-      <NeedsYouRow {...props} />
+      <ProjectPagesRow {...props} />
     </DeckProvider>
   );
 }
