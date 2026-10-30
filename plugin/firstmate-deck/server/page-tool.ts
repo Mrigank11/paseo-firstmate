@@ -16,7 +16,7 @@
 //   page-tool.ts marks-set <root> <project> <json>   (merge {"o":{..},"r":{..}} into ui-state.json, the read marks the plugin serves)
 //   page-tool.ts lavish-cfg <root> [project]      (prints the plugin's Lavish port/state dir as shell lines, if known)
 import { existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, unlinkSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { isAbsolute, join } from "node:path";
 import { updateUi } from "./marks-server.ts";
 import { cleanUi } from "./marks.ts";
 import { askIdOf, inboxPath, pageJsonPath, patchPageJson, projectDir, readInbox, readPageJson, updateInbox, writeAtomic } from "./store.ts";
@@ -65,7 +65,7 @@ function scaffold(root: string, project: string, args: string[]): void {
   const repo = takeFlag(args, "--repo");
   const title = takeFlag(args, "--title");
   const page = takeFlag(args, "--page");
-  if (page && !page.startsWith("/")) die("--page must be an absolute path");
+  if (page && !isAbsolute(page)) die("--page must be an absolute path");
   const dir = projectDir(root, project);
   const cfgFile = join(dir, "project.json");
   mkdirSync(join(dir, "sections"), { recursive: true });

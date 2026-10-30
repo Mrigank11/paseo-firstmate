@@ -44,6 +44,12 @@ test("empty step text is still readable", () => {
   assert.equal(human("Grep", ""), "Grep");
 });
 
+test("basenames handle Windows separators too", () => {
+  assert.equal(human("Read", "C:\\a\\b\\c.ts"), "Reading c.ts");
+  assert.equal(human("Edit", "C:\\a\\b\\c.ts"), "Editing c.ts");
+  assert.equal(shellPhrase("cat C:\\log\\app.log"), "Read app.log");
+});
+
 test("parseStep", () => {
   assert.deepEqual(parseStep("[Shell] npm test"), ["Shell", "npm test"]);
   assert.equal(parseStep("[User] hello"), null);

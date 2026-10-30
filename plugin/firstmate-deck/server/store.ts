@@ -3,7 +3,7 @@
 // `bin/page reply`'s atomic rewrite can never lose each other's lines.
 import { randomBytes } from "node:crypto";
 import { appendFileSync, existsSync, mkdirSync, readFileSync, renameSync, rmdirSync, statSync, writeFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 
 export type InboxEntry = {
   id: string;
@@ -92,7 +92,7 @@ export function withLock<T>(file: string, fn: () => T): T {
 export function writeAtomic(path: string, text: string): void {
   mkdirSync(dirname(path), { recursive: true });
   // a random name per write: two writers (the plugin and a bin/page helper) never share a temp file
-  const tmp = join(dirname(path), "." + path.slice(path.lastIndexOf("/") + 1) + "." + process.pid + "." + randomBytes(4).toString("hex") + ".tmp");
+  const tmp = join(dirname(path), "." + basename(path) + "." + process.pid + "." + randomBytes(4).toString("hex") + ".tmp");
   writeFileSync(tmp, text);
   renameSync(tmp, path);
 }

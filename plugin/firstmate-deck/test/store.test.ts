@@ -1,9 +1,9 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { appendInbox, patchPageJson, readInbox, readPageJson, updateInbox, type InboxEntry } from "../server/store.ts";
+import { appendInbox, patchPageJson, readInbox, readPageJson, updateInbox, writeAtomic, type InboxEntry } from "../server/store.ts";
 
 const entry = (id: string, over: Partial<InboxEntry> = {}): InboxEntry => ({
   id, at: "2026-10-21T10:00:00Z", project: "p", target: "page", text: id, prompt: { prompt: id }, delivered: false, answered: false, ...over,
@@ -41,4 +41,15 @@ test("page.json patches merge and keep unknown keys", () => {
   patchPageJson(f, { undelivered: 2, lastDelivery: "t" });
   const pj = readPageJson(f);
   assert.deepEqual([pj.lavishUrl, pj.session, pj.undelivered, pj.lastDelivery], ["http://x/s/1", "open", 2, "t"]);
+});
+
+test("writeAtomic works for a nested platform path and leaves no temp files", () => {
+  // Regression: on Windows the temp name embedded the whole absolute path (ENOENT). The temp file
+  // must always sit beside its target under the target's own basename.
+  const dir = mkdtempSync(join(tmpdir(), "deck-store-"));
+  const f = join(dir, "state", "firstmate.json");
+  writeAtomic(f, "{}\n");
+  writeAtomic(f, '{"a":1}\n');
+  assert.equal(readFileSync(f, "utf8"), '{"a":1}\n');
+  assert.deepEqual(readdirSync(join(dir, "state")), ["firstmate.json"]);
 });

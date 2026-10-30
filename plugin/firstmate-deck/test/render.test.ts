@@ -183,3 +183,10 @@ test("blocked task: its own Blocked group between Running and Next up, with what
   assert.ok(r.live.includes('href="#g-blocked" class="sum c-blocked">1 blocked'));
   assert.ok(!r.live.slice(r.live.indexOf('id="g-parked"'), r.live.indexOf("<div hidden data-tn>")).includes("await-key"));
 });
+
+test("a custom page path contributes only its basename to the live file", () => {
+  const m = structuredClone(model);
+  m.page = join(tmpdir(), "elsewhere", "custom.html");
+  const out = renderProject(m, agents, opts).page;
+  assert.ok(out.includes('"custom.live.js"'), "page polls custom.live.js, not a path");
+});
