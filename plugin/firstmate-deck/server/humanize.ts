@@ -4,7 +4,8 @@ export function cut(s: string, n: number): string {
   return s.length <= n ? s : s.slice(0, n - 1).trimEnd() + "…";
 }
 
-const baseName = (p: string): string => p.slice(p.lastIndexOf("/") + 1);
+// Basename for display: shell text may carry either separator (e.g. a Windows path in logs read anywhere).
+const baseName = (p: string): string => p.slice(Math.max(p.lastIndexOf("/"), p.lastIndexOf("\\")) + 1);
 
 const SKIP = new Set(["cd", "sleep", "echo", "set", "export", "true", "mkdir", "E", "}", "kill", "printf"]);
 

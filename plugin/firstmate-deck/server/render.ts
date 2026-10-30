@@ -1,5 +1,6 @@
 // renderProject: ProjectModel + live agent views -> { page, live, signature }. Pure, no I/O.
 import { createHash } from "node:crypto";
+import { basename } from "node:path";
 import { cut } from "./humanize.ts";
 import { cardHash } from "./marks.ts";
 import { inline, markdown } from "./markdown.ts";
@@ -419,7 +420,7 @@ export const STALE_TEXT = "This page stopped updating. Your comments may not rea
 
 export function renderProject(model: ProjectModel, agents: Record<string, AgentView>, opts: RenderOpts): Rendered {
   const live = renderLive(model, agents, opts);
-  const pageFile = opts.pageFile ?? (model.page ? model.page.slice(model.page.lastIndexOf("/") + 1) : "page.html");
+  const pageFile = opts.pageFile ?? (model.page ? basename(model.page) : "page.html");
   const liveFile = pageFile.replace(/\.[^./]*$/, "") + ".live.js";
 
   const sig = createHash("sha1")
