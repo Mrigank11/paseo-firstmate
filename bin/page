@@ -51,9 +51,14 @@
 #   bin/page render <project> [--out <file>]   render the page file once, no Lavish
 #   bin/page profiles                 dry run: diff config/paseo-profiles.json (the lanes as Paseo agent profiles) against the
 #                                     daemon's daemon.agentProfiles and print what --apply would change. Needs PASEO_HOME
-#   bin/page profiles --apply         merge the repo profiles into the daemon config by id (profiles made by hand are kept), then
-#                                     reload. Both forms REFUSE unless PASEO_HOME names an explicit home, and refuse
-#                                     the live ~/.paseo outright (live gets the profiles only when the captain asks, by hand)
+#   bin/page profiles --apply         merge the repo profiles into that daemon config by id (profiles made by hand are kept), then
+#                                     reload. Both forms REFUSE unless PASEO_HOME names an explicit home, and refuse the live home
+#   bin/page profiles --live          dry run against the LIVE daemon (~/.paseo): the diff, and where the backup would go
+#   bin/page profiles --live --apply --yes   write the live daemon: backup of the profiles and the whole config under state/backup/,
+#                                     merge by id, reload, read back. Only on the captain's word. Prints the undo command
+#   bin/page profiles --restore <backup> [--live --yes]   put a saved profiles backup back (PASEO_HOME, or live with --live --yes)
+#   bin/page profiles --check         read-only drift check: repo file vs daemon (PASEO_HOME, else live) and the lanes in
+#                                     state/decisions.md. Exit 0 in sync, 1 drift, 2 unreadable. `status` prints its verdict
 #
 # Roots: FIRSTMATE_ROOT (default: this checkout). state/page.env, if present, is sourced first; it carries
 # LAVISH_AXI_PORT / LAVISH_AXI_STATE_DIR. Once the plugin has polled a page, the port and state dir it wrote into
@@ -444,6 +449,9 @@ cmd_marks() {
 
 cmd_status() {
   PAGE_PLUGIN_STATUS="$(plugin_status)" "${TOOL[@]}" status "$ROOT" "${1:-}"
+  [[ -z "${1:-}" ]] || return 0   # one project's status stays one project's rows
+  local pv; pv="$(profiles_check "${PASEO_HOME:-$(profiles_live_home)}" quiet 2>&1 | tail -1)" || true
+  echo "${pv:-profiles: unreadable}"
 }
 
 cmd_heal() {
@@ -486,26 +494,97 @@ cmd_render() {
 
 # --- profiles -----------------------------------------------------------------------------------------------
 # The lanes as Paseo agent profiles (daemon.agentProfiles). The repo file is the source; the daemon config is the copy.
-# Always an explicit home: a dry run and --apply both refuse without PASEO_HOME, and --apply refuses the live home.
+# Plain dry run / --apply need an explicit PASEO_HOME and refuse the live home. The live home is reached only by
+# --live (dry run) and --live --apply --yes (write, after a backup). --check is read-only. --restore puts a backup back.
+profiles_live_home() { echo "${PASEO_LIVE_HOME:-$HOME/.paseo}"; }
+profiles_read() { # home -> compact JSON array of the daemon's profiles; non-zero when unreadable
+  local raw
+  raw="$(paseo --home "$1" daemon config get daemon.agentProfiles --json 2>/dev/null)" || return 1
+  jq -c 'if (.set // false) then (.value // []) else [] end' <<<"$raw" 2>/dev/null
+}
+profiles_write() { # home json: set, reload, read back
+  local home="$1" json="$2" back
+  paseo --home "$home" daemon config set daemon.agentProfiles "$json" >/dev/null || die "profiles: config set failed"
+  paseo --home "$home" daemon reload >/dev/null 2>&1 || echo "profiles: warning: daemon reload failed (the config is written; set applies live)" >&2
+  back="$(profiles_read "$home")" || die "profiles: could not read back $home (config written; backup kept)"
+  [[ "$(jq -cS . <<<"$back")" == "$(jq -cS . <<<"$json")" ]] || die "profiles: read-back differs from what was written (backup kept)"
+}
+# Drift check: repo file vs daemon, and the lanes in state/decisions.md vs both. Prints one line per profile and lane, then a
+# verdict. Exit 0 in sync, 1 drift, 2 cannot read.
+profiles_check() { # home [quiet]
+  local home="$1" quiet="${2:-}" want_file="$REPO/config/paseo-profiles.json" cur out rc=0 dec="$ROOT/state/decisions.md"
+  [[ -f "$want_file" ]] || { echo "profiles: unreadable ($want_file is missing)"; return 2; }
+  cur="$(profiles_read "$home")" || { echo "profiles: unreadable (could not read the config of $home; is its daemon up?)"; return 2; }
+  out="$(jq -rn --argjson cur "$cur" --slurpfile want "$want_file" '
+    ($cur | map({(.id): .}) | add // {}) as $have
+    | $want[0][] | .id as $i | . as $w
+    | if ($have[$i] == null) then "DRIFT \($i): missing in the daemon"
+      else ([ ($w | keys[]) as $k | select($have[$i][$k] != $w[$k]) | "\($k) \($have[$i][$k] // "-" | tostring) vs \($w[$k] | tostring)" ]
+            + [ ($have[$i] | keys[]) as $k | select($w[$k] == null) | "\($k) \($have[$i][$k] | tostring) vs -" ]) as $d
+        | if ($d | length) == 0 then "ok    \($i)" else "DRIFT \($i): " + ($d | join("; ")) end end')"
+  [[ "$out" != *DRIFT* ]] || rc=1
+  local lane_out="" line name pid
+  if [[ -f "$dec" ]]; then
+    while IFS= read -r line; do
+      [[ "$line" =~ ^-[[:space:]]+\`?([a-z][a-z0-9_-]*)\`?[[:space:]]+—[[:space:]] ]] || continue
+      name="${BASH_REMATCH[1]}"
+      if [[ "$line" =~ profile:([A-Za-z0-9_-]+) ]]; then
+        pid="${BASH_REMATCH[1]}"
+        if ! jq -e --arg i "$pid" 'map(.id)|index($i)' "$want_file" >/dev/null; then lane_out+="DRIFT lane $name: profile:$pid is not in config/paseo-profiles.json"$'\n'; rc=1
+        elif ! jq -e --arg i "$pid" 'map(.id)|index($i)' <<<"$cur" >/dev/null; then lane_out+="DRIFT lane $name: profile:$pid is not in the daemon"$'\n'; rc=1
+        else lane_out+="ok    lane $name -> profile:$pid"$'\n'; fi
+      else lane_out+="DRIFT lane $name: written as a raw spec, not following profiles"$'\n'; rc=1; fi
+    done < <(sed '/Lane assignment/q' "$dec")
+  fi
+  local verdict="in sync"; [[ $rc -eq 0 ]] || verdict="DRIFT"
+  if [[ -z "$quiet" ]]; then echo "profiles: home $home"; echo "$out"; [[ -z "$lane_out" ]] || printf '%s' "$lane_out"; fi
+  echo "profiles: $verdict"
+  return $rc
+}
 cmd_profiles() {
-  local apply=0 a
-  for a in "$@"; do
+  local apply=0 live=0 yes=0 check=0 restore="" a
+  while [[ $# -gt 0 ]]; do
+    a="$1"; shift
     case "$a" in
       --apply) apply=1 ;;
-      *) die "profiles: unknown argument '$a' (usage: bin/page profiles [--apply])" ;;
+      --live) live=1 ;;
+      --yes) yes=1 ;;
+      --check) check=1 ;;
+      --restore) restore="${1:-}"; [[ -n "$restore" ]] || die "profiles: --restore needs a backup file"; shift ;;
+      *) die "profiles: unknown argument '$a' (usage: bin/page profiles [--check] [--apply] [--live [--apply --yes]] [--restore <backup>])" ;;
     esac
   done
-  [[ -n "${PASEO_HOME:-}" ]] || die "profiles: PASEO_HOME is not set; name the daemon home explicitly (the isolated one: bin/isolated page profiles)"
-  local home want_file="$REPO/config/paseo-profiles.json" live
-  home="$(cd "$PASEO_HOME" 2>/dev/null && pwd -P)" || die "profiles: PASEO_HOME '$PASEO_HOME' is not a directory"
-  live="$(cd "$HOME/.paseo" 2>/dev/null && pwd -P || echo "$HOME/.paseo")"
-  [[ "$home" != "$live" ]] || die "profiles: refusing the live daemon home ($home). Profiles reach live only when the captain asks, by hand"
-  [[ "$home" != "$(cd "$HOME" && pwd -P)/.paseo" ]] || die "profiles: refusing the live daemon home ($home)"
+  if [[ $check -eq 1 ]]; then
+    [[ $apply -eq 0 && $live -eq 0 && -z "$restore" ]] || die "profiles: --check is read-only and takes no other flag"
+    profiles_check "${PASEO_HOME:-$(profiles_live_home)}"; return $?
+  fi
+  local home want_file="$REPO/config/paseo-profiles.json" livehome
+  livehome="$(cd "$(profiles_live_home)" 2>/dev/null && pwd -P || profiles_live_home)"
+  if [[ $live -eq 1 ]]; then
+    home="$(cd "$(profiles_live_home)" 2>/dev/null && pwd -P)" || die "profiles: live home $(profiles_live_home) is not a directory"
+    if [[ $apply -eq 1 || -n "$restore" ]]; then
+      [[ $yes -eq 1 ]] || die "profiles: writing the live daemon needs --yes (and the captain's word); --live alone is a dry run"
+    fi
+  else
+    [[ -n "${PASEO_HOME:-}" ]] || die "profiles: PASEO_HOME is not set; name the daemon home explicitly (the isolated one: bin/isolated page profiles)"
+    home="$(cd "$PASEO_HOME" 2>/dev/null && pwd -P)" || die "profiles: PASEO_HOME '$PASEO_HOME' is not a directory"
+    [[ "$home" != "$livehome" ]] || die "profiles: refusing the live daemon home ($home). Live is reached only by: bin/page profiles --live --apply --yes"
+    [[ "$home" != "$(cd "$HOME" && pwd -P)/.paseo" ]] || die "profiles: refusing the live daemon home ($home). Live is reached only by: bin/page profiles --live --apply --yes"
+  fi
+  local cur merged
+  cur="$(profiles_read "$home")" || die "profiles: could not read the config of $home (is its daemon up?)"
+  if [[ -n "$restore" ]]; then
+    [[ -f "$restore" ]] || die "profiles: backup $restore not found"
+    jq -e 'type=="array"' "$restore" >/dev/null || die "profiles: $restore is not a profiles backup (a JSON array)"
+    merged="$(jq -c . "$restore")"
+    echo "profiles: home $home"
+    echo "profiles: restore $(jq length <<<"$merged") profiles from $restore (daemon now has $(jq length <<<"$cur"))"
+    profiles_write "$home" "$merged"
+    echo "profiles: restored $(jq length <<<"$merged") profiles to $home"
+    return 0
+  fi
   [[ -f "$want_file" ]] || die "profiles: $want_file is missing"
   jq -e 'type=="array" and all(.[]; has("id") and has("name") and has("provider"))' "$want_file" >/dev/null || die "profiles: $want_file is not an array of profiles (id, name, provider)"
-  local cur merged raw
-  raw="$(paseo --home "$home" daemon config get daemon.agentProfiles --json 2>/dev/null)" || die "profiles: could not read the config of $home (is its daemon up?)"
-  cur="$(jq -c 'if (.set // false) then (.value // []) else [] end' <<<"$raw")" || die "profiles: unexpected 'config get' output"
   # Merge by id: ours replace theirs of the same id; everything else is kept, in its place.
   merged="$(jq -cn --argjson cur "$cur" --slurpfile want "$want_file" '
     ($want[0]) as $w
@@ -518,15 +597,27 @@ cmd_profiles() {
       elif ($have[$i] == .) then "= \($i): unchanged"
       else "~ \($i): update (" + ([ (. | keys[]) as $k | select($have[$i][$k] != .[$k]) | $k ] | join(", ")) + ")" end ),
       ( $cur[] | select(.id as $i | $want[0] | map(.id) | index($i) | not) | "  \(.id): yours, kept" )')"
+  local flag="--apply"; [[ $live -eq 0 ]] || flag="--live --apply --yes"
   echo "profiles: home $home"
   echo "$report"
   if [[ "$(jq -cS . <<<"$merged")" == "$(jq -cS . <<<"$cur")" ]]; then echo "profiles: nothing to change"; return 0; fi
-  if [[ $apply -eq 0 ]]; then echo "profiles: dry run; bin/page profiles --apply writes this to $home"; return 0; fi
-  paseo --home "$home" daemon config set daemon.agentProfiles "$merged" >/dev/null || die "profiles: config set failed"
-  paseo --home "$home" daemon reload >/dev/null 2>&1 || echo "profiles: warning: daemon reload failed (the config is written; set applies live)" >&2
-  local back; back="$(paseo --home "$home" daemon config get daemon.agentProfiles --json | jq -c '.value // []')"
-  [[ "$(jq -cS . <<<"$back")" == "$(jq -cS . <<<"$merged")" ]] || die "profiles: read-back differs from what was written"
+  if [[ $apply -eq 0 ]]; then
+    echo "profiles: dry run; bin/page profiles $flag writes this to $home"
+    [[ $live -eq 0 ]] || echo "profiles: it would first save a backup under $ROOT/state/backup/"
+    return 0
+  fi
+  if [[ $live -eq 1 ]]; then
+    local ts bdir back_profiles back_cfg
+    ts="$(date -u +%Y%m%dT%H%M%SZ)"; bdir="$ROOT/state/backup"; mkdir -p "$bdir"
+    back_profiles="$bdir/agent-profiles-$ts.json"; back_cfg="$bdir/paseo-config-$ts.json"
+    printf '%s\n' "$cur" >"$back_profiles"
+    if [[ -f "$home/config.json" ]]; then cp "$home/config.json" "$back_cfg"; else back_cfg="(no $home/config.json to copy)"; fi
+    [[ "$(jq -cS . "$back_profiles")" == "$(jq -cS . <<<"$cur")" ]] || die "profiles: could not write the backup; nothing changed"
+    echo "profiles: backup saved: $back_profiles (profiles) and $back_cfg (whole config)"
+  fi
+  profiles_write "$home" "$merged"
   echo "profiles: applied $(jq length <<<"$merged") profiles to $home"
+  [[ $live -eq 0 ]] || echo "profiles: undo with: bin/page profiles --live --restore $back_profiles --yes"
 }
 
 case "${1:-}" in

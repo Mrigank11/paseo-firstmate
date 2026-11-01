@@ -42,6 +42,7 @@ case "$1 $2" in
   "plugin reload") : ;;
   "agent update") : ;;
   "daemon config")
+    if [[ -n "${FAKE_DAEMON_DOWN:-}" ]]; then echo "error: daemon not running" >&2; exit 1; fi
     case "$3" in
       get) if [[ -f "$FAKE_PROFILES" ]]; then jq -n --slurpfile v "$FAKE_PROFILES" '{set:true,value:$v[0]}'; else echo '{"set":false}'; fi ;;
       set) printf '%s' "$5" >"$FAKE_PROFILES" ;;
@@ -540,6 +541,82 @@ eq "$(jq -r 'map(.id)|join(",")' "$T/profiles.json")" "mine,fm-planning,fm-contr
 eq "$(jq -r '.[]|select(.id=="fm-fallback")|.model' "$T/profiles.json")" claude-sonnet-5-5 "...and replaces a repo profile of the same id"
 grep -q "~ fm-fallback: update" <<<"$out" && ok "...and reports the update" || bad "update report" "$out"
 grep -q "nothing to change" <<<"$(PASEO_HOME="$T/ph" "$P" profiles)" && ok "profiles is idempotent" || bad "profiles idempotent"
+
+# --- profiles: day-one parity, live sync, restore, drift check -------------------------------------------------
+PRO="$HERE/config/paseo-profiles.json"
+eq "$(jq -r 'map(.id)|join(",")' "$PRO")" "fm-planning,fm-contributor,fm-fallback" "profile file has the three lanes"
+eq "$(jq -r 'all(.[]; has("id") and has("name") and has("provider"))' "$PRO")" true "...each with id, name, provider"
+tuple() { jq -r --arg i "$1" '.[]|select(.id==$i)|[.provider,.model,.modeId,(.thinkingOptionId//"-")]|join(" ")' "$PRO"; }
+eq "$(tuple fm-planning)" "claude claude-opus-5-5 bypassPermissions medium" "day-one parity: planning = what live runs (Opus 5.5, medium)"
+eq "$(tuple fm-contributor)" "claude claude-sonnet-5-5 bypassPermissions medium" "day-one parity: contributor = what live runs (Sonnet 5.5, medium)"
+eq "$(tuple fm-fallback)" "claude claude-sonnet-5-5 bypassPermissions medium" "fallback = Sonnet 5.5, medium"
+eq "$(jq -r '[.[]|select(.provider=="claude-work")]|length' "$PRO")" 0 "no profile uses the claude-work provider"
+
+for f in .claude/skills/dispatch-routing/SKILL.md state/decisions.example.md; do
+  grep -qiE "muse-spark|opencode|claude-work|claude-(opus|sonnet)-5" "$HERE/$f" && bad "no provider/model named in $f" || ok "no provider/model named in $f"
+done
+export PASEO_LIVE_HOME="$T/livehome"; mkdir -p "$PASEO_LIVE_HOME"; echo '{"version":1,"daemon":{}}' >"$PASEO_LIVE_HOME/config.json"
+rm -f "$T/profiles.json"; rm -rf "$T/root/state/backup"
+"$P" profiles --live --apply >/dev/null 2>&1 && bad "--live --apply refuses without --yes" || ok "--live --apply refuses without --yes"
+[[ ! -f "$T/profiles.json" ]] && ok "...and wrote nothing" || bad "wrote without --yes"
+PASEO_HOME="$PASEO_LIVE_HOME" "$P" profiles --apply >/dev/null 2>&1 && bad "plain --apply still refuses the live home (PASEO_LIVE_HOME)" || ok "plain --apply still refuses the live home (PASEO_LIVE_HOME)"
+echo '[{"id":"mine","name":"Mine","provider":"claude"},{"id":"fm-planning","name":"old","provider":"claude","model":"claude-opus-5-5","modeId":"bypassPermissions","thinkingOptionId":"low"}]' >"$T/profiles.json"
+cp "$T/profiles.json" "$T/before.json"
+out="$("$P" profiles --live)"
+grep -q "dry run" <<<"$out" && grep -q "state/backup" <<<"$out" && eq "$(jq -cS . "$T/profiles.json")" "$(jq -cS . "$T/before.json")" "--live dry run names the backup and writes nothing" || bad "live dry run" "$out"
+[[ ! -d "$T/root/state/backup" ]] && ok "...and made no backup" || bad "dry run made a backup"
+out="$("$P" profiles --live --apply --yes)"
+bk="$(ls "$T/root/state/backup"/agent-profiles-*.json 2>/dev/null | head -1)"
+[[ -n "$bk" ]] && ok "--live --apply --yes saved a backup first" || bad "no backup" "$out"
+eq "$(jq -cS . "$bk")" "$(jq -cS . "$T/before.json")" "...which holds the pre-change profiles"
+ls "$T/root/state/backup"/paseo-config-*.json >/dev/null 2>&1 && ok "...and a copy of the whole config" || bad "no config copy"
+eq "$(jq -r 'map(.id)|join(",")' "$T/profiles.json")" "mine,fm-planning,fm-contributor,fm-fallback" "...merged by id and kept the foreign profile"
+eq "$(jq -r '.[]|select(.id=="fm-planning")|.thinkingOptionId' "$T/profiles.json")" medium "...and fixed the drifted field"
+grep -q -- "--restore $bk" <<<"$out" && ok "...and printed the undo command" || bad "no undo hint" "$out"
+"$P" profiles --live --restore "$bk" >/dev/null 2>&1 && bad "live --restore needs --yes" || ok "live --restore needs --yes"
+"$P" profiles --live --restore "$bk" --yes >/dev/null && eq "$(jq -cS . "$T/profiles.json")" "$(jq -cS . "$T/before.json")" "--restore returns the daemon to the backup, byte for byte (jq -S)" || bad "restore"
+"$P" profiles --restore /nonexistent --live --yes >/dev/null 2>&1 && bad "restore of a missing file fails" || ok "restore of a missing file fails"
+
+# read-back failure: a daemon that drops the write keeps the backup and fails loudly
+cp "$T/fakebin/paseo" "$T/paseo.real"
+sed 's|set) printf .*|set) : ;;|' "$T/paseo.real" >"$T/fakebin/paseo"; chmod +x "$T/fakebin/paseo"
+rm -rf "$T/root/state/backup"; cp "$T/before.json" "$T/profiles.json"
+"$P" profiles --live --apply --yes >/dev/null 2>&1 && bad "read-back mismatch fails" || ok "read-back mismatch exits non-zero"
+ls "$T/root/state/backup"/agent-profiles-*.json >/dev/null 2>&1 && ok "...and the backup is kept" || bad "backup lost"
+cp "$T/paseo.real" "$T/fakebin/paseo"; chmod +x "$T/fakebin/paseo"
+
+# drift check
+mkdir -p "$T/root/state"
+cat >"$T/root/state/decisions.md" <<'D'
+## Routing
+- `planning`    — `profile:fm-planning` (resolved)
+- `contributor` — `profile:fm-contributor`
+- fallback      — `profile:fm-fallback`
+
+**Lane assignment** (role → lane):
+- first mate itself → `planning`
+D
+"$P" profiles --live --apply --yes >/dev/null
+out="$(PASEO_HOME="$PASEO_LIVE_HOME" "$P" profiles --check)"; rc=$?
+[[ $rc -eq 0 ]] && grep -q "profiles: in sync" <<<"$out" && grep -q "ok    lane planning -> profile:fm-planning" <<<"$out" && ok "--check: in sync is exit 0, lanes resolve" || bad "check in sync" "rc=$rc $out"
+jq '(.[]|select(.id=="fm-planning")|.thinkingOptionId)="low"' "$T/profiles.json" >"$T/p2" && mv "$T/p2" "$T/profiles.json"
+out="$("$P" profiles --check)"; rc=$?
+[[ $rc -eq 1 ]] && grep -q "DRIFT fm-planning: thinkingOptionId low vs medium" <<<"$out" && ok "--check: a changed field is exit 1 and names the field" || bad "check field drift" "rc=$rc $out"
+jq 'map(select(.id!="fm-contributor"))' "$T/profiles.json" >"$T/p2" && mv "$T/p2" "$T/profiles.json"
+out="$("$P" profiles --check)"; rc=$?
+[[ $rc -eq 1 ]] && grep -q "DRIFT fm-contributor: missing in the daemon" <<<"$out" && grep -q "DRIFT lane contributor: profile:fm-contributor is not in the daemon" <<<"$out" && ok "--check: a profile missing in the daemon is exit 1 (and its lane)" || bad "check missing" "rc=$rc $out"
+"$P" profiles --live --apply --yes >/dev/null
+sed -i 's|`profile:fm-contributor`|`profile:fm-nope`|; s|`profile:fm-fallback`|`claude/claude-sonnet-5-5` · bypassPermissions|' "$T/root/state/decisions.md"
+out="$("$P" profiles --check)"; rc=$?
+[[ $rc -eq 1 ]] && grep -q "lane contributor: profile:fm-nope is not in config/paseo-profiles.json" <<<"$out" && grep -q "DRIFT lane fallback: written as a raw spec" <<<"$out" && ok "--check: an unknown profile and a raw-spec lane are flagged" || bad "check lanes" "rc=$rc $out"
+out="$(FAKE_DAEMON_DOWN=1 "$P" profiles --check)"; rc=$?
+[[ $rc -eq 2 ]] && grep -q "unreadable" <<<"$out" && ! grep -q "in sync" <<<"$out" && ok "--check: an unreachable daemon is exit 2, never 'in sync'" || bad "check unreadable" "rc=$rc $out"
+"$P" profiles --check --apply >/dev/null 2>&1 && bad "--check takes no other flag" || ok "--check takes no other flag"
+rm -f "$T/root/state/decisions.md"
+out="$("$P" profiles --check)"; rc=$?
+[[ $rc -eq 0 ]] && ok "--check with no decisions.md just compares profiles" || bad "check without decisions" "$out"
+eq "$("$P" status 2>/dev/null | tail -1)" "profiles: in sync" "status ends with the drift verdict"
+unset PASEO_LIVE_HOME
 
 echo; echo "page.test.sh: $pass passed, $fail failed"
 [[ $fail -eq 0 ]]

@@ -11,6 +11,8 @@ This skill emits a compact, scannable picture of the whole fleet on demand; it i
 
 Run `bin/fleet stages --table` (every live task's computed stage and drift flags — already reconciled with Paseo) and `bin/fleet asks` (every open ask). The registry is your intent record; the stage is Paseo's truth, so there is nothing to reconcile by hand. For "Landed", read only the archive tail (`tail -20 state/fleet-archive.jsonl`), never the whole file.
 
+Also run `bin/page profiles --check`; its last line is the verdict (`in sync` / `DRIFT` / `unreadable`).
+
 Use `mcp__paseo__get_agent_status` (and `get_agent_activity` with `limit: 10`) only to confirm a single ambiguous task (e.g. a `Lost` or `Idle` stage); do not fan out to every task.
 
 ## Emit the digest, most-actionable first
@@ -25,6 +27,8 @@ Keep it to roughly one screen: terse lines, not paragraphs, no transcript, group
 ## Flag drift explicitly — this is the point of the digest
 
 Call out the flags `bin/fleet stages` raises, by `id`: `silent` (no activity for 30 min — a stuck candidate for stuck-crew-recovery), `Lost` / `no-agent` (no agent carries the task's label — relaunch or `finish --failed`), `Idle` / `idle-no-done` and the drift flags (`queued-but-has-agent`, `parked-but-running`, `done-but-running`, `archived-agent-open-task`); and **landed-but-open** — a non-terminal task whose `pr` is already merged (teardown candidate for `ship-delivery` §6), or a terminal task whose dedicated `kind: worktree` workspace is still live. The digest only reports these; it never archives.
+
+**Profile drift** — mention it only when the verdict is not `in sync` (the check names the profile and field); the fix is the captain's call.
 
 ## Close with one line
 
