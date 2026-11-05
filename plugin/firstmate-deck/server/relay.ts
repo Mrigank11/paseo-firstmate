@@ -66,7 +66,7 @@ const oneLine = (s: string) => s.replace(/\s+/g, " ").trim();
 const brief = (s: string, n = 100) => { const t = oneLine(s).replace(/"/g, "'"); return t.length > n ? t.slice(0, n - 1) + "…" : t; };
 
 /** What the first mate needs to know about a comment's target without looking anything up. */
-export type TargetInfo = { title: string; asks: { id: string; text: string }[] };
+export type TargetInfo = { title: string; asks: { id: string; text: string }[]; /** Questions open on the crew's own canvas (ids without the "c-"). */ canvasAsks?: { id: string; text: string }[] };
 export type Describe = (target: string) => TargetInfo | undefined;
 
 /** `t-<task>` or `t-<task>#<askId>` -> the task id and, for an ask target, the ask id ("a2"). */
@@ -84,7 +84,14 @@ export const CANVAS_PICK_LINE = "A canvas ask is a question on the crew's own ca
  *   - [t-pick-db · "Choose the database" · ask a1: "Postgres or SQLite?"] (c-abc123) "<text>"
  * The bracket names the target, the task title and the open ask text(s); the parenthesis is the inbox comment id.
  */
-type Line = Pick<InboxEntry, "target" | "text" | "choice" | "stale"> & { id?: string };
+type Line = Pick<InboxEntry, "target" | "text" | "choice" | "stale"> & { id?: string; prompt?: unknown };
+
+/** The text of the element the comment was made on (Lavish keeps up to 240 characters of it), "" for a freeform message. */
+const clickedText = (e: Line): string => {
+  const p = e.prompt as { selector?: unknown; text?: unknown } | undefined;
+  // a comment on the whole page (body/html) has no element worth quoting
+  return p && typeof p.selector === "string" && !/^(body|html)$/.test(p.selector) && p.selector && typeof p.text === "string" ? p.text : "";
+};
 
 export function formatMessage(project: string, entries: Line[], describe?: Describe): string {
   const onCanvas = (e: Line) => !!e.choice && e.choice.ask.startsWith("c-");
@@ -99,7 +106,12 @@ export function formatMessage(project: string, entries: Line[], describe?: Descr
       if (!e.choice) {
         const only = at?.ask;
         for (const a of info.asks) if ((only === undefined || only === a.id) && a.text) parts.push(`ask ${a.id}: "${brief(a.text)}"`);
+        for (const a of info.canvasAsks ?? []) if ((only === undefined || only === `c-${a.id}`) && a.text) parts.push(`canvas ask ${a.id}: "${brief(a.text)}"`);
       }
+    } else if (e.target === "page" && !e.choice) {
+      // a comment on an element that still could not be placed: say what was clicked, so it is not a bare "[page]"
+      const on = clickedText(e);
+      if (on) parts.push(`on "${brief(on, 80)}"`);
     }
     const id = e.id ? ` (${e.id})` : "";
     if (!e.choice) return `- [${parts.join(" · ")}]${id} "${oneLine(e.text)}"`;

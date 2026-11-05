@@ -408,6 +408,19 @@ var Idiomorph=function(){"use strict";const e=()=>{};const n={morphStyle:"outerH
   // small per-page preferences other scripts keep in this state (the task navigator's fold): saved like the rest, synced
   window.__fdPref=function(k,v){if(arguments.length<2)return S[k];S[k]=v;save();push()};
   window.__fdPrefKeys=function(p){return Object.keys(S).filter(function(k){return k.indexOf(p)===0&&S[k]===1})};
+  function anchorIds(root){
+  var OWN=/^(?:t|s|a|x)-[A-Za-z0-9]/,EVERY=4;
+  // foreign = n carries an id that is not an owner id (the deck's own cvd-<agent>, the canvas's cv-... ids): Lavish's walk
+  // would stop there and learn nothing, so each child of such an element gets a stamp of its own
+  function walk(n,owner,path,d,foreign){
+    var kids=n.children;
+    for(var i=0;kids&&i<kids.length;i++){
+      var c=kids[i],tag=c.tagName,own=owner,p=path.concat(i),dd=d+1,fo=false;
+      if(tag==="SCRIPT"||tag==="STYLE")continue;
+      if(c.id){dd=0;if(OWN.test(c.id)){own=c.id;p=[]}else fo=true}
+      else if(owner&&(dd>=EVERY||foreign)){c.setAttribute("id","k_"+owner+"_"+p.join("-"));dd=0}
+      walk(c,own,p,dd,fo)}}
+  walk(root,null,[],0,false)}
   function live(){return document.getElementById("live")}
   function snapshot(){var el=live();if(!el)return;el.querySelectorAll("details[id]").forEach(function(d){S[d.id]=d.open?1:0});save()}
   function restore(root){root.querySelectorAll("details[id]").forEach(function(d){if(d.id in S)d.open=!!S[d.id]})}
@@ -524,12 +537,12 @@ var Idiomorph=function(){"use strict";const e=()=>{};const n={morphStyle:"outerH
       // Morph, do not replace: build the new block off-screen, bring it in line with what this browser has done to the
       // page (open folds, read marks, picked options), then let the morph touch only the nodes that differ. Nothing
       // unchanged is re-created or moved, so embedded canvas frames do not reload and scroll, hover and selection stay.
-      var nx=document.createElement("div");nx.innerHTML=html;restore(nx);arrange(nx);reapply(nx);
+      var nx=document.createElement("div");nx.innerHTML=html;restore(nx);arrange(nx);reapply(nx);anchorIds(nx);
       I.morph(el,nx,{morphStyle:"innerHTML",restoreFocus:true,callbacks:{
         beforeAttributeUpdated:function(a,n){if(a==="open"&&n.id&&n.id in S)return false},
         beforeNodeMorphed:function(n,m){if(n.nodeName==="IFRAME"&&m.nodeName==="IFRAME"&&n.getAttribute("srcdoc")===m.getAttribute("srcdoc"))return false}}});
       arrange();fill();refocus(fk);if(window.scrollY!==y)window.scrollTo(0,y);return}
-    el.innerHTML=M+"START-->"+html+M+"END-->";restore(el);arrange();reapply(el);fill();refocus(fk);window.scrollTo(0,y)};
+    el.innerHTML=M+"START-->"+html+M+"END-->";restore(el);arrange();reapply(el);anchorIds(el);fill();refocus(fk);window.scrollTo(0,y)};
   function tick(){var s=document.createElement("script");s.src=F+"?t="+Date.now();s.onload=s.onerror=function(){s.remove()};document.head.appendChild(s)}
   tick();setInterval(tick,20000);
 })();
