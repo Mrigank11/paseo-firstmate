@@ -917,7 +917,7 @@ export class Deck {
       const a = model?.tasks.find((t) => t.id === task)?.asks.find((x) => x.id === ask);
       return a && { text: a.text, options: a.options };
     };
-    const entries = newEntries(project, prompts as any, known, new Date(), lookup);
+    const entries = newEntries(project, prompts as any, known, new Date(), lookup, join(projectDir(this.cfg.root, project), "attachments"));
     // Inbox first: if anything below fails, the comments are on disk and get retried at the next start.
     const file = inboxPath(this.cfg.root, project);
     appendInbox(file, entries);
