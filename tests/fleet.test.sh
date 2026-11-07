@@ -116,6 +116,17 @@ printf '## BLUF\nx\n## Impact\nx\n## Issue\nx\n## Context and components\nx\n## 
 $F ask a "bare" --context-file "$T/order.md" 2>&1 | grep -q "out of order: *Issue\|out of order: *Impact" && ok "refusal names the out-of-order heading" || bad "refusal names the out-of-order heading"
 $F ask-template | grep -c '^## ' | grep -qx 7 && ok "ask-template prints the 7 headings" || bad "ask-template prints the 7 headings"
 refused "ask missing context file" $F ask a "third" --context-file "$T/nope.md"
+# canvas kinds: only an issue task (or one with no kind) needs the seven headings
+$F add pk intent=x shape=scout state=active canvas_kind=plan >/dev/null
+eq "$($F get pk | jq -r .canvas_kind)" plan; check "add stores canvas_kind" $?
+refused "add with a bad canvas_kind" $F add pk2 intent=x shape=scout state=active canvas_kind=bogus
+$F ask pk "free?" --context-file "$T/bad.md" >/dev/null 2>&1; check "plan task: free-form context accepted" $?
+$F add ik intent=x shape=ship state=active canvas_kind=issue >/dev/null
+refused "issue task: bare context refused" $F ask ik "bare" --context-file "$T/bad.md"
+refused "unlabelled task: bare context refused" $F ask a "bare" --context-file "$T/bad.md"
+$F ask-template ik | grep -c '^## ' | grep -qx 7 && ok "ask-template <issue id> prints the 7 headings" || bad "ask-template <issue id>"
+$F ask-template pk | grep -q '^## ' && bad "ask-template <plan id> has no headings" || ok "ask-template <plan id> is free form"
+$F set pk canvas_kind=review >/dev/null; eq "$($F get pk | jq -r .canvas_kind)" review; check "set canvas_kind" $?
 refused "ask context + overlong text" $F ask a "$(printf 'x%.0s' $(seq 201))" --context-file "$T/ctx.md"
 [[ ! -e "$T/tasks/a/asks/3.md" ]]; check "refused ask leaves no file" $?
 $F answer a 2 >/dev/null

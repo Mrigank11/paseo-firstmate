@@ -78,6 +78,20 @@ test("canvas-snippet: the agent-canvas recipe for the configured port, the shape
   assert.match(scout.out, /<Markdown id="findings">/);
   assert.doesNotMatch(scout.out, /id="implement"/);
   assert.notEqual((await run(["snippet", r.root, "chore"], env)).code, 0, "an unknown shape is refused");
+  // --kind: issue (or none) keeps today's text byte for byte; any other kind is free-form
+  const issue = await run(["snippet", r.root, "ship", "--kind", "issue"], env);
+  assert.equal(issue.out, ship.out, "kind=issue is today's snippet");
+  for (const kind of ["plan", "research", "explainer", "review"]) {
+    const free = await run(["snippet", r.root, "scout", "--kind", kind], env);
+    assert.equal(free.code, 0, free.err);
+    assert.match(free.out, new RegExp(`free-form ${kind} canvas`));
+    assert.match(free.out, /RECIPE port 6791/);
+    assert.match(free.out, /<Markdown id="findings">/);
+    assert.match(free.out, /You asked:[\s\S]*I did:/);
+    assert.match(free.out, /BLOCKED: canvas ask <id>/);
+    assert.doesNotMatch(free.out, /BLUF → recap → issue|id="impact"|Recap block, required|needs_you/);
+  }
+  assert.notEqual((await run(["snippet", r.root, "ship", "--kind", "bogus"], env)).code, 0, "an unknown kind is refused");
   assert.notEqual((await run(["snippet", r.root, "ship"], { ...r.env, AGENT_CANVAS_DIR: "" })).code, 0, "no canvasDir: say so");
   r.stop();
 });
