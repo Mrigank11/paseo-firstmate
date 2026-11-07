@@ -1,6 +1,7 @@
 // renderProject: ProjectModel + live agent views -> { page, live, signature }. Pure, no I/O.
 import { createHash } from "node:crypto";
 import { cut } from "./humanize.ts";
+import type { Recap } from "./recap.ts";
 import { cardHash } from "./marks.ts";
 import { inline, markdown } from "./markdown.ts";
 import { ICON, svg } from "./icons.ts";
@@ -258,6 +259,29 @@ export function trailHtml(all: TrailComment[], target: string, now: Date, also?:
   return `<div class="trail"><span class="tr-who">💬 You${hm}</span><span class="tr-txt">${said}</span>${n}${chipHtml(last, now)}</div>`;
 }
 
+/**
+ * The recap strip at the top of a card the captain is coming back to (Needs you, With the first mate, Done): what they asked and
+ * what the crew did, as the crew wrote it in the canvas's recap block (the embedded canvas leaves that block out). When the
+ * captain commented after the crew last wrote, the strip shows that comment and says it is not acted on yet instead of pairing
+ * an old answer with a new request. Empty when the crew wrote no recap.
+ */
+export function recapStrip(t: Task, group: GroupKey, recap: Recap | null | undefined, crewAt: number | null | undefined, comments: TrailComment[], now: Date): { html: string; consumes?: string } {
+  if (!recap || (group !== "you" && group !== "fm" && group !== "done")) return { html: "" };
+  const mine = comments.filter((c) => (c.target === `t-${t.id}` || c.target.startsWith(`t-${t.id}#`)) && !c.stale && !(c.choice && !c.choice.option));
+  const last = mine.reduce<TrailComment | undefined>((a, b) => (!a || Date.parse(b.at) >= Date.parse(a.at) ? b : a), undefined);
+  const newer = !!last && !!crewAt && Date.parse(last.at) > crewAt;
+  const hm = (ms: number) => { const d = new Date(ms); return isNaN(d.getTime()) ? "" : ` · ${pad(d.getHours())}:${pad(d.getMinutes())}`; };
+  const row = (k: string, v: string, full: string, extra = "") => `<div class="rc-row"><span class="rc-k">${k}</span><span class="rc-v" title="${esc(full)}">${v}${extra}</span></div>`;
+  if (newer && last) {
+    const said = last.choice ? `picked ${last.choice.option}` : last.text.replace(/\s+/g, " ").trim();
+    return {
+      html: `<div class="recap rc-new">${row(`You asked${hm(Date.parse(last.at))}`, esc(cut(said, 200)), said, chipHtml(last, now))}${row("Crew did", `<i>Not acted on yet</i> · ${group === "done" ? "the crew had finished" : group === "fm" ? "with the first mate" : "waiting on the first mate"}`, "")}</div>`,
+      consumes: last.target === `t-${t.id}` ? last.id : undefined,
+    };
+  }
+  return { html: `<div class="recap">${row("You asked", esc(cut(recap.asked, 200)), recap.asked)}${row(`Crew did${crewAt ? hm(crewAt) : ""}`, esc(cut(recap.did, 200)), recap.did)}</div>` };
+}
+
 type Ctx = { snapCss: Set<string>; byId: Map<string, Task>; unblocks: Map<string, string[]>; agents: Record<string, AgentView>; o: RenderOpts; comments: TrailComment[]; stages: Map<string, Stage>; canvas?: CanvasData };
 
 /**
@@ -351,11 +375,14 @@ function row(t: Task, group: GroupKey, ctx: Ctx, idx = 0): string {
   const curAgent = currentAgent(ctx.o.labeled?.[t.id] ?? []);
   const raw = sum ? rawAsks(t, sum, ctx.comments, ctx.o.now, activeSinceOf(curAgent)) : [];
   const rawTargets = new Set((sum?.openAsks ?? []).filter((a) => !t.asks.some((x) => x.ref?.block === a.id)).map((a) => `t-${t.id}#c-${a.id}`));
+  const recapSum = group === "done" ? undefined : ctx.canvas?.summaries[aid ?? ""];
+  const strip = group === "done" ? recapStrip(t, group, t.canvasRecap, t.canvasFinalAt, ctx.comments, ctx.o.now) : recapStrip(t, group, recapSum?.recap, recapSum?.updatedAt, ctx.comments, ctx.o.now);
   const out = [
     `<article class="task s-${group}${failed ? " s-failed" : ""}" id="t-${esc(t.id)}"${data}>`,
     `<div class="tt"><span class="ttl">${title}</span>${chip}${btn}</div>`,
-    // card-level comments, plus comments on asks that are gone (an answered ask takes its own trail with it)
-    trailHtml(ctx.comments, `t-${t.id}`, ctx.o.now, (c) => c.target.startsWith(`t-${t.id}#`) && !t.asks.some((a) => c.target === `t-${t.id}#${a.id}`) && !rawTargets.has(c.target)),
+    strip.html,
+    // card-level comments, plus comments on asks that are gone (an answered ask takes its own trail with it); the strip already shows a newer one
+    trailHtml(ctx.comments.filter((c) => c.id !== strip.consumes), `t-${t.id}`, ctx.o.now, (c) => c.target.startsWith(`t-${t.id}#`) && !t.asks.some((a) => c.target === `t-${t.id}#${a.id}`) && !rawTargets.has(c.target)),
   ];
   if (sum) out.push(agentBlock(t, group, aid ? ctx.agents[aid] : undefined, ctx.o, st, true), canvasFragment(sum, ctx.canvas?.cards[sum.agentId], group === "you"));
   t.asks.forEach((a) => {

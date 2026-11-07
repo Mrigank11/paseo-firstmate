@@ -23,7 +23,7 @@ function evilModel(): ProjectModel {
     { name: "endpoints", kind: "md", content: MD_EVIL },
     { name: "decisions", kind: "md", content: "[x](javascript:alert(1))" },
   ];
-  const task = (over: Partial<Task>): Task => ({ id: "e", intent: "", state: stateOf(over), depends_on: [], asks: [], notes: "", card: "", answered: [], canvasFinal: "", hasReport: false, updatedMs: 0, ...over });
+  const task = (over: Partial<Task>): Task => ({ id: "e", intent: "", state: stateOf(over), depends_on: [], asks: [], notes: "", card: "", answered: [], canvasFinal: "", canvasRecap: null, canvasFinalAt: 0, hasReport: false, updatedMs: 0, ...over });
   m.tasks = [
     task({ id: "e-title", title: EVIL, state: "active", notes: EVIL,
       asks: [{ id: "a1", text: EVIL, since: "2026-10-21T09:00:00Z", contextMd: MD_EVIL, options: [EVIL, "B"] }] }),

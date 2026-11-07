@@ -223,3 +223,52 @@ test("relay: a click on a canvas ask is parsed, validated against the canvas, an
   assert.match(msg, /canvas ask is a question on the crew's own canvas/);
   assert.ok(!msg.includes("applied automatically"), "bin/page reply does not apply a canvas pick");
 });
+
+// ---------- recap strip ----------
+import { recapOfSource } from "../server/recap.ts";
+
+const RECAP = { asked: "Use SQLite, keep the migration path open", did: "Switched the store to SQLite behind a flag" };
+const recapData = (over: object = {}) => data({}, summary("ag-1", { recap: RECAP, updatedAt: Date.parse("2026-10-24T11:30:00Z"), ...over }));
+const idleRender = (m: ReturnType<typeof project>, d: CanvasData) => render(m, d, { "ag-1": { ...agent, status: "idle" } }, { t1: [{ ...labeled.t1[0], status: "idle" }] });
+const ASKING = { runState: "idle", verdict: { label: "Needs you", flags: [], needsYou: true }, openAsks: [{ id: "db", question: "Q?", blocking: true, options: [{ value: "a", label: "A" }] }] };
+const stripOf = (html: string) => /<div class="recap[^"]*">[\s\S]*?<\/div><\/div>/.exec(html)?.[0] ?? "";
+
+test("recap strip: Needs you and With the first mate show You asked / Crew did above the canvas; Running does not", () => {
+  const needs = card(idleRender(project([T]), recapData(ASKING)).live);
+  assert.match(stripOf(needs), /You asked<\/span><span class="rc-v" title="Use SQLite[^"]*">Use SQLite, keep the migration path open/);
+  assert.match(stripOf(needs), /Crew did · 11:30<\/span><span class="rc-v"[^>]*>Switched the store/);
+  assert.ok(needs.indexOf('class="recap"') < needs.indexOf('class="ag"'), "strip comes before the agent line and canvas");
+  assert.equal(stripOf(card(render(project([T]), recapData()).live)), "", "a running card has no strip");
+  assert.equal(stripOf(card(render(project([T]), data()).live)), "", "no recap, no strip");
+});
+
+test("recap strip: a comment newer than the crew's last write replaces the pair with 'Not acted on yet'", () => {
+  const c = { id: "c1", at: "2026-10-24T11:45:00Z", target: "t-t1", text: "Also add a restore <test>", delivered: false, answered: false };
+  const html = card(idleRender(project([T], [c]), recapData(ASKING)).live);
+  const s = stripOf(html);
+  assert.match(s, /You asked · 11:45/);
+  assert.match(s, /Also add a restore &lt;test&gt;/);
+  assert.match(s, /Not acted on yet<\/i> · waiting on the first mate/);
+  assert.ok(!s.includes("Switched the store"));
+  assert.ok(!html.includes('class="trail"'), "the strip carries the card-level comment, so the trail line is dropped");
+  // an older comment leaves the pair alone
+  const old = { ...c, at: "2026-10-24T11:10:00Z" };
+  assert.match(stripOf(card(idleRender(project([T], [old]), recapData(ASKING)).live)), /Switched the store/);
+});
+
+test("recap strip: a done card reads canvas.final.tsx; no file means no strip", () => {
+  const tsx = `<Canvas title="T" status="done"><Bluf>Shipped.</Bluf><Markdown id="recap">**You asked:** Ship the API &amp; docs.\n\n**I did:** Shipped both.</Markdown></Canvas>`;
+  assert.deepEqual(recapOfSource(tsx), { asked: "Ship the API & docs.", did: "Shipped both." });
+  assert.equal(recapOfSource(`<Canvas title="T" status="done"><Bluf>x</Bluf></Canvas>`), null);
+  assert.equal(recapOfSource(`<Markdown id="recap">**You asked:** only half</Markdown>`), null);
+  const D = { ...T, state: "done" };
+  const m = project([D]);
+  const dir = join(lastRoot, "state", "tasks", "t1");
+  mkdirSync(dir, { recursive: true });
+  assert.equal(stripOf(card(render(m).live)), "");
+  writeFileSync(join(dir, "canvas.final.tsx"), tsx);
+  const m2 = loadProject(lastRoot, "demo");
+  const html = card(render(m2).live);
+  assert.match(stripOf(html), /Ship the API &amp; docs\./);
+  assert.match(stripOf(html), /Shipped both\./);
+});

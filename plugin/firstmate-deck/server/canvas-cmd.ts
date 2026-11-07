@@ -72,6 +72,9 @@ Keep <Markdown id="findings"> current as you learn things (patch its text, never
 // (strict crews), and what `bin/fleet ask-template` mirrors for a task ask; keep the two in step.
 export const ASK_SHAPE = `<Canvas title="<the issue in a few words>" status="waiting">
   <Bluf>The outcome in one or two plain sentences, then the one decision you need from the captain.</Bluf>
+  <Markdown id="recap">**You asked:** the captain's latest request, in their terms (1-2 lines)
+
+**I did:** what you did about it (1-2 lines; 500 characters in all)</Markdown>
   <Markdown id="issue">## Issue
 What is wrong or undecided, in 2-4 plain lines.</Markdown>
   <Markdown id="impact">## Impact
@@ -110,8 +113,9 @@ The captain reads your canvas *instead of* your chat, often days later, in under
 3. **Rewrite, never append.** Each section of the canvas has an \`id\`; to change what it says, patch that id's text. Do not append a new block at the bottom or top of the canvas: that turns it into a log. When something is superseded, \`remove\` it or rewrite it. A finished item becomes one line in the "Done so far" fold; a dead end becomes one line there under "Ruled out" (what you tried, why it failed) or vanishes. The canvas shows the current truth, not a history.
 4. **Pick the visual before writing prose.** Numbers or pass/fail: \`<Metric>\` in a \`<Grid>\`. A choice you made: \`<Decision>\`. How parts fit or before/after: \`<Svg>\` (a big graph: \`<Diagram>\`). A trend: \`<Chart>\`. \`<Markdown>\` is for the few sentences no component can carry; anything over about 5 lines or 6 items goes in a \`<Collapse>\`.
 5. **Code detail only when it passes the audience test.** Show file paths, function names, diffs, line numbers, hashes or command output only if (a) the task is about the code itself (a code review, an API or design audit, a "which file / what changed exactly" question), or (b) the brief or the captain asked for those specifics. Even then it goes inside a closed \`<Collapse>\` (a key \`<Diff>\` hunk, not whole files), never in the BLUF, Steps or Metrics. Otherwise describe what changed in behaviour.
-6. **Running vs asking vs final.** Running (\`status="working"\`): the BLUF, live Steps, what is in progress or blocking. Asking (\`status="waiting"\`, see "Questions for the captain"): the seven-part shape, in that order. Final (\`status="done"\`): rewrite it top to bottom: the BLUF, what changed in plain words, verification as Metrics, a short "Not verified" list and a short "Needs you" list (omit either when empty), one figure where it helps, and the report or PR link. Drop the Steps list unless it tells a story.
-7. **Length test.** If the captain would have to scroll, or read code, to learn the outcome, cut until they don't.
+6. **Running vs asking vs final.** Running (\`status="working"\`): the BLUF, live Steps, what is in progress or blocking. Asking (\`status="waiting"\`, see "Questions for the captain"): the seven-part shape, in that order. Final (\`status="done"\`): rewrite it top to bottom: the BLUF, the recap, what changed in plain words, verification as Metrics, a short "Not verified" list and a short "Needs you" list (omit either when empty), one figure where it helps, and the report or PR link. Drop the Steps list unless it tells a story.
+7. **Recap block, required.** On every canvas that asks the captain something or is final (\`status="done"\`), put a top-level \`<Markdown id="recap">\` right after the BLUF: \`**You asked:** …\` (the captain's latest request, in their terms: the brief's intent, or their newest steer) and \`**I did:** …\` (what you did about it), at most 500 characters in all. The deck lifts it out of the canvas into a strip at the top of your card, so the captain sees it before anything else. Rewrite it in place whenever a new steer arrives or you finish; agent-canvas refuses a strict crew's asking or done canvas without it.
+8. **Length test.** If the captain would have to scroll, or read code, to learn the outcome, cut until they don't.
 
 ### Set your canvas first
 
@@ -123,7 +127,7 @@ ${SHAPE[shape]}
 
 ### Questions for the captain
 
-A question for the captain goes on your canvas as \`<Ask id=… question=… blocking>\` with \`<Option>\`s, never only in chat. Before you add it, **rewrite the canvas into this order, top to bottom**: BLUF → issue → impact → context and components → changes by component (behaviour, no code) → fix plan → the Ask, then only closed folds (Done so far, evidence). Use these section ids: \`issue\`, \`impact\`, \`context\`, \`changes\`, \`fix\`. Move the Steps list and any code into a closed fold. Keep each section short: the captain reads the whole canvas open, in about 30 seconds.
+A question for the captain goes on your canvas as \`<Ask id=… question=… blocking>\` with \`<Option>\`s, never only in chat. Before you add it, **rewrite the canvas into this order, top to bottom**: BLUF → recap → issue → impact → context and components → changes by component (behaviour, no code) → fix plan → the Ask, then only closed folds (Done so far, evidence). Use these section ids: \`recap\`, \`issue\`, \`impact\`, \`context\`, \`changes\`, \`fix\`. Move the Steps list and any code into a closed fold. Keep each section short: the captain reads the whole canvas open, in about 30 seconds.
 
 \`\`\`
 ${ASK_SHAPE}
