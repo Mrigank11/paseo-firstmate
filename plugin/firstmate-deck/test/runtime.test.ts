@@ -849,6 +849,29 @@ test("canvas: a click on a raw ask is validated against the live canvas and reac
   deck.stop(); await fc.stop();
 });
 
+test("canvas: a comment on deep canvas content (stamped anchor) reaches the first mate on its task, with the crew's open canvas questions; an unplaced one quotes what was clicked", async () => {
+  const fc = await new FakeCanvas().start();
+  fc.set(canvasSummary("ag-2", { openAsks: [{ id: "env1", question: "Which change should I plan next?", blocking: true, options: [{ value: "a", label: "A" }, { value: "b", label: "B" }] }] }));
+  const r = cvRig();
+  const deck = canvasDeck(r, fc);
+  await deck.configure();
+  await deck.render("demo");
+  await until(() => /Uncurated/.test(readFileSync(r.live, "utf8")), 3000);
+  deck.ingest("demo", [
+    { prompt: "plan this option", selector: "p#k_t-t2_2-1-1-0-0-0-3-0-2", tag: "p", text: "Option B only: staging gets its own bundle id" } as any,
+    { prompt: "what is this?", selector: "div:nth-of-type(4) > ul > li > div > p", tag: "p", text: "A bullet outside any card" } as any,
+    { prompt: "hello", selector: "body", tag: "body", text: "the whole page text" } as any,
+  ]);
+  await until(() => r.world.sent.length > 0, 3000);
+  const msg = r.world.sent.join("\n");
+  const inbox = readInbox(join(r.pdir, "inbox.jsonl"));
+  assert.deepEqual(inbox.map((e) => e.target), ["t-t2", "page", "page"]);
+  assert.match(msg, /- \[t-t2 · "Build it" · canvas ask env1: "Which change should I plan next\?"\] \(c-[^)]+\) "plan this option"/);
+  assert.match(msg, /- \[page · on "A bullet outside any card"\] \(c-[^)]+\) "what is this\?"/);
+  assert.match(msg, /- \[page\] \(c-[^)]+\) "hello"/, "a whole-page comment is not quoted");
+  deck.stop(); await fc.stop();
+});
+
 test("canvas: agent-canvas down is a soft badge and the page keeps working; it heals when the canvas returns", async () => {
   const fc = await new FakeCanvas().start();
   fc.set(canvasSummary("ag-2", { bluf: "Up" }));

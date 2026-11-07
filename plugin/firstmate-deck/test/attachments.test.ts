@@ -49,3 +49,11 @@ test("a missing source keeps the original path and does not throw", () => {
     assert.ok(!existsSync(join(dir, "a", "c-1-1-gone.png")));
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
+
+test("a comment with an anchor target, a clicked-text quote and an image keeps all three", () => {
+  const prompt = { prompt: "close this", selector: "div.x", text: "Option B only", attachments: [att("/a/x.png")] };
+  const msg = formatMessage("p", [{ id: "c-3", target: "page", text: "close this", prompt }]);
+  assert.match(msg, /- \[page · on "Option B only"\] \(c-3\) "close this" \[image: \/a\/x\.png \(800x600\)\]/);
+  const withTask = formatMessage("p", [{ id: "c-4", target: "t-job", text: "hm", prompt }], () => ({ title: "Job", asks: [{ id: "a1", text: "Which?" }], canvasAsks: [{ id: "k9", text: "Pick" }] }));
+  assert.match(withTask, /- \[t-job · "Job" · ask a1: "Which\?" · canvas ask k9: "Pick"\] \(c-4\) "hm" \[image: \/a\/x\.png \(800x600\)\]/);
+});

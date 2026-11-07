@@ -1,12 +1,16 @@
 // Where on the page a Lavish comment points: "t-<taskId>" for a task card, "t-<taskId>#<askId>" for an ask of a task
 // (its block, option buttons or context expander; the ask id is bin/fleet's stable "a2"), a section id, or "page".
 
-export type Known = { tasks?: Iterable<string>; sections?: Iterable<string> };
+import { STAMP_ID } from "./anchors.ts";
+
+/** `agents`: crew agent id -> task id, for the ids the deck and the crew canvas put on a card's canvas embed (cvd-<agent>, cv-<agent>-…). */
+export type Known = { tasks?: Iterable<string>; sections?: Iterable<string>; agents?: Record<string, string> };
 
 export function extractTarget(selector: string | undefined, known: Known = {}): string {
   if (!selector) return "page";
   const tasks = known.tasks ? new Set(known.tasks) : null;
   const sections = known.sections ? new Set(known.sections) : null;
+  const agents = known.agents;
   // [id=x] and [data-section=x] behave like #x; remember which were data-section.
   const dataSections = new Set<string>();
   let sel = selector.replace(/\\(.)/g, "$1");
@@ -24,6 +28,13 @@ export function extractTarget(selector: string | undefined, known: Known = {}): 
     // a-<task>-<askId>: the ask block; x-<task>-<askId>: its context expander (a bare number is an older page: ask "a<n>")
     m = /^[ax]-(.+)-(c-[A-Za-z0-9_]+)$/.exec(id); // a question on the crew's canvas
     if (m && (!tasks || tasks.has(m[1]))) return `t-${m[1]}#${m[2]}`;
+    m = /^o-(.+)-(c-[A-Za-z0-9_]+)-[1-9][0-9]*$/.exec(id); // an option button: o-<task>-<askId>-<n>
+    if (m && (!tasks || tasks.has(m[1]))) return `t-${m[1]}#${m[2]}`;
+    m = /^o-(.+)-(a[1-9][0-9]*)-[1-9][0-9]*$/.exec(id);
+    if (m && (!tasks || tasks.has(m[1]))) return `t-${m[1]}#${m[2]}`;
+    if (agents) for (const [aid, task] of Object.entries(agents)) {
+      if (id === `cvd-${aid}` || id.startsWith(`cv-${aid}-`)) return !tasks || tasks.has(task) ? "t-" + task : null;
+    }
     m = /^[ax]-(.+)-(a?[1-9][0-9]*)$/.exec(id);
     if (m && (!tasks || tasks.has(m[1]))) return `t-${m[1]}#${m[2].startsWith("a") ? m[2] : "a" + m[2]}`;
     return null;
@@ -34,6 +45,10 @@ export function extractTarget(selector: string | undefined, known: Known = {}): 
     const id = idm[1];
     const t = taskId(id);
     if (t) return t;
+    // an anchor the page stamped inside a card (anchors.ts): k_<owning card/ask id>_<path>
+    const k = STAMP_ID.exec(id);
+    const owned = k && taskId(k[1]);
+    if (owned) return owned;
     if (/^g-|^(live|tasks)$/.test(id)) continue;
     if (parts[i].startsWith("section") || dataSections.has(id) || sections?.has(id)) return id;
   }

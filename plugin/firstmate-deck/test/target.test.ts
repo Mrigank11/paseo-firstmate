@@ -50,3 +50,18 @@ test("everything else is the page", () => {
   assert.equal(extractTarget(undefined, known), "page");
   assert.equal(extractTarget("", known), "page");
 });
+
+test("a stamped anchor (k_<owner>_<path>) resolves like its owner; the real unanchored inbox shapes stay 'page'", () => {
+  assert.equal(extractTarget("p#k_t-ab-gap_2-1-1-0", known), "t-ab-gap");
+  assert.equal(extractTarget("div#k_a-ab-gap-c-env1_0-3 > ul > li", known), "t-ab-gap#c-env1");
+  assert.equal(extractTarget("div#k_a-ab-gap-a2_0-3 > p", known), "t-ab-gap#a2");
+  assert.equal(extractTarget("div#k_x-ab-gap-a2_1 > p", known), "t-ab-gap#a2");
+  assert.equal(extractTarget("p#k_t-nope_2-1", known), "page", "an owner that is not a task");
+  // c-mw3a8s80-64b25c and three more selectors that the inbox shows with no anchor at all
+  for (const sel of [
+    "div:nth-of-type(4) > ul > li:nth-of-type(3) > div > p",
+    "div > div:nth-of-type(2) > div > ul > li",
+    "section > div.cv-f > div > p > strong",
+    "div:nth-of-type(2) > table > tbody > tr:nth-of-type(2) > td",
+  ]) assert.equal(extractTarget(sel, known), "page", sel);
+});
