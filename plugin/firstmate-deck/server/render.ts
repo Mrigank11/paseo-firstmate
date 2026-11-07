@@ -7,7 +7,7 @@ import { ICON, svg } from "./icons.ts";
 import { navScript } from "./nav-script.ts";
 import { pageScript } from "./page-script.ts";
 import { IDIOMORPH_SOURCE } from "./morph-source.ts";
-import { CSS } from "./style.ts";
+import { CSS, scaleText } from "./style.ts";
 import type { ProjectModel, Task, TrailComment } from "./state.ts";
 import { activeSinceOf, applyStalled, computeStage, currentAgent, stageAgentsFor, type GroupKey, type LabeledAgent, type Stage, type StageFlag } from "./stage.ts";
 import { attentionOf, type Attention } from "./attention.ts";
@@ -535,7 +535,7 @@ function renderLive(model: ProjectModel, agents: Record<string, AgentView>, o: R
     if (k === "done" || k === "parked") parts.push(`<details class="grp" id="g-${k}"><summary>${h}</summary>\n${rows}</details>`);
     else parts.push(`<section class="grp" id="g-${k}">${h}\n${rows}</section>`);
   }
-  if (ctx.snapCss.size) parts.push(`<style data-cv-snap>\n${[...ctx.snapCss].join("\n").replace(/<\/style/gi, "<\\/style")}\n</style>`);
+  if (ctx.snapCss.size) parts.push(`<style data-cv-snap>\n${[...ctx.snapCss].map(scaleText).join("\n").replace(/<\/style/gi, "<\\/style")}\n</style>`);
   if (parts.length === 1) parts.push(`<div class="m">No tasks for this project yet.</div>`);
   // Trails for the page and the sections live outside the live block (page.html is not rewritten per comment);
   // the page script copies these into their slots after every swap.
@@ -597,7 +597,7 @@ export function renderProject(model: ProjectModel, agents: Record<string, AgentV
 <title>${esc(model.title)} · status</title>
 <style>
 ${CSS}
-</style>${opts.canvas?.css ? `\n<style>\n${opts.canvas.css.replace(/<\/style/gi, "<\\/style")}\n</style>` : ""}
+</style>${opts.canvas?.css ? `\n<style>\n${scaleText(opts.canvas.css).replace(/<\/style/gi, "<\\/style")}\n</style>` : ""}
 </head><body>
 <!-- the task navigator: data-lavish-action keeps its clicks working in Lavish's annotate mode -->
 <aside class="tn" id="tn" aria-label="Tasks by stage" data-lavish-action hidden><div class="tn-spine"><button class="tn-tg" id="tn-open" type="button" aria-expanded="false" aria-controls="tn-full" aria-label="Show task titles" title="Show task titles">${svg(ICON.panelOpen)}</button><button class="tn-tg tn-fx" type="button" aria-pressed="false" aria-label="Focus view: show only the selected task" title="Focus view: show only the selected task">${svg(ICON.focus)}</button><div class="tn-bds" id="tn-bds"></div></div><div class="tn-full" id="tn-full"><div class="tn-top"><button class="tn-tg" id="tn-close" type="button" aria-expanded="true" aria-controls="tn-full" aria-label="Fold the task list" title="Fold the task list">${svg(ICON.panelClose)}</button><b>Tasks</b><button class="tn-tg tn-fx" type="button" aria-pressed="false" aria-label="Focus view: show only the selected task" title="Focus view: show only the selected task">${svg(ICON.focus)}</button></div><div class="tn-fl" id="tn-fl"></div></div></aside>
