@@ -1,5 +1,5 @@
 // The first mate's side of the crew canvas, behind bin/page (canvas-snippet, canvas-answer, canvas-snapshot) and bin/page claim.
-//   canvas-cmd.ts snippet <root> <scout|ship>                      the "## Your canvas" brief section (stdout)
+//   canvas-cmd.ts snippet <root> <scout|ship> [--kind <k>]                   the "## Your canvas" brief section (stdout)
 //   canvas-cmd.ts answer <root> <task> <askId> (<value> | --decline <why>) [--agent <id>]   deliver (or decline) a pick through agent-canvas
 //   canvas-cmd.ts snapshot <root> <task> [--agent <id>]            state/tasks/<task>/canvas.final.html + canvas.final.tsx
 //   canvas-cmd.ts relabel <root> <newFirstMate> [<project>]        the live crew agents whose canvas.relay is some other agent (one id per line)
@@ -89,14 +89,50 @@ One line per component: what changes in behaviour. No code, no diffs.</Markdown>
   <Collapse id="done" title="Done so far">one line per finished thing; the Steps list, Ruled out, evidence and any Diff go in closed folds like this</Collapse>
 </Canvas>`;
 
-export function snippet(root: string, shape: string): string {
-  if (!SHAPE[shape]) die("usage: bin/page canvas-snippet <scout|ship>");
+/** The canvas kinds (label canvas.kind). Only `issue` keeps the strict needs-you structure; the rest are free-form. An unlabelled crew is an issue crew. */
+export const KINDS = ["issue", "plan", "research", "explainer", "review"];
+
+/** The brief text for a free-form canvas (any kind but issue): the same recipe and starting canvas, no required structure. */
+function freeSnippet(recipe: string, shape: string, kind: string): string {
+  return `## Your canvas
+
+${recipe}
+
+### What your canvas must say
+
+This is a free-form ${kind} canvas: lay it out the way a good Lavish page would be. There are no required sections, no fixed order and no block count; figures, tables, sections and long prose may sit above an \`<Ask>\`. The captain still reads it *instead of* your chat, often days later, in under 30 seconds, so write for that reader: outcomes, decisions, status and what they must do, in plain language.
+
+1. **BLUF first, always current.** One or two plain sentences: the outcome, then the one thing the captain must know or do.
+2. **Replace the template plan** within your first few minutes with the real plan, named by outcome, or drop the Steps if they do not tell a story.
+3. **Rewrite, never append.** Give sections an \`id\` and patch their text instead of adding a log at the bottom.
+4. **Pick the visual before writing prose.** Numbers or pass/fail: \`<Metric>\` in a \`<Grid>\`. How parts fit or before/after: \`<Svg>\`. A trend: \`<Chart>\`. Tables and prose in \`<Markdown>\`.
+5. **Recap, please.** Keep a top-level \`<Markdown id="recap">\` right after the BLUF with \`**You asked:** …\` (the brief's intent, or the captain's newest steer) and \`**I did:** …\`, at most 500 characters in all: the deck lifts it into the strip at the top of your card. Nothing refuses a canvas without it, but the card is blank without it.
+6. **Final** (\`status="done"\`): rewrite it top to bottom so it reads as a summary of the outcome, with the report or PR link.
+
+### Set your canvas first
+
+Your very first action, before reading anything else: \`set\` a canvas shaped like this, then patch it as each step moves. If a canvas from an earlier task is already there, replace it.
+
+\`\`\`
+${SHAPE[shape]}
+\`\`\`
+
+### Questions for the captain
+
+A question for the captain goes on your canvas as \`<Ask id=… question=… blocking>\` with \`<Option>\`s, never only in chat. Put the recommended option first. Keep the rest of the canvas as it is: nothing about its layout is checked. Then end your turn with \`BLOCKED: canvas ask <id>\` and nothing else on that line. The answer arrives as your next message.
+`;
+}
+
+export function snippet(root: string, shape: string, kind = "issue"): string {
+  if (!SHAPE[shape]) die("usage: bin/page canvas-snippet <scout|ship> [--kind <issue|plan|research|explainer|review>]");
+  if (!KINDS.includes(kind)) die(`unknown canvas kind '${kind}' (one of ${KINDS.join(", ")})`);
   const dir = canvasDir(root);
   if (!dir) die("canvasDir is not set: put the agent-canvas checkout in the firstmate-deck settings (canvasDir) or AGENT_CANVAS_DIR, and let the plugin render once");
   const port = Number(new URL(baseUrl(root)).port) || 6790;
   let recipe: string;
-  try { recipe = execFileSync("node", [join(dir, "server", "brief-snippet.ts"), String(port)], { encoding: "utf8", timeout: 20_000, env: { ...process.env, NODE_NO_WARNINGS: "1" } }).trimEnd(); }
+  try { recipe = execFileSync("node", [join(dir, "server", "brief-snippet.ts"), String(port), kind], { encoding: "utf8", timeout: 20_000, env: { ...process.env, NODE_NO_WARNINGS: "1" } }).trimEnd(); }
   catch (e) { die(`could not run ${dir}/server/brief-snippet.ts: ${(e as Error).message.split("\n")[0]}`); }
+  if (kind !== "issue") return freeSnippet(recipe, shape, kind);
   return `## Your canvas
 
 ${recipe}
@@ -231,7 +267,7 @@ function relabel(root: string, newId: string, project?: string): void {
 const [cmd, root, ...rest] = process.argv.slice(2);
 if (!cmd || !root) die("usage: canvas-cmd.ts <snippet|answer|snapshot|relabel> <root> ...");
 switch (cmd) {
-  case "snippet": process.stdout.write(snippet(root, rest[0] ?? "")); break;
+  case "snippet": { const kind = takeFlag(rest, "--kind"); process.stdout.write(snippet(root, rest[0] ?? "", kind ?? "issue")); break; }
   case "answer": await answer(root, rest); break;
   case "snapshot": await snapshot(root, rest); break;
   case "relabel": if (!rest[0]) die("relabel needs the new first mate's agent id"); relabel(root, rest[0], rest[1]); break;

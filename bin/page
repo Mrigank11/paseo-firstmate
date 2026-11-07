@@ -14,7 +14,7 @@
 #                                     claim of its own. Same refusals; also labels the agent and demotes older labels
 #                                     Either claim also re-points the canvas.relay label of the open tasks' live crews (the ones of
 #                                     that project, or of every page with no claim of its own) at the new first mate
-#   bin/page canvas-snippet <scout|ship>   print the "## Your canvas" brief section (agent-canvas recipe + the starting canvas for
+#   bin/page canvas-snippet <scout|ship> [--kind <issue|plan|research|explainer|review>]   print the "## Your canvas" brief section (agent-canvas recipe + the starting canvas for
 #                                     that shape + the ask contract); writing-briefs pastes it into every crew brief
 #   bin/page canvas-answer <task> <askId> <value>
 #   bin/page canvas-answer <task> <askId> --decline "<why>"
@@ -474,7 +474,7 @@ cmd_heal() {
   esac
 }
 
-cmd_canvas_snippet() { NODE_NO_WARNINGS=1 node "$REPO/plugin/firstmate-deck/server/canvas-cmd.ts" snippet "$ROOT" "${1:-}"; }
+cmd_canvas_snippet() { NODE_NO_WARNINGS=1 node "$REPO/plugin/firstmate-deck/server/canvas-cmd.ts" snippet "$ROOT" "$@"; }
 cmd_canvas_answer() { NODE_NO_WARNINGS=1 node "$REPO/plugin/firstmate-deck/server/canvas-cmd.ts" answer "$ROOT" "$@"; }
 cmd_canvas_snapshot() { NODE_NO_WARNINGS=1 node "$REPO/plugin/firstmate-deck/server/canvas-cmd.ts" snapshot "$ROOT" "$@"; }
 
