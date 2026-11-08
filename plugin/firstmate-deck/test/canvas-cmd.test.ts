@@ -102,6 +102,12 @@ test("canvas-answer: delivers with the relay key to the task's current agent; --
   assert.equal(ok.code, 0, ok.err);
   assert.match(ok.out, /delivered: t-one \(agent ag-1\) ask db = pg/);
   assert.deepEqual(r.hits.find((h) => h.path === "/api/fm/deliver")?.body, { agentId: "ag-1", askId: "db", value: "pg" });
+  // a hyphenated canvas ask id: the page's target form (c-merge-option) and the bare id both reach agent-canvas as merge-option
+  for (const given of ["c-merge-option", "merge-option"]) {
+    const hy = await run(["answer", r.root, "t-one", given, "a-b"], r.env);
+    assert.equal(hy.code, 0, hy.err);
+    assert.deepEqual(r.hits.filter((h) => h.path === "/api/fm/deliver").at(-1)?.body, { agentId: "ag-1", askId: "merge-option", value: "a-b" });
+  }
   const no = await run(["answer", r.root, "t-one", "db", "--decline", "out of scope"], r.env);
   assert.match(no.out, /declined: .*out of scope/);
   assert.deepEqual(r.hits.filter((h) => h.path === "/api/fm/deliver").at(-1)?.body, { agentId: "ag-1", askId: "db", decline: "out of scope" });

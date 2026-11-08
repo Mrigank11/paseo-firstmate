@@ -2,6 +2,9 @@
 // (its block, option buttons or context expander; the ask id is bin/fleet's stable "a2"), a section id, or "page".
 
 import { STAMP_ID } from "./anchors.ts";
+import { CANVAS_ASK_BODY } from "./ask-id.ts";
+
+const CANVAS_ASK_ID = new RegExp(`^c-${CANVAS_ASK_BODY}$`);
 
 /** `agents`: crew agent id -> task id, for the ids the deck and the crew canvas put on a card's canvas embed (cvd-<agent>, cv-<agent>-…). */
 export type Known = { tasks?: Iterable<string>; sections?: Iterable<string>; agents?: Record<string, string> };
@@ -26,10 +29,15 @@ export function extractTarget(selector: string | undefined, known: Known = {}): 
     m = /^s-(.+)$/.exec(id);
     if (m && (!tasks || tasks.has(m[1]))) return "t-" + m[1];
     // a-<task>-<askId>: the ask block; x-<task>-<askId>: its context expander (a bare number is an older page: ask "a<n>")
-    m = /^[ax]-(.+)-(c-[A-Za-z0-9_]+)$/.exec(id); // a question on the crew's canvas
-    if (m && (!tasks || tasks.has(m[1]))) return `t-${m[1]}#${m[2]}`;
-    m = /^o-(.+)-(c-[A-Za-z0-9_]+)-[1-9][0-9]*$/.exec(id); // an option button: o-<task>-<askId>-<n>
-    if (m && (!tasks || tasks.has(m[1]))) return `t-${m[1]}#${m[2]}`;
+    // a question on the crew's canvas: a-<task>-c-<askId> (block), x- (context), o-<task>-c-<askId>-<n> (an option button).
+    // Task and ask ids both hold hyphens, so try every "-c-" as the split, the longest task first, and keep the first one that is a known task.
+    m = /^[ax]-(.+)$/.exec(id) ?? /^o-(.+)-[1-9][0-9]*$/.exec(id);
+    if (m) {
+      for (let i = m[1].lastIndexOf("-c-"); i > 0; i = m[1].lastIndexOf("-c-", i - 1)) {
+        const task = m[1].slice(0, i), askId = m[1].slice(i + 1);
+        if (CANVAS_ASK_ID.test(askId) && (!tasks || tasks.has(task))) return `t-${task}#${askId}`;
+      }
+    }
     m = /^o-(.+)-(a[1-9][0-9]*)-[1-9][0-9]*$/.exec(id);
     if (m && (!tasks || tasks.has(m[1]))) return `t-${m[1]}#${m[2]}`;
     if (agents) for (const [aid, task] of Object.entries(agents)) {

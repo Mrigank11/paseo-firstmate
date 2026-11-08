@@ -136,12 +136,57 @@ test("a canvas-side pending pick (the captain picked in Paseo) reads the same", 
   assert.match(html, /class="stg">With the first mate</);
 });
 
-test("a canvas ask without usable options or a safe id is shown read-only, pointing at the canvas", () => {
+test("a canvas ask without usable options is shown read-only: it says why and links the canvas", () => {
   const s = summary("ag-1", { openAsks: [{ id: "my-ask", question: "Free text?", blocking: false, options: [] }] });
   const html = card(render(project([T]), data({}, s)).live);
   assert.match(html, /Free text\?/);
-  assert.match(html, /Answer this one on the canvas/);
+  assert.match(html, /No buttons here: this question has no options\. <a href="http:\/\/canvas\.test\/a\/ag-1">Answer it on the canvas ↗<\/a>, or comment on this card\./);
   assert.ok(!html.includes("<button"));
+  const one = summary("ag-1", { openAsks: [{ id: "q1", question: "Sure?", blocking: false, options: [{ value: "y", label: "Yes" }] }] });
+  assert.match(card(render(project([T]), data({}, one)).live), /this question has only one option/);
+});
+
+test("a canvas ask whose id the page cannot carry says so; agent-canvas's own id rule decides (hyphens are fine)", () => {
+  const two = [{ value: "a", label: "A" }, { value: "b", label: "B" }];
+  for (const id of ["9lives", "has space", "x".repeat(33), "a.b"]) {
+    const html = card(render(project([T]), data({}, summary("ag-1", { openAsks: [{ id, question: "Q?", blocking: false, options: two }] }))).live);
+    assert.ok(!html.includes("<button"), id);
+    assert.match(html, /No buttons here: its id .* is not one the page can carry in a button\. <a href="http:\/\/canvas\.test\/a\/ag-1">/, id);
+  }
+  for (const id of ["merge-option", "q-1", "a_b-c", "x".repeat(32)]) {
+    const html = card(render(project([T]), data({}, summary("ag-1", { openAsks: [{ id, question: "Q?", blocking: false, options: two }] }))).live);
+    assert.equal((html.match(/<button type="button" class="opt"/g) ?? []).length, 2, id);
+    assert.ok(!html.includes("No buttons here"), id);
+  }
+});
+
+test("a hyphenated canvas ask id survives the whole path: button, comment target, relay, stored pick, stage", () => {
+  const id = "merge-option";
+  const s = summary("ag-1", { openAsks: [{ id, question: "How?", blocking: true, options: [{ value: "a-b", label: "A" }, { value: "b", label: "B" }] }] });
+  const html = card(render(project([T]), data({}, s)).live);
+  assert.match(html, /<div class="askbox raw" id="a-t1-c-merge-option">/);
+  assert.match(html, /id="o-t1-c-merge-option-1" data-task="t1" data-ask="c-merge-option" data-opt="a-b"/);
+  // a Lavish comment on the block, its button, or a stamped anchor inside it resolves to the ask (task ids hold hyphens and "-c-" too)
+  assert.equal(extractTarget("#a-t1-c-merge-option > .opts > button", { tasks: ["t1"] }), "t-t1#c-merge-option");
+  assert.equal(extractTarget("div#a-t1-c-merge-option > div.opts > div.opt-row > button#o-t1-c-merge-option-2", { tasks: ["t1"] }), "t-t1#c-merge-option");
+  assert.equal(extractTarget("div#k_a-t1-c-merge-option_0-3 > p", { tasks: ["t1"] }), "t-t1#c-merge-option");
+  assert.equal(extractTarget("#a-canvas-context-merge-plan-c-merge-option > div", { tasks: ["canvas-context-merge-plan"] }), "t-canvas-context-merge-plan#c-merge-option");
+  assert.equal(extractTarget("#o-fix-c-thing-c-q-c-2-1", { tasks: ["fix-c-thing"] }), "t-fix-c-thing#c-q-c-2", "the split is the one that names a known task");
+  assert.equal(extractTarget("#a-nope-c-merge-option", { tasks: ["t1"] }), "page");
+  assert.deepEqual(parseTarget("t-canvas-fix#c-merge-option"), { task: "canvas-fix", ask: "c-merge-option" });
+  // the click is parsed, kept as a pick, and named for the first mate (bin/page canvas-answer takes the id without the "c-")
+  const prompt = { prompt: 'Picked: a-b\n\nContext data:\n{"kind":"ask-choice","task":"t1","ask":"c-merge-option","option":"a-b"}' };
+  assert.deepEqual(parseChoice(prompt)?.choice, { task: "t1", ask: "c-merge-option", option: "a-b" });
+  const lookup = (_t: string, ask: string) => (ask === "c-merge-option" ? { text: "How?", options: ["a-b", "b"] } : undefined);
+  const [ok] = newEntries("demo", [prompt] as any, { tasks: ["t1"] }, NOW, lookup);
+  assert.equal(ok.target, "t-t1#c-merge-option");
+  assert.equal(ok.stale, undefined);
+  const msg = formatMessage("demo", [{ ...ok, id: "c-1" }], (t) => (parseTarget(t) ? { title: "Build the API", asks: [] } : undefined));
+  assert.match(msg, /picked option "a-b" for canvas ask merge-option \("How\?"\)/);
+  // the stored pick moves the stage to "with the first mate" and the card shows it as sent
+  const picked = card(render(project([T], [{ ...ok, id: "c-1", at: "2026-10-24T11:50:00Z", delivered: true, answered: false }]), data({}, s)).live);
+  assert.match(picked, /Sent to the first mate/);
+  assert.match(picked, /You picked <b>a-b<\/b>/);
 });
 
 test("a curated ask with a ref replaces the raw one; once the canvas ask is gone it says so", () => {

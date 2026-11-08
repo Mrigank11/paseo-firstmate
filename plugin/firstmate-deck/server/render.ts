@@ -212,7 +212,9 @@ function rawAsks(t: Task, s: FmSummary, comments: TrailComment[], now: Date, act
     const q = `<div class="ask"><b>Your call:</b> ${inline(a.question)}${a.blocking ? ` <span class="fl">blocking</span>` : ""}</div>`;
     let body: string;
     if (!SAFE_ASK.test(a.id) || a.options.length < 2) {
-      body = `${q}<div class="m">Answer this one on the canvas (“Open canvas”).</div>`;
+      // say why there are no buttons, and link the canvas itself (the card's "Open canvas" link may sit far below)
+      const why = a.options.length < 2 ? `this question has ${a.options.length === 1 ? "only one option" : "no options"}` : `its id “${cut(a.id, 40)}” is not one the page can carry in a button`;
+      body = `${q}<div class="m">No buttons here: ${why}. <a href="${esc(s.url)}">Answer it on the canvas ↗</a>, or comment on this card.</div>`;
     } else {
       const btns = a.options.map((o, k) => {
         const on = picked !== undefined && o.value === picked;
