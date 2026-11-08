@@ -33,12 +33,12 @@ Which provider and model a lane runs is the profile's business, never this skill
 
 ## 3. Materializing a lane or profile into create_agent
 
-A lane is a Paseo agent profile: `profile:fm-planning`, `profile:fm-contributor`, `profile:fm-fallback`. `config/paseo-profiles.json` is the only place a provider, model, mode or thinking level is written (see `docs/PROFILES.md`). There is no `profile` param on `mcp__paseo__create_agent`, so the one-profile read is:
+A lane is a Paseo agent profile: `profile:fm-planning`, `profile:fm-contributor`, `profile:fm-fallback`. The daemon's profile (what `list_profiles` returns) is the only authority on provider, model, mode and thinking level; `config/paseo-profiles.json` is just its seed and snapshot (see `docs/PROFILES.md`). Never read the file to decide how to launch. There is no `profile` param on `mcp__paseo__create_agent`, so the one-profile read is:
 
 1. Call `mcp__paseo__list_profiles` and find the profile by `id`.
 2. Verify the fields you need exist (`provider`, `model`, `modeId`; `thinkingOptionId` and `featureValues` when present). Never guess a value.
 3. Copy: `provider` + `model` → `provider` (`<provider>/<model>`), `modeId` → `settings.modeId`, `thinkingOptionId` → `settings.thinkingOptionId`, `featureValues` → `settings.features`. `notes` says when to use it.
-4. If the profile is missing or a field is rejected, **stop and tell the captain** (`bin/page profiles --check` names the drift). Do not substitute a raw spec or another provider. Use `inspect_provider` only to learn why a value was rejected.
+4. If the profile is missing or a field is rejected, **stop and tell the captain** (`bin/page profiles --check` names the drift; a stale repo file is not a reason to stop, the daemon is right). Do not substitute a raw spec or another provider. Use `inspect_provider` only to learn why a value was rejected.
 
 A raw `provider/model · mode · features` spec is legal only as a per-task captain override (section 1.1).
 

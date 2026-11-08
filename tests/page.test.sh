@@ -536,7 +536,7 @@ HOME="$T/fakehome" PASEO_HOME="$T/fakehome/.paseo" "$P" profiles >/dev/null 2>&1
 out="$(PASEO_HOME="$T/ph" "$P" profiles)"
 grep -q "+ fm-planning: add" <<<"$out" && grep -q "dry run" <<<"$out" && [[ ! -f "$T/profiles.json" ]] && ok "profiles dry run lists the adds and writes nothing" || bad "profiles dry run" "$out"
 echo '[{"id":"mine","name":"Mine","provider":"claude"},{"id":"fm-fallback","name":"old","provider":"claude"}]' >"$T/profiles.json"
-out="$(PASEO_HOME="$T/ph" "$P" profiles --apply)"
+out="$(PASEO_HOME="$T/ph" "$P" profiles --apply --overwrite)"
 eq "$(jq -r 'map(.id)|join(",")' "$T/profiles.json")" "mine,fm-planning,fm-contributor,fm-fallback" "profiles --apply merges by id and keeps the captain's own"
 eq "$(jq -r '.[]|select(.id=="fm-fallback")|.model' "$T/profiles.json")" claude-sonnet-5-5 "...and replaces a repo profile of the same id"
 grep -q "~ fm-fallback: update" <<<"$out" && ok "...and reports the update" || bad "update report" "$out"
@@ -565,7 +565,7 @@ cp "$T/profiles.json" "$T/before.json"
 out="$("$P" profiles --live)"
 grep -q "dry run" <<<"$out" && grep -q "state/backup" <<<"$out" && eq "$(jq -cS . "$T/profiles.json")" "$(jq -cS . "$T/before.json")" "--live dry run names the backup and writes nothing" || bad "live dry run" "$out"
 [[ ! -d "$T/root/state/backup" ]] && ok "...and made no backup" || bad "dry run made a backup"
-out="$("$P" profiles --live --apply --yes)"
+out="$("$P" profiles --live --apply --yes --overwrite)"
 bk="$(ls "$T/root/state/backup"/agent-profiles-*.json 2>/dev/null | head -1)"
 [[ -n "$bk" ]] && ok "--live --apply --yes saved a backup first" || bad "no backup" "$out"
 eq "$(jq -cS . "$bk")" "$(jq -cS . "$T/before.json")" "...which holds the pre-change profiles"
@@ -581,7 +581,7 @@ grep -q -- "--restore $bk" <<<"$out" && ok "...and printed the undo command" || 
 cp "$T/fakebin/paseo" "$T/paseo.real"
 sed 's|set) printf .*|set) : ;;|' "$T/paseo.real" >"$T/fakebin/paseo"; chmod +x "$T/fakebin/paseo"
 rm -rf "$T/root/state/backup"; cp "$T/before.json" "$T/profiles.json"
-"$P" profiles --live --apply --yes >/dev/null 2>&1 && bad "read-back mismatch fails" || ok "read-back mismatch exits non-zero"
+"$P" profiles --live --apply --yes --overwrite >/dev/null 2>&1 && bad "read-back mismatch fails" || ok "read-back mismatch exits non-zero"
 ls "$T/root/state/backup"/agent-profiles-*.json >/dev/null 2>&1 && ok "...and the backup is kept" || bad "backup lost"
 cp "$T/paseo.real" "$T/fakebin/paseo"; chmod +x "$T/fakebin/paseo"
 
@@ -596,16 +596,16 @@ cat >"$T/root/state/decisions.md" <<'D'
 **Lane assignment** (role → lane):
 - first mate itself → `planning`
 D
-"$P" profiles --live --apply --yes >/dev/null
+"$P" profiles --live --apply --yes --overwrite >/dev/null
 out="$(PASEO_HOME="$PASEO_LIVE_HOME" "$P" profiles --check)"; rc=$?
 [[ $rc -eq 0 ]] && grep -q "profiles: in sync" <<<"$out" && grep -q "ok    lane planning -> profile:fm-planning" <<<"$out" && ok "--check: in sync is exit 0, lanes resolve" || bad "check in sync" "rc=$rc $out"
 jq '(.[]|select(.id=="fm-planning")|.thinkingOptionId)="low"' "$T/profiles.json" >"$T/p2" && mv "$T/p2" "$T/profiles.json"
 out="$("$P" profiles --check)"; rc=$?
-[[ $rc -eq 1 ]] && grep -q "DRIFT fm-planning: thinkingOptionId low vs medium" <<<"$out" && ok "--check: a changed field is exit 1 and names the field" || bad "check field drift" "rc=$rc $out"
+[[ $rc -eq 1 ]] && grep -q "STALE fm-planning: thinkingOptionId low (daemon) vs medium (repo file)" <<<"$out" && ok "--check: a changed field is exit 1 and names the field" || bad "check field drift" "rc=$rc $out"
 jq 'map(select(.id!="fm-contributor"))' "$T/profiles.json" >"$T/p2" && mv "$T/p2" "$T/profiles.json"
 out="$("$P" profiles --check)"; rc=$?
 [[ $rc -eq 1 ]] && grep -q "DRIFT fm-contributor: missing in the daemon" <<<"$out" && grep -q "DRIFT lane contributor: profile:fm-contributor is not in the daemon" <<<"$out" && ok "--check: a profile missing in the daemon is exit 1 (and its lane)" || bad "check missing" "rc=$rc $out"
-"$P" profiles --live --apply --yes >/dev/null
+"$P" profiles --live --apply --yes --overwrite >/dev/null
 sed -i 's|`profile:fm-contributor`|`profile:fm-nope`|; s|`profile:fm-fallback`|`claude/claude-sonnet-5-5` · bypassPermissions|' "$T/root/state/decisions.md"
 out="$("$P" profiles --check)"; rc=$?
 [[ $rc -eq 1 ]] && grep -q "lane contributor: profile:fm-nope is not in config/paseo-profiles.json" <<<"$out" && grep -q "DRIFT lane fallback: written as a raw spec" <<<"$out" && ok "--check: an unknown profile and a raw-spec lane are flagged" || bad "check lanes" "rc=$rc $out"
@@ -616,6 +616,24 @@ rm -f "$T/root/state/decisions.md"
 out="$("$P" profiles --check)"; rc=$?
 [[ $rc -eq 0 ]] && ok "--check with no decisions.md just compares profiles" || bad "check without decisions" "$out"
 eq "$("$P" status 2>/dev/null | tail -1)" "profiles: in sync" "status ends with the drift verdict"
+
+# daemon is the source of truth: --pull, the "repo is stale" check, and no silent overwrite
+export PASEO_PROFILES_FILE="$T/repo-profiles.json"; cp "$PRO" "$PASEO_PROFILES_FILE"
+"$P" profiles --live --apply --yes --overwrite >/dev/null
+jq '(.[]|select(.id=="fm-planning")|.model)="claude-edited" | . + [{"id":"fm-new","name":"New","provider":"claude"},{"id":"mine","name":"Mine","provider":"claude"}]' "$T/profiles.json" >"$T/p2" && mv "$T/p2" "$T/profiles.json"
+out="$("$P" profiles --check)"; rc=$?
+[[ $rc -eq 1 ]] && grep -q "STALE fm-planning: model claude-edited (daemon) vs claude-opus-5-5 (repo file)" <<<"$out" && grep -q "STALE fm-new: in the daemon, not in the repo file" <<<"$out" && grep -q "repo file is behind the daemon.*profiles --pull" <<<"$out" && ok "--check: a Paseo edit reads as a stale repo file and prints the fix" || bad "check stale" "rc=$rc $out"
+"$P" profiles --live --apply --yes >/dev/null 2>&1 && bad "--apply refuses to drop a Paseo edit" || ok "--apply refuses to drop a Paseo edit without --overwrite"
+eq "$(jq -r '.[]|select(.id=="fm-planning")|.model' "$T/profiles.json")" claude-edited "...and the daemon still holds the edit"
+"$P" profiles --pull --apply >/dev/null 2>&1 && bad "--pull takes no other flag" || ok "--pull takes no other flag"
+out="$("$P" profiles --pull)"
+eq "$(jq -r '.[]|select(.id=="fm-planning")|.model' "$PASEO_PROFILES_FILE")" claude-edited "--pull copies the Paseo edit into the repo file"
+eq "$(jq -r 'map(.id)|join(",")' "$PASEO_PROFILES_FILE")" "fm-planning,fm-contributor,fm-fallback,fm-new" "...adds a new fm-* profile and skips the hand-made one"
+grep -q "~ fm-planning: updated (model)" <<<"$out" && grep -q "+ fm-new" <<<"$out" && ok "...and reports each change" || bad "pull report" "$out"
+out="$("$P" profiles --check)"; rc=$?
+[[ $rc -eq 0 ]] && ok "--check is in sync after --pull" || bad "check after pull" "rc=$rc $out"
+grep -q "already matches" <<<"$("$P" profiles --pull)" && ok "--pull is idempotent" || bad "pull idempotent"
+unset PASEO_PROFILES_FILE
 unset PASEO_LIVE_HOME
 
 echo; echo "page.test.sh: $pass passed, $fail failed"
