@@ -3,6 +3,7 @@
 import { randomBytes } from "node:crypto";
 import { copyFileSync, mkdirSync } from "node:fs";
 import { basename, join } from "node:path";
+import { CANVAS_ASK_BODY } from "./ask-id.ts";
 import { askIdOf, canvasAskIdOf, type Choice, type InboxEntry } from "./store.ts";
 import type { Prompt } from "./toon.ts";
 import { extractTarget, type Known } from "./target.ts";
@@ -106,7 +107,7 @@ export type Describe = (target: string) => TargetInfo | undefined;
 
 /** `t-<task>` or `t-<task>#<askId>` -> the task id and, for an ask target, the ask id ("a2"). */
 export function parseTarget(target: string): { task: string; ask?: string } | null {
-  const m = /^t-(.+?)(?:#(a[1-9][0-9]*|c-[A-Za-z0-9_]+))?$/.exec(target);
+  const m = new RegExp(`^t-(.+?)(?:#(a[1-9][0-9]*|c-${CANVAS_ASK_BODY}))?$`).exec(target);
   return m ? { task: m[1], ask: m[2] } : null;
 }
 

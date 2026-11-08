@@ -4,6 +4,7 @@
 import { randomBytes } from "node:crypto";
 import { appendFileSync, existsSync, mkdirSync, readFileSync, renameSync, rmdirSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
+import { CANVAS_ASK_BODY } from "./ask-id.ts";
 
 export type InboxEntry = {
   id: string;
@@ -26,7 +27,7 @@ export type Choice = { task: string; ask: string; option: string; askText?: stri
 /** An ask id as bin/fleet writes it. Older inbox entries and older pages used the 1-based index, which is read as "a<n>". */
 export const ASK_ID = /^a[1-9][0-9]*$/;
 /** A question on the crew's canvas, as a page option click names it: "c-<canvas ask id>". Never a registry ask, so `askIdOf` refuses it. */
-export const CANVAS_ASK = /^c-[A-Za-z0-9_]+$/;
+export const CANVAS_ASK = new RegExp(`^c-${CANVAS_ASK_BODY}$`);
 export const canvasAskIdOf = (v: unknown): string | null => (typeof v === "string" && CANVAS_ASK.test(v) ? v : null);
 export function askIdOf(v: unknown): string | null {
   if (typeof v === "string") return ASK_ID.test(v) ? v : null;

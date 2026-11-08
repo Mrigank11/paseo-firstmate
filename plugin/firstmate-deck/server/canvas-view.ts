@@ -1,10 +1,11 @@
 // Canvas facts the stage engine and the card read, derived from agent-canvas summaries. Pure, no I/O.
+import { CANVAS_ASK_BODY } from "./ask-id.ts";
 import type { CanvasInput } from "./stage.ts";
 import type { FmSummary } from "./canvas-port.ts";
 import type { TrailComment } from "./state.ts";
 
 /** The canvas ask ids the page can offer buttons for: they ride in an element id and a comment target (`c-<id>`). */
-export const SAFE_ASK = /^[A-Za-z0-9_]+$/;
+export const SAFE_ASK = new RegExp(`^${CANVAS_ASK_BODY}$`);
 
 /**
  * The captain's click on a canvas ask that is still waiting for the first mate (comment on `t-<task>#c-<id>`, a pick, not
