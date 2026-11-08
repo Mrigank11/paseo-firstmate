@@ -4,6 +4,8 @@
 // <details> state lives in memory, mirrored to localStorage when allowed, else to window.name. Read marks ("Done,
 // unread" cards) live in the same place (S._r) and are shared between browsers through the plugin's marks endpoint
 // (marksUrl); when it cannot be reached the page simply keeps them local and shows nothing about it.
+import { ANCHOR_JS } from "./anchors.ts";
+
 export function pageScript(project: string, liveFile: string, tickSeconds: number, marksUrl = ""): string {
   const j = (v: unknown) => JSON.stringify(v).replace(/</g, "\\u003c");
   return `(function(){
@@ -16,6 +18,7 @@ export function pageScript(project: string, liveFile: string, tickSeconds: numbe
   // small per-page preferences other scripts keep in this state (the task navigator's fold): saved like the rest, synced
   window.__fdPref=function(k,v){if(arguments.length<2)return S[k];S[k]=v;save();push()};
   window.__fdPrefKeys=function(p){return Object.keys(S).filter(function(k){return k.indexOf(p)===0&&S[k]===1})};
+  ${ANCHOR_JS}
   function live(){return document.getElementById("live")}
   function snapshot(){var el=live();if(!el)return;el.querySelectorAll("details[id]").forEach(function(d){S[d.id]=d.open?1:0});save()}
   function restore(root){root.querySelectorAll("details[id]").forEach(function(d){if(d.id in S)d.open=!!S[d.id]})}
@@ -132,12 +135,12 @@ export function pageScript(project: string, liveFile: string, tickSeconds: numbe
       // Morph, do not replace: build the new block off-screen, bring it in line with what this browser has done to the
       // page (open folds, read marks, picked options), then let the morph touch only the nodes that differ. Nothing
       // unchanged is re-created or moved, so embedded canvas frames do not reload and scroll, hover and selection stay.
-      var nx=document.createElement("div");nx.innerHTML=html;restore(nx);arrange(nx);reapply(nx);
+      var nx=document.createElement("div");nx.innerHTML=html;restore(nx);arrange(nx);reapply(nx);anchorIds(nx);
       I.morph(el,nx,{morphStyle:"innerHTML",restoreFocus:true,callbacks:{
         beforeAttributeUpdated:function(a,n){if(a==="open"&&n.id&&n.id in S)return false},
         beforeNodeMorphed:function(n,m){if(n.nodeName==="IFRAME"&&m.nodeName==="IFRAME"&&n.getAttribute("srcdoc")===m.getAttribute("srcdoc"))return false}}});
       arrange();fill();refocus(fk);if(window.scrollY!==y)window.scrollTo(0,y);return}
-    el.innerHTML=M+"START-->"+html+M+"END-->";restore(el);arrange();reapply(el);fill();refocus(fk);window.scrollTo(0,y)};
+    el.innerHTML=M+"START-->"+html+M+"END-->";restore(el);arrange();reapply(el);anchorIds(el);fill();refocus(fk);window.scrollTo(0,y)};
   function tick(){var s=document.createElement("script");s.src=F+"?t="+Date.now();s.onload=s.onerror=function(){s.remove()};document.head.appendChild(s)}
   tick();setInterval(tick,${Math.max(1, Math.round(tickSeconds)) * 1000});
 })();`;

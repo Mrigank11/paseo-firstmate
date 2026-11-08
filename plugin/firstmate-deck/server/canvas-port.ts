@@ -13,6 +13,8 @@ export type FmSummary = {
   title: string;
   verdict: { label: string; flags: { signal: string; text: string }[]; needsYou: boolean };
   bluf: string;
+  /** The crew's "You asked / I did" block (agent-canvas lifts it out of the canvas); null when it has none. */
+  recap?: { asked: string; did: string } | null;
   steps: { done: number; total: number; current: string | null };
   openAsks: { id: string; question: string; options: { value: string; label: string }[]; blocking: boolean; pending?: string }[];
   updatedAt: number | null;

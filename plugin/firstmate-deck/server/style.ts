@@ -1,5 +1,5 @@
 // Page stylesheet, ported from lh-dev-status.html.
-export const CSS = String.raw`:root{--bg:#f7f6f2;--fg:#1c1b19;--mut:#625f57;--line:#e4e0d4;--soft:#f1efe8;--you:#b4410c;--youbg:#fff4ea;--run:#1d4ed8;--ok:#15803d;--park:#665f58}
+const BASE = String.raw`:root{--ts:1.1;--bg:#f7f6f2;--fg:#1c1b19;--mut:#625f57;--line:#e4e0d4;--soft:#f1efe8;--you:#b4410c;--youbg:#fff4ea;--run:#1d4ed8;--ok:#15803d;--park:#665f58}
 *,*::before,*::after{box-sizing:border-box}
 html,body{background:var(--bg);color:var(--fg);margin:0;font:15px/1.5 ui-sans-serif,system-ui,sans-serif;-webkit-text-size-adjust:100%}
 ::selection{background:#fde6cf}
@@ -55,6 +55,11 @@ details.stp>summary.cur::before{width:5px;height:5px;margin:0 8px 2px 1px}
 .nt{font-size:13.5px;margin-top:4px;max-width:80ch}
 .dp{font-size:12.5px;color:var(--mut);margin-top:4px}.dp a{color:var(--mut)}
 .s-done .ttl{font-weight:500}
+/* recap strip: what the captain asked and what the crew did, on top of a returning card */
+.recap{margin:8px 0 4px;padding:7px 12px;border-left:3px solid var(--mut);background:var(--soft);border-radius:0 6px 6px 0;max-width:80ch}
+.rc-row{display:flex;gap:10px;align-items:baseline;font-size:13px;padding:2px 0}
+.rc-k{flex:none;width:118px;font-size:11px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;color:var(--mut);font-variant-numeric:tabular-nums}
+.rc-v{min-width:0;overflow-wrap:anywhere}.rc-new .rc-v i{font-style:normal;font-weight:600}
 /* comment trail + ask options */
 .trail{display:flex;flex-wrap:wrap;align-items:baseline;gap:2px 8px;margin:6px 0 2px;font-size:13px;color:var(--mut);max-width:80ch}
 .trail-slot:empty{display:none}.trail-slot .trail{margin:8px 0 0}
@@ -195,3 +200,18 @@ body.tn-focus .task.tn-sel .cv.has-full .cv-c{display:none}
 .cv-links{display:flex;flex-wrap:wrap;gap:4px 14px;margin-top:8px;font-size:12.5px}.cv-open{font-weight:600}.cv-links .open{margin-left:0}
 .askbox.raw{border-left:3px solid #f3d5bc;padding-left:10px;margin-top:8px}.cv-down{background:#fef3c7;color:#92400e}
 @media (max-width:560px){.open{margin-left:0}main{padding:18px 14px 60px}nav{margin:12px -14px 0;padding:8px 14px}h1{font-size:20px}.tt{flex-direction:column;gap:4px}.s-you{padding:12px}.tw table{min-width:480px}}`;
+
+
+export const CSS = scaleText(BASE);
+
+/**
+ * The one text-size knob. Every px font size in the page and in the canvases embedded in it is rewritten to
+ * `calc(Npx * var(--ts))`, so the text grows by --ts while widths, padding and the px media queries stay as they are:
+ * the layout at a given window width is the 100% layout, unlike browser zoom, which shrinks the viewport and trips the
+ * narrow breakpoints. The Lavish page and canvas CSS both pass through this.
+ */
+export function scaleText(css: string): string {
+  return css
+    .replace(/(font-size:\s*)(\d*\.?\d+)px/g, (_, k: string, n: string) => `${k}calc(${n}px*var(--ts,1))`)
+    .replace(/(font:\s*(?:[a-z0-9-]+\s+)*?)(\d*\.?\d+)px(?=[\s\/;}])/g, (_, k: string, n: string) => `${k}calc(${n}px*var(--ts,1))`);
+}

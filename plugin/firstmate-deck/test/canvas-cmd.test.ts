@@ -68,15 +68,30 @@ test("canvas-snippet: the agent-canvas recipe for the configured port, the shape
   assert.match(ship.out, /### What your canvas must say[\s\S]*BLUF first[\s\S]*Rewrite, never append[\s\S]*Pick the visual[\s\S]*Code detail only when[\s\S]*### Set your canvas first/);
   // the asking structure: the seven parts in the captain's order, with the section ids agent-canvas checks, then only closed folds
   const at = (needle: string) => { const i = ship.out.indexOf(needle, ship.out.indexOf("### Questions for the captain")); assert.ok(i > 0, needle); return i; };
-  const order = ['<Bluf>', 'id="issue"', 'id="impact"', 'id="context"', 'id="changes"', 'id="fix"', '<Ask id="q1"', '<Collapse id="done"'].map(at);
+  const order = ['<Bluf>', 'id="recap"', 'id="issue"', 'id="impact"', 'id="context"', 'id="changes"', 'id="fix"', '<Ask id="q1"', '<Collapse id="done"'].map(at);
   assert.deepEqual(order, [...order].sort((a, b) => a - b));
-  assert.match(ship.out, /rewrite the canvas into this order[\s\S]*BLUF → issue → impact → context and components → changes by component[\s\S]*fix plan → the Ask/);
+  assert.match(ship.out, /rewrite the canvas into this order[\s\S]*BLUF → recap → issue → impact → context and components → changes by component[\s\S]*fix plan → the Ask/);
   assert.match(ship.out, /<Collapse id="done" title="Done so far">/);
+  assert.match(ship.out, /\*\*Recap block, required\.\*\*[\s\S]*You asked:[\s\S]*I did:/);
   assert.match(ship.out, /Do not append a new block/);
   const scout = await run(["snippet", r.root, "scout"], env);
   assert.match(scout.out, /<Markdown id="findings">/);
   assert.doesNotMatch(scout.out, /id="implement"/);
   assert.notEqual((await run(["snippet", r.root, "chore"], env)).code, 0, "an unknown shape is refused");
+  // --kind: issue (or none) keeps today's text byte for byte; any other kind is free-form
+  const issue = await run(["snippet", r.root, "ship", "--kind", "issue"], env);
+  assert.equal(issue.out, ship.out, "kind=issue is today's snippet");
+  for (const kind of ["plan", "research", "explainer", "review"]) {
+    const free = await run(["snippet", r.root, "scout", "--kind", kind], env);
+    assert.equal(free.code, 0, free.err);
+    assert.match(free.out, new RegExp(`free-form ${kind} canvas`));
+    assert.match(free.out, /RECIPE port 6791/);
+    assert.match(free.out, /<Markdown id="findings">/);
+    assert.match(free.out, /You asked:[\s\S]*I did:/);
+    assert.match(free.out, /BLOCKED: canvas ask <id>/);
+    assert.doesNotMatch(free.out, /BLUF → recap → issue|id="impact"|Recap block, required|needs_you/);
+  }
+  assert.notEqual((await run(["snippet", r.root, "ship", "--kind", "bogus"], env)).code, 0, "an unknown kind is refused");
   assert.notEqual((await run(["snippet", r.root, "ship"], { ...r.env, AGENT_CANVAS_DIR: "" })).code, 0, "no canvasDir: say so");
   r.stop();
 });

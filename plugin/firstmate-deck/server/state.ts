@@ -1,6 +1,7 @@
 // Read-only loader: first-mate state on disk -> a typed model of one project's status page.
 // Missing files mean empty values. Malformed JSON throws a clear Error naming the file.
-import { existsSync, readdirSync, readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
+import { recapOfSource, type Recap } from "./recap.ts";
 import { basename, join, resolve, sep } from "node:path";
 import { cleanUi, type Seen } from "./marks.ts";
 import { askIdOf, canvasAskIdOf } from "./store.ts";
@@ -68,6 +69,9 @@ export type Task = {
   answered: AnsweredAsk[];
   /** state/tasks/<id>/canvas.final.html (the crew canvas snapshot `bin/page canvas-snapshot` keeps; "" when absent). */
   canvasFinal: string;
+  /** The crew's "You asked / I did" recap from state/tasks/<id>/canvas.final.tsx (null when absent), and when that file was written (ms; 0 when absent). */
+  canvasRecap: Recap | null;
+  canvasFinalAt: number;
   /** state/tasks/<id>/report.md exists: the page points at it. */
   hasReport: boolean;
   /** `since` as epoch ms (0 when absent): what the Done group sorts by. */
@@ -83,6 +87,8 @@ export type AnsweredAsk = { id: string; text: string; since?: string; answeredAt
 export type Section = { name: string; kind: "md" | "html"; content: string };
 
 /** One captain comment from inbox.jsonl, as the page trail shows it. */
+const mtimeMs = (p: string): number => { try { return statSync(p).mtimeMs; } catch { return 0; } };
+
 export type TrailComment = {
   id: string;
   at: string;
@@ -267,6 +273,8 @@ function toTask(raw: any, root: string, label: string, inbox: Comment[] = [], ar
     branch: raw.branch || undefined,
     card: slug ? readText(join(root, "state", "tasks", raw.id, "card.md")) : "",
     canvasFinal: slug ? readText(join(root, "state", "tasks", raw.id, "canvas.final.html")) : "",
+    canvasRecap: slug ? recapOfSource(readText(join(root, "state", "tasks", raw.id, "canvas.final.tsx"))) : null,
+    canvasFinalAt: slug ? mtimeMs(join(root, "state", "tasks", raw.id, "canvas.final.tsx")) : 0,
     answered: loadAnswered(root, raw.id).filter((a) => !answeredIds.has(a.id)),
     hasReport: slug && existsSync(join(root, "state", "tasks", raw.id, "report.md")),
     updatedMs: Date.parse(raw.since ?? (archived ? raw.lastEvent : "") ?? "") || 0,

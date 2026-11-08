@@ -11,6 +11,7 @@ import { coldLabelled } from "./cold-agents.ts";
 import { CliPort, type Exec } from "./paseo-cli.ts";
 import { NO_CLAIM_MESSAGE, NoFirstMateError, PortSelector, resolveFirstMate, sendToFirstMate, type CommentRowData, type FirstMate, type PortAgent } from "./paseo-port.ts";
 import { Relay, newEntries, parseTarget, type AskLookup, type TargetInfo } from "./relay.ts";
+import type { Known } from "./target.ts";
 import { CanvasPort, type FmSummary } from "./canvas-port.ts";
 import { liveJs, renderProject, stageOf, stagesOf, type AgentView, type Banner } from "./render.ts";
 import { currentAgent, type LabeledAgent } from "./stage.ts";
@@ -903,9 +904,9 @@ export class Deck {
   // ---------- comments ----------
 
   ingest(project: string, prompts: { prompt: string; selector?: string }[]): void {
-    let known = { tasks: [] as string[], sections: [] as string[] };
+    let known: Known = { tasks: [] as string[], sections: [] as string[] };
     const model = this.load(project);
-    if (model) known = { tasks: [...model.tasks, ...model.archive].map((t) => t.id), sections: model.sections.map((s) => s.name) };
+    if (model) known = { tasks: [...model.tasks, ...model.archive].map((t) => t.id), sections: model.sections.map((s) => s.name), agents: this.agentTasks() };
     // a click is checked against the ask as it is NOW: the ask must still be open and the option one of its own
     const lookup: AskLookup = (task, ask) => {
       if (ask.startsWith("c-")) { // a question on the crew's canvas: its live text and option values
@@ -917,7 +918,7 @@ export class Deck {
       const a = model?.tasks.find((t) => t.id === task)?.asks.find((x) => x.id === ask);
       return a && { text: a.text, options: a.options };
     };
-    const entries = newEntries(project, prompts as any, known, new Date(), lookup);
+    const entries = newEntries(project, prompts as any, known, new Date(), lookup, join(projectDir(this.cfg.root, project), "attachments"));
     // Inbox first: if anything below fails, the comments are on disk and get retried at the next start.
     const file = inboxPath(this.cfg.root, project);
     appendInbox(file, entries);
@@ -955,13 +956,26 @@ export class Deck {
   }
 
   /** The task title and open ask texts behind a comment target, so the relayed line needs no lookup. */
+  /** Crew agent id -> its task, for the ids a card's canvas embed carries (target.ts). */
+  private agentTasks(): Record<string, string> {
+    const out: Record<string, string> = {};
+    for (const [task, ags] of this.labeled) for (const a of ags) out[a.id] = task;
+    return out;
+  }
+
   private describeTarget(project: string, target: string): TargetInfo | undefined {
     const at = parseTarget(target);
     if (!at) return undefined;
     if (!this.memo || this.memo.project !== project || Date.now() - this.memo.at > 500) this.memo = { project, at: Date.now(), model: this.load(project) };
     const m = this.memo.model;
     const t = m && [...m.tasks, ...m.archive].find((x) => x.id === at.task);
-    return t ? { title: plainTitle(t), asks: t.asks.map((a) => ({ id: a.id, text: a.text })) } : undefined;
+    if (!t) return undefined;
+    // the crew's open canvas questions that no registry ask mirrors (those are listed above as registry asks)
+    const aid = currentAgent(this.labeled.get(t.id) ?? [])?.id;
+    const canvasAsks = (aid ? this.canvas.summary(aid)?.openAsks ?? [] : [])
+      .filter((a) => !t.asks.some((x) => x.ref?.block === a.id))
+      .map((a) => ({ id: a.id, text: a.question }));
+    return { title: plainTitle(t), asks: t.asks.map((a) => ({ id: a.id, text: a.text })), ...(canvasAsks.length ? { canvasAsks } : {}) };
   }
 
   // ---------- timeline rows that still say "awaiting reply" (kept in page.json so a reload does not forget them) ----------

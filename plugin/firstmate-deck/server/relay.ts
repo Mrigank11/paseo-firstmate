@@ -1,6 +1,8 @@
 // Delivery of page comments to the first mate. Entries are already in inbox.jsonl when they reach the relay.
 // Batches arriving within BATCH_MS (300 ms: Lavish already hands over one Send as one poll result) become one message; a failed send retries at 2 s, 10 s, 30 s, then every 60 s.
 import { randomBytes } from "node:crypto";
+import { copyFileSync, mkdirSync } from "node:fs";
+import { basename, join } from "node:path";
 import { askIdOf, canvasAskIdOf, type Choice, type InboxEntry } from "./store.ts";
 import type { Prompt } from "./toon.ts";
 import { extractTarget, type Known } from "./target.ts";
@@ -35,11 +37,44 @@ export function parseChoice(p: Prompt): { choice: Choice; text: string } | null 
 /** What the plugin knows about an ask when a click arrives: its text and options, or undefined when it is not open. */
 export type AskLookup = (task: string, ask: string) => { text: string; options?: string[] } | undefined;
 
-export function newEntries(project: string, prompts: Prompt[], known: Known, now = new Date(), lookup?: AskLookup): InboxEntry[] {
-  return prompts.map((p) => {
+type Attachment = { type?: string; path: string; mime?: string; width?: number; height?: number; [k: string]: unknown };
+
+/** The attachments Lavish put on a prompt (`prompt.attachments`), minus anything malformed. */
+function attachmentsOf(p: unknown): Attachment[] {
+  const a = (p as any)?.attachments;
+  return Array.isArray(a) ? a.filter((x) => x && typeof x.path === "string" && x.path) : [];
+}
+
+/**
+ * Lavish deletes an upload an hour after it hands the prompt over, so each attachment is copied into `dir`
+ * (state/projects/<p>/attachments/) and the prompt is rewritten to point at the copy. A file that cannot be copied
+ * keeps its original path. Returns a new prompt; the input is not touched.
+ */
+export function keepAttachments(p: Prompt, dir: string, id: string): Prompt {
+  const list = attachmentsOf(p);
+  if (!list.length) return p;
+  let made = false;
+  const kept = (p as any).attachments.map((a: any, i: number) => {
+    if (!list.includes(a)) return a;
+    try {
+      if (!made) { mkdirSync(dir, { recursive: true }); made = true; }
+      const dest = join(dir, `${id}-${i + 1}-${basename(a.path).replace(/[^A-Za-z0-9._-]/g, "_")}`);
+      copyFileSync(a.path, dest);
+      return { ...a, path: dest, original: a.path };
+    } catch {
+      return a;
+    }
+  });
+  return { ...p, attachments: kept };
+}
+
+export function newEntries(project: string, prompts: Prompt[], known: Known, now = new Date(), lookup?: AskLookup, attachDir?: string): InboxEntry[] {
+  return prompts.map((p0) => {
+    const id = `c-${now.getTime().toString(36)}-${randomBytes(3).toString("hex")}`;
+    const p = attachDir ? keepAttachments(p0, attachDir, id) : p0;
     const picked = parseChoice(p);
     const base = {
-      id: `c-${now.getTime().toString(36)}-${randomBytes(3).toString("hex")}`,
+      id,
       at: now.toISOString(),
       project,
       prompt: p,
@@ -66,7 +101,7 @@ const oneLine = (s: string) => s.replace(/\s+/g, " ").trim();
 const brief = (s: string, n = 100) => { const t = oneLine(s).replace(/"/g, "'"); return t.length > n ? t.slice(0, n - 1) + "…" : t; };
 
 /** What the first mate needs to know about a comment's target without looking anything up. */
-export type TargetInfo = { title: string; asks: { id: string; text: string }[] };
+export type TargetInfo = { title: string; asks: { id: string; text: string }[]; /** Questions open on the crew's own canvas (ids without the "c-"). */ canvasAsks?: { id: string; text: string }[] };
 export type Describe = (target: string) => TargetInfo | undefined;
 
 /** `t-<task>` or `t-<task>#<askId>` -> the task id and, for an ask target, the ask id ("a2"). */
@@ -84,7 +119,18 @@ export const CANVAS_PICK_LINE = "A canvas ask is a question on the crew's own ca
  *   - [t-pick-db · "Choose the database" · ask a1: "Postgres or SQLite?"] (c-abc123) "<text>"
  * The bracket names the target, the task title and the open ask text(s); the parenthesis is the inbox comment id.
  */
-type Line = Pick<InboxEntry, "target" | "text" | "choice" | "stale"> & { id?: string };
+type Line = Pick<InboxEntry, "target" | "text" | "choice" | "stale"> & { id?: string; prompt?: unknown };
+
+/** `[image: <path> (WxH)]` per attachment, so the first mate can open the file. */
+const attachmentTags = (e: Line) =>
+  attachmentsOf(e.prompt).map((a) => `[${a.type ?? "file"}: ${a.path}${a.width && a.height ? ` (${a.width}x${a.height})` : ""}]`);
+
+/** The text of the element the comment was made on (Lavish keeps up to 240 characters of it), "" for a freeform message. */
+const clickedText = (e: Line): string => {
+  const p = e.prompt as { selector?: unknown; text?: unknown } | undefined;
+  // a comment on the whole page (body/html) has no element worth quoting
+  return p && typeof p.selector === "string" && !/^(body|html)$/.test(p.selector) && p.selector && typeof p.text === "string" ? p.text : "";
+};
 
 export function formatMessage(project: string, entries: Line[], describe?: Describe): string {
   const onCanvas = (e: Line) => !!e.choice && e.choice.ask.startsWith("c-");
@@ -99,10 +145,19 @@ export function formatMessage(project: string, entries: Line[], describe?: Descr
       if (!e.choice) {
         const only = at?.ask;
         for (const a of info.asks) if ((only === undefined || only === a.id) && a.text) parts.push(`ask ${a.id}: "${brief(a.text)}"`);
+        for (const a of info.canvasAsks ?? []) if ((only === undefined || only === `c-${a.id}`) && a.text) parts.push(`canvas ask ${a.id}: "${brief(a.text)}"`);
       }
+    } else if (e.target === "page" && !e.choice) {
+      // a comment on an element that still could not be placed: say what was clicked, so it is not a bare "[page]"
+      const on = clickedText(e);
+      if (on) parts.push(`on "${brief(on, 80)}"`);
     }
     const id = e.id ? ` (${e.id})` : "";
-    if (!e.choice) return `- [${parts.join(" · ")}]${id} "${oneLine(e.text)}"`;
+    if (!e.choice) {
+      const tags = attachmentTags(e);
+      const text = oneLine(e.text);
+      return `- [${parts.join(" · ")}]${id} ${text || tags.length ? [text ? `"${text}"` : "(image only)", ...tags].join(" ") : '""'}`;
+    }
     // a question the crew put on its canvas (not a registry ask): named by its canvas id so it can be delivered without curating first
     const what = `option "${oneLine(e.choice.option)}" for ${onCanvas(e) ? `canvas ask ${e.choice.ask.slice(2)}` : `ask ${e.choice.ask}`}${e.choice.askText ? ` ("${oneLine(e.choice.askText)}")` : ""}`;
     return e.stale

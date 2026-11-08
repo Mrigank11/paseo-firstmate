@@ -147,3 +147,21 @@ test("a failing timeline row does not undo the delivery", async () => {
   assert.equal(relay.queued("p"), 0);
   mock.timers.reset();
 });
+
+test("the line lists the task's open canvas asks; a canvas-ask target names only its own; a bare 'page' quotes the clicked text", () => {
+  const info = { title: "Explainer", asks: [], canvasAsks: [{ id: "env1", text: "Which change?" }, { id: "env2", text: "Ship it?" }] };
+  const describe = () => info;
+  const both = formatMessage("p", [{ id: "c-1", target: "t-x", text: "hm" }], describe);
+  assert.match(both, /\[t-x · "Explainer" · canvas ask env1: "Which change\?" · canvas ask env2: "Ship it\?"\] \(c-1\) "hm"/);
+  const one = formatMessage("p", [{ id: "c-2", target: "t-x#c-env2", text: "hm" }], describe);
+  assert.match(one, /canvas ask env2: "Ship it\?"\]/);
+  assert.ok(!one.includes("env1"));
+  const quote = formatMessage("p", [
+    { id: "c-3", target: "page", text: "close this", prompt: { prompt: "close this", selector: "div > p", text: "Option   B\nonly" } },
+    { id: "c-4", target: "page", text: "hi", prompt: { prompt: "hi", selector: "body", text: "everything" } },
+    { id: "c-5", target: "page", text: "typed", prompt: { prompt: "typed" } },
+  ]);
+  assert.match(quote, /- \[page · on "Option B only"\] \(c-3\) "close this"/);
+  assert.match(quote, /- \[page\] \(c-4\) "hi"/);
+  assert.match(quote, /- \[page\] \(c-5\) "typed"/);
+});

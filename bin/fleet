@@ -23,7 +23,8 @@
 #   bin/fleet project <p>             every LIVE task of project <p>, any state (compact JSON, one per line)
 #   bin/fleet project <p> --archive [N]   last N (default 30) archive lines for project <p>
 #   bin/fleet asks                    every open ask across live tasks
-#   bin/fleet add <id> k=v ...        create a task (needs intent, shape, state); stamps since
+#   bin/fleet add <id> k=v ...        create a task (needs intent, shape, state; optional canvas_kind=issue|plan|research|explainer|review,
+#                                     absent = issue); stamps since
 #   bin/fleet set <id> k=v ...        update scalar fields
 #   bin/fleet ask <id> "<text>" [--context-file <path>] [--options "A|B|C"] [--ref <json>]
 #                                     append {id, text, since} to asks. The id ("a1", "a2", ...) is stable: assigned
@@ -37,9 +38,11 @@
 #                                     the captain's follow-up was answered); optionally replace its text
 #                                     (<=200 chars), context file and options, the way ask does
 #                                     (options are kept when --options is absent)
-#                                     The context file must hold these headings in this order (the canvas structure, see ask-template)
-#                                     or ask/reask refuse and list what is missing or out of order
-#   bin/fleet ask-template            print the context-file skeleton (BLUF, Issue, Impact, Context and components,
+#                                     The context file of an ISSUE task (canvas_kind=issue, or none) must hold these headings in this
+#                                     order (the canvas structure, see ask-template) or ask/reask refuse and list what is missing or out
+#                                     of order. A task with canvas_kind plan|research|explainer|review is free form: no heading check
+#   bin/fleet ask-template [<id>]     (no id, or an issue task: the seven headings; any other canvas_kind: a free-form note, no check)
+#                                     print the context-file skeleton (BLUF, Issue, Impact, Context and components,
 #                                     Changes by component, Fix plan, Ask) to fill in and pass as --context-file
 #   bin/fleet pending <id> <ask>      mark the ask as waiting on the first mate's follow-up (sets pendingSince):
 #                                     the page keeps it under "With the first mate" instead of Needs you.
@@ -89,10 +92,11 @@ TASKS="$STATE_DIR/tasks"
 
 STATES='["queued","active","parked","blocked","done","failed"]'
 SHAPES='["scout","ship"]'
+KINDS='["issue","plan","research","explainer","review"]'
 MAXLEN=200
 TITLEMAX=160
 SLUG_RE='^[a-z0-9][a-z0-9-]*$'
-SETTABLE="intent shape state branch pr project title order legacyId blocked_on"
+SETTABLE="intent shape state branch pr project title order legacyId blocked_on canvas_kind"
 # v1 run-state keys: Paseo's now (label fm.task), the log, the task folder, or computed. Named so the refusal can point at the new home.
 RUNSTATE_KEYS="status agentId workspaceId lastEvent notes preview provider"
 
@@ -131,13 +135,14 @@ atomic_jq() { # jq-args... — run jq filter, validate result, rename over fleet
 
 check_entry() { # id — validate enum + length invariants on one entry
   local id="$1"
-  jq -e --arg id "$1" --argjson st "$STATES" --argjson sh "$SHAPES" --argjson max "$MAXLEN" \
+  jq -e --arg id "$1" --argjson st "$STATES" --argjson sh "$SHAPES" --argjson kd "$KINDS" --argjson max "$MAXLEN" \
     --argjson tmax "$TITLEMAX" --arg re "$SLUG_RE" '
     (.tasks | map(select(.id == $id))[0]) as $t
     | (((($t.state) as $s | $st | index($s)) != null)
       and ((($t.project // "") | length == 0) or (($t.project | type) == "string" and ($t.project | test($re))))
       and ((($t.title // "") | length) <= $tmax)
       and ((($t.shape // "scout") as $h | $sh | index($h)) != null)
+      and ((($t.canvas_kind // "issue") as $k | $kd | index($k)) != null)
       and ((($t.blocked_on // "") | length) <= $max)
       and (($t.state != "blocked") or (($t.blocked_on // "") | length > 0))
       and (([$t.asks[]? .text | length] | all(. <= $max))))
@@ -146,16 +151,17 @@ check_entry() { # id — validate enum + length invariants on one entry
 
 # validate a fresh k=v object (from add/set) BEFORE touching the file
 check_obj() { # obj-json
-  jq -e --argjson st "$STATES" --argjson sh "$SHAPES" --argjson max "$MAXLEN" \
+  jq -e --argjson st "$STATES" --argjson sh "$SHAPES" --argjson kd "$KINDS" --argjson max "$MAXLEN" \
     --argjson tmax "$TITLEMAX" --arg re "$SLUG_RE" -n --argjson o "$1" '
     (((($o.state // null) as $s | if $s == null then true else ($st | index($s)) != null end))
       and ((($o.project // "") | length == 0) or ($o.project | test($re)))
       and ((($o.title // "") | length) <= $tmax)
       and ((($o.shape // null) as $h | if $h == null then true else ($sh | index($h)) != null end))
+      and ((($o.canvas_kind // null) as $k | if $k == null then true else ($kd | index($k)) != null end))
       and ((($o.order // 0) | type) == "number" and (($o.order // 0) >= 0) and ((($o.order // 0) | floor) == ($o.order // 0)))
       and ((($o.legacyId // "") | length == 0) or (($o.legacyId | type) == "string" and ($o.legacyId | test($re))))
       and ((($o.blocked_on // "") | length) <= $max))
-  ' >/dev/null || die "refused: bad state/shape enum, project slug, title over $TITLEMAX chars, blocked_on over $MAXLEN chars, order that is not a whole number, or legacyId that is not a kebab slug";
+  ' >/dev/null || die "refused: bad state/shape/canvas_kind enum, project slug, title over $TITLEMAX chars, blocked_on over $MAXLEN chars, order that is not a whole number, or legacyId that is not a kebab slug";
 }
 
 # blocked <=> blocked_on: a blocked task must say what it waits on, and blocked_on on any other state is refused
@@ -362,6 +368,15 @@ parse_options() {
 CTX_HEADINGS=("BLUF" "Issue" "Impact" "Context and components" "Changes by component" "Fix plan" "Ask")
 
 cmd_ask_template() {
+  local k=""
+  [[ $# -eq 0 ]] || k="$(task_kind "$1")"
+  if [[ -n "$k" && "$k" != issue ]]; then
+    cat <<'TPL'
+Free form (canvas.kind is not issue): no required headings. Say what the captain
+needs to decide and why, with whatever figures, tables or sections help.
+TPL
+    return
+  fi
   cat <<'TPL'
 ## BLUF
 The outcome in one or two plain sentences, then the one decision needed.
@@ -386,9 +401,16 @@ The decision, and the options with the recommended one first.
 TPL
 }
 
+# a task's canvas kind (issue|plan|research|explainer|review); absent = issue, so entries made before the label stay strict
+task_kind() { # id
+  jq -r --arg id "$1" '(.tasks | map(select(.id == $id))[0].canvas_kind) // "issue"' "$FLEET"
+}
+
 # refuse a context file without CTX_HEADINGS, each as a markdown heading, in order (case, trailing colon and **bold** ignored)
 check_context() {
   local f="$1" got want i=0 missing=() misplaced=() h
+  # only an issue task has a required ask structure; every other kind is free form
+  [[ -z "${2:-}" || "$(task_kind "$2")" == issue ]] || return 0
   got="$(sed -nE 's/^#{1,6}[[:space:]]+(.*[^[:space:]])[[:space:]]*$/\1/p' "$f" | sed -E 's/[*_`]//g; s/:$//' | tr 'A-Z' 'a-z')"
   # walk the file's headings once, taking the required ones in order; a required heading found only earlier is out of order
   for h in "${CTX_HEADINGS[@]}"; do
@@ -428,7 +450,7 @@ cmd_ask() {
   local rel=""
   if [[ -n "$ctx" ]]; then
     [[ -f "$ctx" ]] || die "context file '$ctx' not found"
-    check_context "$ctx"
+    check_context "$ctx" "$id"
     rel="tasks/$id/asks/$n.md"
     mkdir -p "$TASKS/$id/asks"
     cp "$ctx" "$STATE_DIR/$rel"
@@ -456,7 +478,7 @@ cmd_reask() {
   local rel="" k
   if [[ -n "$ctx" ]]; then
     [[ -f "$ctx" ]] || die "context file '$ctx' not found"
-    check_context "$ctx"
+    check_context "$ctx" "$id"
     k="$(next_ask_n "$id")"
     while [[ -e "$TASKS/$id/asks/$k.md" ]]; do k=$((k + 1)); done
     rel="tasks/$id/asks/$k.md"
@@ -762,7 +784,7 @@ case "$cmd" in
   asks)          cmd_asks;;
   add)           [[ $# -ge 1 ]] || die "usage: fleet add <id> k=v ..."; cmd_add "$@";;
   set)           [[ $# -ge 1 ]] || die "usage: fleet set <id> k=v ..."; cmd_set "$@";;
-  ask-template)  cmd_ask_template;;
+  ask-template)  [[ $# -le 1 ]] || die "usage: fleet ask-template [<id>]"; cmd_ask_template "$@";;
   ask)           parse_ask_args "$@";;
   reask)         parse_reask_args "$@";;
   pending)       [[ $# -eq 2 ]] || die "usage: fleet pending <id> <ask>"; cmd_pending "$1" "$2";;
