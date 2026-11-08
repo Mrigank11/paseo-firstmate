@@ -127,6 +127,18 @@ refused "unlabelled task: bare context refused" $F ask a "bare" --context-file "
 $F ask-template ik | grep -c '^## ' | grep -qx 7 && ok "ask-template <issue id> prints the 7 headings" || bad "ask-template <issue id>"
 $F ask-template pk | grep -q '^## ' && bad "ask-template <plan id> has no headings" || ok "ask-template <plan id> is free form"
 $F set pk canvas_kind=review >/dev/null; eq "$($F get pk | jq -r .canvas_kind)" review; check "set canvas_kind" $?
+# a task with a crew canvas: the context file is a short note, no headings required; without a canvas the structure is still required
+$F add cv intent=x shape=ship state=active canvas_kind=issue >/dev/null
+refused "no canvas: bare context refused" $F ask cv "bare" --context-file "$T/bad.md"
+mkdir -p "$T/tasks/cv"; echo '<div class="cv-snap acv">x</div>' >"$T/tasks/cv/canvas.final.html"
+$F ask cv "note?" --context-file "$T/bad.md" >/dev/null 2>&1; check "canvas task: a short note without headings is accepted" $?
+eq "$($F get cv | jq -r '.asks[0].note')" true; check "the ask is marked note:true" $?
+printf 'x%.0s' $(seq 1201) >"$T/long.md"
+refused "canvas task: a context over 1200 chars is refused" $F ask cv "long" --context-file "$T/long.md"
+$F ask cv "long" --context-file "$T/long.md" 2>&1 | grep -q "short note" && ok "refusal says the canvas is the explanation" || bad "refusal says the canvas is the explanation"
+$F ask cv "plain" >/dev/null; eq "$($F get cv | jq -r '.asks[1] | has("note")')" false; check "an ask without a context is not a note" $?
+$F reask cv a1 --context-file "$T/ctx.md" >/dev/null 2>&1; check "reask with the full template is also fine as a note when short enough" $?
+rm -rf "$T/tasks/cv"
 refused "ask context + overlong text" $F ask a "$(printf 'x%.0s' $(seq 201))" --context-file "$T/ctx.md"
 [[ ! -e "$T/tasks/a/asks/3.md" ]]; check "refused ask leaves no file" $?
 $F answer a 2 >/dev/null

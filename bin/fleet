@@ -406,6 +406,29 @@ task_kind() { # id
   jq -r --arg id "$1" '(.tasks | map(select(.id == $id))[0].canvas_kind) // "issue"' "$FLEET"
 }
 
+# A task whose crew has a canvas (live or snapshotted) keeps its one long explanation there; the first mate's context file is then
+# only a short note. Taking the snapshot here means a Needs-you card still shows the canvas after the crew is archived.
+NOTE_MAX=1200
+canvas_snapshot_best_effort() { # id
+  [[ -z "${FLEET_NO_SNAPSHOT:-}" && "$(basename "$STATE_DIR")" == state && -x "$ROOT/bin/page" ]] || return 0
+  FIRSTMATE_ROOT="$(dirname "$STATE_DIR")" timeout 20 "$ROOT/bin/page" canvas-snapshot "$1" >/dev/null 2>&1 || true
+}
+has_canvas() { [[ -s "$TASKS/$1/canvas.final.html" ]]; }
+
+# context file of a task with a canvas: a note of at most NOTE_MAX characters, no required headings. Sets IS_NOTE (not a subshell: die must exit).
+IS_NOTE=false
+prepare_context() { # id file
+  IS_NOTE=false
+  canvas_snapshot_best_effort "$1"
+  if has_canvas "$1"; then
+    local n; n="$(wc -m <"$2" | tr -d ' ')"
+    ((n <= NOTE_MAX)) || die "this task has a crew canvas, so the context file is a short note (at most $NOTE_MAX characters, $n given); the canvas is the explanation. Fix the canvas via its crew, or dispatch a new crew for a longer answer"
+    IS_NOTE=true
+  else
+    check_context "$2" "$1"
+  fi
+}
+
 # refuse a context file without CTX_HEADINGS, each as a markdown heading, in order (case, trailing colon and **bold** ignored)
 check_context() {
   local f="$1" got want i=0 missing=() misplaced=() h
@@ -447,18 +470,18 @@ cmd_ask() {
   local n; n="$(next_ask_n "$id")"
   # an earlier answer can free a number while its context file lingers; never clobber it
   while [[ -e "$TASKS/$id/asks/$n.md" ]]; do n=$((n + 1)); done
-  local rel=""
+  local rel="" note=false
   if [[ -n "$ctx" ]]; then
     [[ -f "$ctx" ]] || die "context file '$ctx' not found"
-    check_context "$ctx" "$id"
+    prepare_context "$id" "$ctx"; note=$IS_NOTE
     rel="tasks/$id/asks/$n.md"
     mkdir -p "$TASKS/$id/asks"
     cp "$ctx" "$STATE_DIR/$rel"
   fi
-  if ! ( atomic_jq --arg id "$id" --arg t "$text" --arg s "$(now)" --arg c "$rel" --argjson n "$n" --argjson o "$opts" --argjson r "$ref" "$ENSURE_IDS"'
+  if ! ( atomic_jq --arg id "$id" --arg t "$text" --arg s "$(now)" --arg c "$rel" --argjson n "$n" --argjson o "$opts" --argjson r "$ref" --argjson nt "$note" "$ENSURE_IDS"'
     .tasks |= map(if .id == $id then ensure_ids | .askSeq = $n
       | .asks += [{id: ("a" + ($n | tostring)), text: $t, since: $s}
-          + (if $c == "" then {} else {context: $c} end) + (if $o == null then {} else {options: $o} end) + (if $r == null then {} else {ref: $r} end)]
+          + (if $c == "" then {} else {context: $c} + (if $nt then {note: true} else {} end) end) + (if $o == null then {} else {options: $o} end) + (if $r == null then {} else {ref: $r} end)]
       else . end)' ); then
     [[ -z "$rel" ]] || rm -f "$STATE_DIR/$rel"; exit 1
   fi
@@ -475,21 +498,21 @@ cmd_reask() {
     ((${#text} > 0)) || die "ask text is empty"
     ((${#text} <= MAXLEN)) || die "ask over $MAXLEN chars"
   fi
-  local rel="" k
+  local rel="" k note=false
   if [[ -n "$ctx" ]]; then
     [[ -f "$ctx" ]] || die "context file '$ctx' not found"
-    check_context "$ctx" "$id"
+    prepare_context "$id" "$ctx"; note=$IS_NOTE
     k="$(next_ask_n "$id")"
     while [[ -e "$TASKS/$id/asks/$k.md" ]]; do k=$((k + 1)); done
     rel="tasks/$id/asks/$k.md"
     mkdir -p "$TASKS/$id/asks"
     cp "$ctx" "$STATE_DIR/$rel"
   fi
-  if ! ( atomic_jq --arg id "$id" --arg aid "$aid" --argjson st "$settext" --arg t "$text" --arg c "$rel" --arg s "$(now)" --argjson o "$opts" '
+  if ! ( atomic_jq --arg id "$id" --arg aid "$aid" --argjson st "$settext" --arg t "$text" --arg c "$rel" --arg s "$(now)" --argjson o "$opts" --argjson nt "$note" '
     .tasks |= map(if .id == $id then .asks |= map(if .id == $aid then (.since = $s
       | (if $st == 1 then .text = $t else . end)
       | (if $o != null then .options = $o else . end)
-      | (if $c != "" then .context = $c else . end)
+      | (if $c != "" then .context = $c | (if $nt then .note = true else del(.note) end) else . end)
       | del(.pendingSince)) else . end) else . end)' ); then
     [[ -z "$rel" ]] || rm -f "$STATE_DIR/$rel"; exit 1
   fi

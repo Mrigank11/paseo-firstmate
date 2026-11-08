@@ -29,7 +29,7 @@ Then sources: file paths inspected, commands run (read-only), and URLs consulted
 
 When a scout finishes, read `state/tasks/<id>/report.md` yourself before saying anything to the captain.
 
-Keep the crew's canvas before anything is archived: `bin/page canvas-snapshot <id>` writes `state/tasks/<id>/canvas.final.html` (+ `.tsx`), and agent-canvas stops serving a canvas once its agent is archived. (A `canvas=off` chore has none; the command says so.)
+Keep the crew's canvas before anything is archived: `bin/page canvas-snapshot <id>` writes `state/tasks/<id>/canvas.final.html` (+ `.tsx`), and agent-canvas stops serving a canvas once its agent is archived. (A `canvas=off` chore has none; the command says so.) An ask you raise on the task snapshots it for you, and its `--context-file` is then only a short note: the canvas is the explanation (see `project-page`).
 
 Mark the task done only after you have confirmed the report exists and contains a BLUF plus evidence: `bin/fleet finish <id>`, record it with `bin/fleet log`, then `bin/fleet archive <id>` so the entry leaves the live index for `fleet-archive.jsonl`. `finish` and `archive` both refuse a task with open asks: answer each with the captain first, or close them in the same command (`bin/fleet finish <id> --close-asks`, or `--answer a1`) — never leave an answered question open.
 

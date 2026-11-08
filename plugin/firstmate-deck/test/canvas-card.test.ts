@@ -272,3 +272,43 @@ test("recap strip: a done card reads canvas.final.tsx; no file means no strip", 
   assert.match(stripOf(html), /Ship the API &amp; docs\./);
   assert.match(stripOf(html), /Shipped both\./);
 });
+
+// ---- one explanation per card: the crew canvas, or the first mate's context only when there is none ----
+const SNAP = `<!doctype html><html lang="en"><head><style>
+.acv .lede{color:red}
+</style></head><body>
+<div class="cv-snap acv"><div class="acv"><article class="canvas"><div class="sheet"><div class="statusline"><div class="l1">Done</div></div><div class="trow dimmable"><span class="title">T</span></div><div class="sheet dimmable"><p class="lede">CREW CANVAS</p></div></div></article></div></div>
+</body></html>
+`;
+function askCard(files: Record<string, string>, ask: object, lab: any = labeled, canvas?: CanvasData, ags: Record<string, any> = { "ag-1": agent }) {
+  project([{ ...T, asks: [{ id: "a1", text: "Merge?", since: "2026-10-24T11:00:00Z", options: ["Merge", "Hold"], context: "tasks/t1/asks/1.md", ...ask }] }]);
+  const dir = join(lastRoot, "state", "tasks", "t1");
+  mkdirSync(join(dir, "asks"), { recursive: true });
+  writeFileSync(join(dir, "asks", "1.md"), "CONTEXT BODY");
+  for (const [f, c] of Object.entries(files)) writeFileSync(join(dir, f), c);
+  const m = loadProject(lastRoot, "demo");
+  const r = render(m, canvas, ags, lab);
+  return r.live.slice(r.live.indexOf(`id="t-t1"`));
+}
+
+test("Needs you with a live canvas: the context folds, a note stays open under 'First mate adds'", () => {
+  const full = askCard({}, {}, labeled, data());
+  assert.match(full, /<details class="actx" id="x-t1-a1"><summary>Context<\/summary>/, "folded, not open");
+  const note = askCard({}, { note: true }, labeled, data());
+  assert.match(note, /<details class="actx note" id="x-t1-a1" open><summary>First mate adds<\/summary><div><p>CONTEXT BODY/);
+});
+
+test("Needs you with an archived crew: the ask-time snapshot and its recap show, the context folds", () => {
+  const gone = { t1: [{ id: "ag-1", status: "closed", archived: true, createdAt: "2026-10-24T11:00:00Z" }] };
+  const html = askCard({ "canvas.final.html": SNAP, "canvas.final.tsx": '<Canvas title="x" status="done">\n<Bluf>b</Bluf>\n<Markdown id="recap">**You asked:** merge it. **I did:** merged it.</Markdown>\n</Canvas>\n' }, {}, gone, { status: "ok", css: "", summaries: {}, cards: {} }, {});
+  assert.match(html, /<details class="cnotes cv-d" id="cvf-t1" open><summary>Crew canvas<\/summary>.*CREW CANVAS/s);
+  assert.match(html, /class="recap"[^>]*>.*merge it.*merged it/s);
+  assert.ok(!html.includes("statusline"));
+  assert.match(html, /<details class="actx" id="x-t1-a1"><summary>Context<\/summary>/);
+});
+
+test("Needs you with no canvas ever: the full Context stays open, as before", () => {
+  const html = askCard({}, {}, {}, undefined, {});
+  assert.match(html, /<details class="actx" id="x-t1-a1" open><summary>Context<\/summary>/);
+  assert.ok(!html.includes("cvf-t1"));
+});

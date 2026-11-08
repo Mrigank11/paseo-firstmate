@@ -347,11 +347,11 @@ export function snapshotParts(doc: string): { css: string; body: string } | unde
  * deck's tokens (`.cv-f`), no frame. Its stylesheet is scoped under `.acv` and hoisted once per page through `css`.
  * A snapshot that is not the expected shape falls back to a sandboxed frame.
  */
-const finalCanvas = (t: Task, css: Set<string>): string => {
+const finalCanvas = (t: Task, css: Set<string>, label = "Final canvas"): string => {
   const parts = snapshotParts(t.canvasFinal);
-  if (!parts) return `<details class="cnotes cv-d" id="cvf-${esc(t.id)}" open><summary>Final canvas</summary><iframe class="cv-final" title="Final canvas" sandbox srcdoc="${esc(t.canvasFinal)}"></iframe></details>`;
+  if (!parts) return `<details class="cnotes cv-d" id="cvf-${esc(t.id)}" open><summary>${label}</summary><iframe class="cv-final" title="${label}" sandbox srcdoc="${esc(t.canvasFinal)}"></iframe></details>`;
   if (parts.css) css.add(parts.css);
-  return `<details class="cnotes cv-d" id="cvf-${esc(t.id)}" open><summary>Final canvas</summary><div class="cv-f cv-fin acv">${parts.body}</div></details>`;
+  return `<details class="cnotes cv-d" id="cvf-${esc(t.id)}" open><summary>${label}</summary><div class="cv-f cv-fin acv">${parts.body}</div></details>`;
 };
 
 /** A done task whose card the captain can mark read: it has a non-empty card.md. */
@@ -376,7 +376,11 @@ function row(t: Task, group: GroupKey, ctx: Ctx, idx = 0): string {
   const raw = sum ? rawAsks(t, sum, ctx.comments, ctx.o.now, activeSinceOf(curAgent)) : [];
   const rawTargets = new Set((sum?.openAsks ?? []).filter((a) => !t.asks.some((x) => x.ref?.block === a.id)).map((a) => `t-${t.id}#c-${a.id}`));
   const recapSum = group === "done" ? undefined : ctx.canvas?.summaries[aid ?? ""];
-  const strip = group === "done" ? recapStrip(t, group, t.canvasRecap, t.canvasFinalAt, ctx.comments, ctx.o.now) : recapStrip(t, group, recapSum?.recap, recapSum?.updatedAt, ctx.comments, ctx.o.now);
+  // an open card whose crew is gone (archived, no live canvas) shows the snapshot taken when the ask was made, like a done card does
+  const snapOnly = group !== "done" && !sum && !!t.canvasFinal;
+  const strip = group === "done" || snapOnly ? recapStrip(t, group, t.canvasRecap, t.canvasFinalAt, ctx.comments, ctx.o.now) : recapStrip(t, group, recapSum?.recap, recapSum?.updatedAt, ctx.comments, ctx.o.now);
+  // one long explanation per card: when a crew canvas is on it, the first mate's context folds (a short note stays open)
+  const hasCanvas = !!sum || !!t.canvasFinal;
   const out = [
     `<article class="task s-${group}${failed ? " s-failed" : ""}" id="t-${esc(t.id)}"${data}>`,
     `<div class="tt"><span class="ttl">${title}</span>${chip}${btn}</div>`,
@@ -385,6 +389,7 @@ function row(t: Task, group: GroupKey, ctx: Ctx, idx = 0): string {
     trailHtml(ctx.comments.filter((c) => c.id !== strip.consumes), `t-${t.id}`, ctx.o.now, (c) => c.target.startsWith(`t-${t.id}#`) && !t.asks.some((a) => c.target === `t-${t.id}#${a.id}`) && !rawTargets.has(c.target)),
   ];
   if (sum) out.push(agentBlock(t, group, aid ? ctx.agents[aid] : undefined, ctx.o, st, true), canvasFragment(sum, ctx.canvas?.cards[sum.agentId], group === "you"));
+  else if (snapOnly) out.push(finalCanvas(t, ctx.snapCss, "Crew canvas"));
   t.asks.forEach((a) => {
     const box: string[] = [];
     const asked = `<div class="ask asked">${inline(a.text)}</div>`;
@@ -421,9 +426,11 @@ function row(t: Task, group: GroupKey, ctx: Ctx, idx = 0): string {
     if (trail) box.push(trail);
     const ctxMd = contextBody(a.text, a.contextMd);
     if (ctxMd.trim()) {
-      // open by default while the ask needs the captain (the page remembers a collapse per browser)
-      const open = group === "you" && !a.repliedAt ? " open" : "";
-      box.push(`<details class="actx" id="x-${esc(t.id)}-${esc(a.id)}"${open}><summary>Context</summary><div>${markdown(ctxMd)}</div></details>`);
+      // a note is short and open while the ask needs the captain; a full context is open only when there is no canvas to read instead
+      // (the page remembers a collapse per browser)
+      const waiting = group === "you" && !a.repliedAt;
+      const open = waiting && (a.note || !hasCanvas) ? " open" : "";
+      box.push(`<details class="actx${a.note ? " note" : ""}" id="x-${esc(t.id)}-${esc(a.id)}"${open}><summary>${a.note ? "First mate adds" : "Context"}</summary><div>${markdown(ctxMd)}</div></details>`);
     }
     // One block per ask: a comment anywhere inside it (text, option buttons, context) targets this ask.
     out.push(`<div class="askbox" id="a-${esc(t.id)}-${esc(a.id)}">${box.join("")}</div>`);
@@ -432,7 +439,7 @@ function row(t: Task, group: GroupKey, ctx: Ctx, idx = 0): string {
   if (group === "done") for (const a of t.answered ?? []) {
     const ctxMd = contextBody(a.text, a.contextMd);
     const ans = a.text ? `<div class="ask asked">${inline(a.text)}</div>` : "";
-    const detail = ctxMd.trim() ? `<details class="actx" id="x-${esc(t.id)}-${esc(a.id)}"><summary>Context</summary><div>${markdown(ctxMd)}</div></details>` : "";
+    const detail = ctxMd.trim() ? `<details class="actx${a.note ? " note" : ""}" id="x-${esc(t.id)}-${esc(a.id)}"><summary>${a.note ? "First mate adds" : "Context"}</summary><div>${markdown(ctxMd)}</div></details>` : "";
     if (ans || detail) out.push(`<div class="askbox answered" id="a-${esc(t.id)}-${esc(a.id)}"><div class="ask-tag">Answered</div>${ans}${detail}</div>`);
   }
   if (sum) {

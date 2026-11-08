@@ -14,6 +14,8 @@ export type Ask = {
   since?: string;
   context?: string;
   contextMd: string;
+  /** The context file is the first mate's short note beside a crew canvas (`bin/fleet ask` set it), not a full explanation. */
+  note?: boolean;
   /** Fixed answers offered as buttons (2-6 strings), from `bin/fleet ask --options`. */
   options?: string[];
   /**
@@ -82,7 +84,7 @@ export type Task = {
   merged?: boolean;
 };
 
-export type AnsweredAsk = { id: string; text: string; since?: string; answeredAt?: string; contextMd: string };
+export type AnsweredAsk = { id: string; text: string; since?: string; answeredAt?: string; contextMd: string; note?: boolean };
 
 export type Section = { name: string; kind: "md" | "html"; content: string };
 
@@ -191,7 +193,7 @@ function loadAnswered(root: string, id: string): AnsweredAsk[] {
       const a = JSON.parse(line);
       const aid = askIdOf(a?.id);
       if (!aid || out.some((x) => x.id === aid)) continue;
-      out.push({ id: aid, text: String(a.text ?? ""), since: a.since, answeredAt: a.answeredAt, contextMd: readContext(root, a.context) });
+      out.push({ id: aid, text: String(a.text ?? ""), since: a.since, answeredAt: a.answeredAt, contextMd: readContext(root, a.context), ...(a.note === true ? { note: true } : {}) });
     } catch { /* bad line */ }
   }
   let files: string[] = [];
@@ -215,7 +217,7 @@ function toTask(raw: any, root: string, label: string, inbox: Comment[] = [], ar
     }
     // The plugin never writes fleet.json, so an ask without an id falls back to its index: the id bin/fleet gives it at its first write.
     const id = askIdOf(a?.id) ?? `a${i + 1}`;
-    const ask: Ask = { id, text: String(a?.text ?? ""), since: a?.since, context: a?.context, contextMd };
+    const ask: Ask = { id, text: String(a?.text ?? ""), since: a?.since, context: a?.context, contextMd, ...(a?.note === true ? { note: true } : {}) };
     if (Array.isArray(a?.options)) {
       const opts = a.options.filter((o: unknown) => typeof o === "string" && o.length > 0).slice(0, 6) as string[];
       if (opts.length >= 2) ask.options = opts;
