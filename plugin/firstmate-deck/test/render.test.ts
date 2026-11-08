@@ -202,15 +202,14 @@ test("Parked sorts newest parked first; a live task's order still pins it", () =
   assert.deepEqual(parked(m), ["write-docs", "polish-ui", "ask-fm"]);
 });
 
-test("an archived task keeps its answered ask, its context and a report pointer", () => {
+test("an archived task keeps its answered ask, and its context", () => {
   const t = model.archive.find((x) => x.id === "arch-schema")!;
   assert.deepEqual(t.answered.map((a) => [a.id, a.text]), [["a1", "Postgres or SQLite?"]]);
-  assert.ok(t.hasReport);
   const card = r.live.slice(r.live.indexOf('id="t-arch-schema"'), r.live.indexOf('id="t-broke-build"'));
   assert.match(card, /Answered/);
   assert.match(card, /Postgres or SQLite\?/);
   assert.match(card, /<b>wins<\/b> on concurrent writes/);
-  assert.match(card, /state\/tasks\/arch-schema\/report\.md/);
+  assert.doesNotMatch(card, /report\.md/);
 });
 
 test("a context file with no answer record (answered before records existed) still shows; notes survive next to a card", () => {

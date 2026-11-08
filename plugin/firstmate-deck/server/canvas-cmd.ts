@@ -60,12 +60,12 @@ Add <Diff file="path">…</Diff> inside a closed <Collapse> once you have a chan
   <Steps title="Plan">
     <Step id="read" state="active">Read</Step>
     <Step id="analyse" state="pending">Analyse</Step>
-    <Step id="report" state="pending">Write the report</Step>
+    <Step id="report" state="pending">Write up findings and recommendation</Step>
   </Steps>
-  <Markdown id="findings">Findings so far, and the path of the report you will write (the deliverable named in this brief).</Markdown>
+  <Markdown id="findings">Findings so far: the answer, the evidence behind it, the recommendation and what you did not verify. Current only.</Markdown>
   <Collapse id="done" title="Done so far">one line per finished thing</Collapse>
 </Canvas>
-Keep <Markdown id="findings"> current as you learn things (patch its text, never append below it); finish by pointing it at the report file. To ask the captain, switch to the asking shape below.`,
+Keep <Markdown id="findings"> current as you learn things (patch its text, never append below it); finish with the complete findings, evidence, recommendation and a "Not verified" list on the canvas itself: it is your only deliverable, so never a path to a report file or any other file in its place. To ask the captain, switch to the asking shape below.`,
 };
 
 // What a canvas looks like the moment it asks the captain something or finishes. The section ids are what agent-canvas checks
@@ -107,7 +107,7 @@ This is a free-form ${kind} canvas: lay it out the way a good Lavish page would 
 3. **Rewrite, never append.** Give sections an \`id\` and patch their text instead of adding a log at the bottom.
 4. **Pick the visual before writing prose.** Numbers or pass/fail: \`<Metric>\` in a \`<Grid>\`. How parts fit or before/after: \`<Svg>\`. A trend: \`<Chart>\`. Tables and prose in \`<Markdown>\`.
 5. **Recap, please.** Keep a top-level \`<Markdown id="recap">\` right after the BLUF with \`**You asked:** …\` (the brief's intent, or the captain's newest steer) and \`**I did:** …\`, at most 500 characters in all: the deck lifts it into the strip at the top of your card. Nothing refuses a canvas without it, but the card is blank without it.
-6. **Final** (\`status="done"\`): rewrite it top to bottom so it reads as a summary of the outcome, with the report or PR link.
+6. **Final** (\`status="done"\`): rewrite it top to bottom so it reads as a summary of the outcome, with the PR link if there is one.
 
 ### Set your canvas first
 
@@ -149,9 +149,9 @@ The captain reads your canvas *instead of* your chat, often days later, in under
 3. **Rewrite, never append.** Each section of the canvas has an \`id\`; to change what it says, patch that id's text. Do not append a new block at the bottom or top of the canvas: that turns it into a log. When something is superseded, \`remove\` it or rewrite it. A finished item becomes one line in the "Done so far" fold; a dead end becomes one line there under "Ruled out" (what you tried, why it failed) or vanishes. The canvas shows the current truth, not a history.
 4. **Pick the visual before writing prose.** Numbers or pass/fail: \`<Metric>\` in a \`<Grid>\`. A choice you made: \`<Decision>\`. How parts fit or before/after: \`<Svg>\` (a big graph: \`<Diagram>\`). A trend: \`<Chart>\`. \`<Markdown>\` is for the few sentences no component can carry; anything over about 5 lines or 6 items goes in a \`<Collapse>\`.
 5. **Code detail only when it passes the audience test.** Show file paths, function names, diffs, line numbers, hashes or command output only if (a) the task is about the code itself (a code review, an API or design audit, a "which file / what changed exactly" question), or (b) the brief or the captain asked for those specifics. Even then it goes inside a closed \`<Collapse>\` (a key \`<Diff>\` hunk, not whole files), never in the BLUF, Steps or Metrics. Otherwise describe what changed in behaviour.
-6. **Running vs asking vs final.** Running (\`status="working"\`): the BLUF, live Steps, what is in progress or blocking. Asking (\`status="waiting"\`, see "Questions for the captain"): the seven-part shape, in that order. Final (\`status="done"\`): rewrite it top to bottom: the BLUF, the recap, what changed in plain words, verification as Metrics, a short "Not verified" list and a short "Needs you" list (omit either when empty), one figure where it helps, and the report or PR link. Drop the Steps list unless it tells a story.
+6. **Running vs asking vs final.** Running (\`status="working"\`): the BLUF, live Steps, what is in progress or blocking. Asking (\`status="waiting"\`, see "Questions for the captain"): the seven-part shape, in that order. Final (\`status="done"\`): rewrite it top to bottom: the BLUF, the recap, what changed in plain words, verification as Metrics, a short "Not verified" list and a short "Needs you" list (omit either when empty), one figure where it helps, and the PR link if there is one. Drop the Steps list unless it tells a story.
 7. **Recap block, required.** On every canvas that asks the captain something or is final (\`status="done"\`), put a top-level \`<Markdown id="recap">\` right after the BLUF: \`**You asked:** …\` (the captain's latest request, in their terms: the brief's intent, or their newest steer) and \`**I did:** …\` (what you did about it), at most 500 characters in all. The deck lifts it out of the canvas into a strip at the top of your card, so the captain sees it before anything else. Rewrite it in place whenever a new steer arrives or you finish; agent-canvas refuses a strict crew's asking or done canvas without it.
-8. **Your canvas is the only explanation.** The captain gets no other long write-up of your work: the first mate adds only the question, the buttons and a short note beside your canvas. Put what they must decide, the evidence, the links and the outcome on the canvas itself.
+8. **Your canvas is the only deliverable, and it is self-contained.** The captain gets no other write-up of your work and opens no files: the first mate adds only the question, the buttons and a short note beside your canvas. Put what they must decide, the full findings, the evidence, the recommendation, a "Not verified" list, the links and the outcome on the canvas itself. Do not write a report.md. A canvas that names report.md or a local file path outside a closed Collapse is refused when it asks or is done.
 9. **Length test.** If the captain would have to scroll, or read code, to learn the outcome, cut until they don't.
 
 ### Set your canvas first

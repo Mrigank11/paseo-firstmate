@@ -1,6 +1,6 @@
 ---
 name: scout-report
-description: Use when framing, dispatching, or harvesting a scout task that investigates and writes a report.md without touching code.
+description: Use when framing, dispatching, or harvesting a scout task that investigates and delivers its findings as a complete canvas without touching code.
 ---
 
 # Scout Report
@@ -13,9 +13,9 @@ The brief structure comes from the writing-briefs skill; this skill supplies the
 
 State explicitly in the brief that the crew member is READ-ONLY on project code: it may read repos, follow imports, search the web, and run non-mutating analysis (read, grep, list, test in dry-run or no-write modes), but it must NOT edit files, commit, create branches, open a PR, or run any mutating command.
 
-Require a single deliverable: findings written to `state/tasks/<id>/report.md`, using the exact task id in the path, and nothing else persisted outside that dir.
+Require a single deliverable: the crew's canvas. It holds the whole result (BLUF, evidence, recommendation with options, a "Not verified" list; long evidence in closed folds) and is complete in itself: the captain opens no file. Tell the crew not to write a `report.md` and never to point the canvas at a file. Nothing else is persisted outside `state/tasks/<id>/`.
 
-## What a good report.md contains
+## What a good canvas contains
 
 Require BLUF first: a one-line answer or recommendation at the very top, so the captain can act without reading further.
 
@@ -23,17 +23,17 @@ Then evidence and reasoning: what was checked, what was found, and why it suppor
 
 Then concrete next steps or options with tradeoffs: what to do with the finding, including at least one alternative and its cost.
 
-Then sources: file paths inspected, commands run (read-only), and URLs consulted, so any claim can be spot-checked.
+Then sources: file paths inspected, commands run (read-only), and URLs consulted, in a closed fold, so any claim can be spot-checked.
 
 ## Harvesting on finish
 
-When a scout finishes, read `state/tasks/<id>/report.md` yourself before saying anything to the captain.
+When a scout finishes, read its canvas yourself before saying anything to the captain: the live one (`bin/page canvas-snapshot <id>` saves it and `state/tasks/<id>/canvas.final.tsx` is its plain-text source). If it is thin, or only points at something, send the crew back; do not fill it in from elsewhere.
 
-Keep the crew's canvas before anything is archived: `bin/page canvas-snapshot <id>` writes `state/tasks/<id>/canvas.final.html` (+ `.tsx`), and agent-canvas stops serving a canvas once its agent is archived. (A `canvas=off` chore has none; the command says so.) An ask you raise on the task snapshots it for you, and its `--context-file` is then only a short note: the canvas is the explanation (see `project-page`).
+The canvas is kept for you: `bin/fleet finish` saves it to `state/tasks/<id>/canvas.final.html` (+ `.tsx`) and refuses to finish if it cannot (`--no-canvas` for a task that never had one), and agent-canvas stops serving a canvas once its agent is archived. An ask you raise on the task snapshots it for you, and its `--context-file` is then only a short note: the canvas is the explanation (see `project-page`).
 
-Mark the task done only after you have confirmed the report exists and contains a BLUF plus evidence: `bin/fleet finish <id>`, record it with `bin/fleet log`, then `bin/fleet archive <id>` so the entry leaves the live index for `fleet-archive.jsonl`. `finish` and `archive` both refuse a task with open asks: answer each with the captain first, or close them in the same command (`bin/fleet finish <id> --close-asks`, or `--answer a1`) — never leave an answered question open.
+Mark the task done only after you have confirmed the canvas contains a BLUF plus evidence: `bin/fleet finish <id>`, record it with `bin/fleet log`, then `bin/fleet archive <id>` so the entry leaves the live index for `fleet-archive.jsonl`. `finish` and `archive` both refuse a task with open asks: answer each with the captain first, or close them in the same command (`bin/fleet finish <id> --close-asks`, or `--answer a1`) — never leave an answered question open.
 
-Reply to the captain with a ONE-LINE digest (the BLUF, or your corrected version of it) plus a pointer to the full report path — never paste the whole report into the conversation.
+Reply to the captain with a ONE-LINE digest (the BLUF, or your corrected version of it) pointing at the task's card — never paste the result into the conversation and never answer with a file path.
 
 ## Tear down a dedicated workspace
 
@@ -59,6 +59,6 @@ Never let a scout roll into implementation on its own initiative, even for a tri
 
 ## Fanning out multiple scouts
 
-When a question splits into independent sub-questions, dispatch one scout per sub-question, each with its own task id and its own `state/tasks/<id>/report.md`, then synthesize the reports yourself.
+When a question splits into independent sub-questions, dispatch one scout per sub-question, each with its own task id and its own canvas, then synthesize from their saved canvases yourself.
 
 Give each brief an explicit non-overlap clause naming the sibling scopes it must NOT cover, so two scouts do not duplicate work or contradict each other silently.

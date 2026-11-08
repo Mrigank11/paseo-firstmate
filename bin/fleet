@@ -409,9 +409,14 @@ task_kind() { # id
 # A task whose crew has a canvas (live or snapshotted) keeps its one long explanation there; the first mate's context file is then
 # only a short note. Taking the snapshot here means a Needs-you card still shows the canvas after the crew is archived.
 NOTE_MAX=1200
+# FLEET_PAGE_BIN replaces bin/page (the tests use it); FLEET_NO_SNAPSHOT switches snapshots off.
+snapshots_on() { [[ -z "${FLEET_NO_SNAPSHOT:-}" && ( "$(basename "$STATE_DIR")" == state || -n "${FLEET_PAGE_BIN:-}" ) && -x "${FLEET_PAGE_BIN:-$ROOT/bin/page}" ]]; }
+canvas_snapshot() { # id; returns the snapshot command's status
+  FIRSTMATE_ROOT="$(dirname "$STATE_DIR")" timeout 20 "${FLEET_PAGE_BIN:-$ROOT/bin/page}" canvas-snapshot "$1" >/dev/null 2>&1
+}
 canvas_snapshot_best_effort() { # id
-  [[ -z "${FLEET_NO_SNAPSHOT:-}" && "$(basename "$STATE_DIR")" == state && -x "$ROOT/bin/page" ]] || return 0
-  FIRSTMATE_ROOT="$(dirname "$STATE_DIR")" timeout 20 "$ROOT/bin/page" canvas-snapshot "$1" >/dev/null 2>&1 || true
+  snapshots_on || return 0
+  canvas_snapshot "$1" || true
 }
 has_canvas() { [[ -s "$TASKS/$1/canvas.final.html" ]]; }
 
@@ -644,21 +649,22 @@ CODE_PLACEHOLDER="No local code changes recorded yet."
 
 # finish <id> [--failed] [--card -|--card-file f] [--branch b] [--base main]
 cmd_finish() {
-  local id="" failed=0 cardsrc="" cardfile="" branch="" base="main" closeall=0 answers=()
+  local id="" failed=0 cardsrc="" cardfile="" branch="" base="main" closeall=0 nocanvas=0 answers=()
   while [[ $# -gt 0 ]]; do
     case "$1" in
       --failed) failed=1; shift;;
       --close-asks) closeall=1; shift;;
+      --no-canvas) nocanvas=1; shift;;
       --answer) [[ $# -ge 2 ]] || die "--answer needs an ask id (a1) or index"; answers+=("$2"); shift 2;;
       --card) [[ "${2:-}" == "-" ]] || die "--card takes '-' (read the card from stdin); use --card-file <f> for a file"; cardsrc=stdin; shift 2;;
       --card-file) [[ $# -ge 2 ]] || die "--card-file needs a path"; cardfile="$2"; [[ -f "$cardfile" ]] || die "card file '$cardfile' not found"; shift 2;;
       --branch) [[ $# -ge 2 ]] || die "--branch needs a value"; branch="$2"; shift 2;;
       --base) [[ $# -ge 2 ]] || die "--base needs a value"; base="$2"; shift 2;;
       -*) die "unknown option '$1'";;
-      *) [[ -z "$id" ]] || die "usage: fleet finish <id> [--failed] [--card -|--card-file <f>] [--branch <b>] [--base main] [--close-asks|--answer <ask>...]"; id="$1"; shift;;
+      *) [[ -z "$id" ]] || die "usage: fleet finish <id> [--failed] [--card -|--card-file <f>] [--branch <b>] [--base main] [--close-asks|--answer <ask>...] [--no-canvas]"; id="$1"; shift;;
     esac
   done
-  [[ -n "$id" ]] || die "usage: fleet finish <id> [--failed] [--card -|--card-file <f>] [--branch <b>] [--base main] [--close-asks|--answer <ask>...]"
+  [[ -n "$id" ]] || die "usage: fleet finish <id> [--failed] [--card -|--card-file <f>] [--branch <b>] [--base main] [--close-asks|--answer <ask>...] [--no-canvas]"
   entry_exists "$id" || die "no task $id"
   [[ "$id" =~ ^[a-z0-9][a-z0-9-]*$ ]] || die "bad id '$id'"
   local card=""
@@ -681,6 +687,13 @@ cmd_finish() {
     [[ " ${close_ids[*]-} " == *" $o "* ]] || left+=("$o")
   done <<<"$open_ids"
   ((${#left[@]} == 0)) || die "finish refuses $id with ${#left[@]} open ask(s) ($(IFS=,; echo "${left[*]}" | sed 's/,/, /g')): answer them in the same command (--close-asks, or --answer ${left[0]}) or 'fleet answer' them first"
+  # the canvas is the only deliverable: keep it now, before the crew is archived, and refuse to finish without a saved copy.
+  # --failed and --no-canvas (a chore that never had a canvas) skip the refusal; the snapshot is still tried for --failed.
+  if snapshots_on && ((! nocanvas)); then
+    if ! canvas_snapshot "$id" && ! has_canvas "$id"; then
+      ((failed)) || die "finish refuses $id: its canvas could not be saved (state/tasks/$id/canvas.final.html), and the canvas is the only deliverable. Fix what 'bin/page canvas-snapshot $id' reports (crew canvas on, agent-canvas running), or pass --no-canvas for a task that never had a canvas"
+    fi
+  fi
   for a in ${close_ids[@]+"${close_ids[@]}"}; do cmd_answer "$id" "$a"; done
 
   local status=done; ((failed)) && status=failed

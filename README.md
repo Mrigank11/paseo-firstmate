@@ -28,7 +28,7 @@ The loop is four moves — **dispatch, supervise, steer, report** — and after 
 
 ## Two task shapes
 
-- **`scout`** — investigation, research, audit, planning. Read-only on project code; delivers `state/tasks/<id>/report.md` and nothing else. Default when the ask is a question. When in doubt, scout — it can't damage a repo.
+- **`scout`** — investigation, research, audit, planning. Read-only on project code; delivers its crew canvas (saved to `state/tasks/<id>/canvas.final.html` at finish) and nothing else. Default when the ask is a question. When in doubt, scout — it can't damage a repo.
 - **`ship`** — a code change. Gets its own `create_workspace` worktree, produces a branch/PR; the first mate confirms the PR, merges it under authority, and tears the worktree down. Default when the ask is a change.
 
 Expensive agents plan, cheap agents implement: hard planning goes to a plan-only scout in the `planning` lane (which never edits code and never spawns crew); implementation is always a contributor-lane `ship` briefed from that plan.
@@ -59,7 +59,7 @@ Try `/bearings` anytime for a one-screen fleet digest.
 | [`.claude/skills/`](.claude/skills/) | Triggered skills carrying the detail: `dispatch-routing`, `writing-briefs`, `permission-policy`, `stuck-crew-recovery`, `scout-report`, `ship-delivery`, `session-digest`. Loaded on demand, never preloaded. |
 | [`.claude/commands/`](.claude/commands/) | Slash commands: `/bearings`. |
 | [`docs/STATE.md`](docs/STATE.md) | Fleet state format — `fleet.json`, task dirs, restart reconstruction, heartbeat safety net. |
-| [`state/`](state/) | Disk-backed runtime state (gitignored — not source): `fleet.json`, `decisions.md`, `tasks/<id>/brief.md` + `report.md`. The `.example` files are the templates; your live copies stay local. |
+| [`state/`](state/) | Disk-backed runtime state (gitignored — not source): `fleet.json`, `decisions.md`, `tasks/<id>/brief.md` + the saved `canvas.final.html`/`.tsx`. The `.example` files are the templates; your live copies stay local. |
 
 ## Project pages
 
