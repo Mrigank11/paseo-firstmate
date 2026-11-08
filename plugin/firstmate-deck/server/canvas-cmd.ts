@@ -92,6 +92,14 @@ One line per component: what changes in behaviour. No code, no diffs.</Markdown>
 /** The canvas kinds (label canvas.kind). Only `issue` keeps the strict needs-you structure; the rest are free-form. An unlabelled crew is an issue crew. */
 export const KINDS = ["issue", "plan", "research", "explainer", "review"];
 
+/** One extra writing line per free-form kind, only where it earns its place. */
+const KIND_HINT: Record<string, string> = {
+  plan: "- **For a plan:** the steps and who does what, as a short flow or table, with the recommendation first.\n",
+  research: "- **For research:** the finding first, then a table of the evidence with sources; keep the full notes folded.\n",
+  explainer: "- **For an explainer:** one picture of the mechanism before any prose about it.\n",
+  review: "- **For a review:** the verdict and the few things that must change first; the rest of the findings in a table or fold.\n",
+};
+
 /** The brief text for a free-form canvas (any kind but issue): the same recipe and starting canvas, no required structure. */
 function freeSnippet(recipe: string, shape: string, kind: string): string {
   return `## Your canvas
@@ -109,6 +117,14 @@ This is a free-form ${kind} canvas: lay it out the way a good Lavish page would 
 5. **Recap, please.** Keep a top-level \`<Markdown id="recap">\` right after the BLUF with \`**You asked:** …\` (the brief's intent, or the captain's newest steer) and \`**I did:** …\`, at most 500 characters in all: the deck lifts it into the strip at the top of your card. Nothing refuses a canvas without it, but the card is blank without it.
 6. **Final** (\`status="done"\`): rewrite it top to bottom so it reads as a summary of the outcome, with the report or PR link.
 
+### Writing it well
+
+- **No walls of text.** If a paragraph runs past four lines, split it, turn it into a list or table, or draw it.
+- **Plain, concise words.** Short sentences, no jargon the captain would have to look up. Say it once.
+- **Lead with the answer.** The first thing on screen is the conclusion or the recommendation; the how and why come after.
+- **Show, don't tell.** Use a \`<Svg>\` for how parts fit, a table to compare options, \`<Metric>\` for numbers, \`<Chart>\` for a trend.
+- **Fold the detail.** Evidence, long lists and raw output go in a closed \`<Collapse>\`, not in the main flow.
+${KIND_HINT[kind] ?? ""}
 ### Set your canvas first
 
 Your very first action, before reading anything else: \`set\` a canvas shaped like this, then patch it as each step moves. If a canvas from an earlier task is already there, replace it.

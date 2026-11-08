@@ -89,6 +89,9 @@ test("canvas-snippet: the agent-canvas recipe for the configured port, the shape
     assert.match(free.out, /<Markdown id="findings">/);
     assert.match(free.out, /You asked:[\s\S]*I did:/);
     assert.match(free.out, /BLOCKED: canvas ask <id>/);
+    assert.match(free.out, /No walls of text/);
+    assert.match(free.out, /\*\*For (an? )?(plan|research|explainer|review):\*\*/);
+    assert.doesNotMatch(issue.out, /No walls of text/);
     assert.doesNotMatch(free.out, /BLUF → recap → issue|id="impact"|Recap block, required|needs_you/);
   }
   assert.notEqual((await run(["snippet", r.root, "ship", "--kind", "bogus"], env)).code, 0, "an unknown kind is refused");
