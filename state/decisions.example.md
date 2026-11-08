@@ -6,13 +6,13 @@ Copy to `decisions.md` (gitignored) and edit. The first mate reads this on every
 
 Named lanes map a task's role to an exact launch config. The first mate infers each task's role, looks up its lane here, and materializes it into `create_agent`. A per-task captain override beats a lane; the default lane catches everything else so nothing is unrouted.
 
-**Lanes** — each lane is a Paseo agent profile (source: `config/paseo-profiles.json`; install with `bin/page profiles --apply`, which needs an explicit `PASEO_HOME`):
+**Lanes** — each lane is a Paseo agent profile. The profile file `config/paseo-profiles.json` is the only place a provider, model, mode or thinking level is written; lanes name the profile and nothing else. Check with `bin/page profiles --check`; sync the daemon with `bin/page profiles --live --apply --yes` on the captain's word (`docs/PROFILES.md`).
 
-- `planning`    — `profile:fm-planning` (`claude-work/claude-opus-5-5` · `bypassPermissions` · thinking `medium`)
-- `contributor` — `profile:fm-contributor` (`opencode/opencode-go/muse-spark-1.3-contributor` · `build` · `{ auto_accept: true }`)
-- fallback      — `profile:fm-fallback` (`claude-work/claude-sonnet-5-5` · `bypassPermissions` · thinking `medium`), used for a `contributor` task when `fm-contributor` cannot start (e.g. the OpenCode install is too old for the model)
+- `planning`    — `profile:fm-planning`
+- `contributor` — `profile:fm-contributor`  (the default)
+- `fallback`    — `profile:fm-fallback`, used for a `contributor` task when `fm-contributor` cannot start
 
-The first mate reads the profile with `list_profiles` and copies its fields into `create_agent`. A lane value may also be a raw `provider/model · mode · features` spec.
+The first mate reads the profile with `list_profiles` and copies its fields into `create_agent`. A raw `provider/model · mode · features` spec is legal only as a per-task override.
 
 **Lane assignment** (role → lane):
 

@@ -12,9 +12,9 @@ Resolve the launch configuration in this order, then spawn once and stop — sup
 Resolve every task's launch config in this precedence, stopping at the first that applies:
 
 1. **Per-task captain override** — the captain named a lane, provider, or model for *this* task, in the ask or in `state/decisions.md`. Obey it.
-2. **Routing lane** — classify the task's role (section 2), find its lane in the `## Routing` table of `state/decisions.md`, and materialize that lane's spec (section 3).
+2. **Routing lane** — classify the task's role (section 2), find its lane in the `## Routing` list of `state/decisions.md`, and materialize that lane's profile (section 3).
 3. **Default lane** — if no role mapping matched, use the lane marked default in that table. Nothing is ever left unrouted.
-4. **Fallback (only if `decisions.md` defines no lanes)** — match a Paseo profile via `mcp__paseo__list_profiles` by its `notes`, else pick from `mcp__paseo__list_providers` / `list_models`, and tell the captain you fell back because no lane or profile fit.
+4. **No lanes defined** — if `decisions.md` has no lanes, stop and tell the captain; do not pick a provider yourself.
 
 Re-read `decisions.md` every dispatch rather than trusting a remembered copy — the captain edits lanes there at any time.
 
@@ -29,33 +29,31 @@ Lanes are keyed by role; you infer the role (the captain can always override):
 
 When a task sits on the line, prefer the cheaper contributor lane and note it in one line to the captain; escalate to planning only when the work visibly needs it. Never ask the captain per task which lane to use — the assignment table and the default exist so you do not have to.
 
-The contributor lane is typically the cheap, high-context `opencode/opencode-go/muse-spark-1.3-contributor` (~$0.10/$0.20 per Mtok); OpenCode has no bypassPermissions mode, so `features: { auto_accept: true }` keeps it from stalling on an approval prompt nobody is watching. A concrete contributor launch:
-
-```json
-{
-  "title": "Scout: auth flow",
-  "provider": "opencode/opencode-go/muse-spark-1.3-contributor",
-  "initialPrompt": "<brief>",
-  "settings": { "modeId": "build", "features": { "auto_accept": true } }
-}
-```
+Which provider and model a lane runs is the profile's business, never this skill's: do not name or assume one.
 
 ## 3. Materializing a lane or profile into create_agent
 
-A lane is normally a Paseo profile (`profile:fm-planning`, `profile:fm-contributor`, `profile:fm-fallback`; the repo's `config/paseo-profiles.json` is their source, installed with `bin/page profiles --apply`). Call `mcp__paseo__list_profiles`, find the profile by `id`, and copy its fields: there is no `profile` param on `mcp__paseo__create_agent`, so the profile's `provider` + `model` → `provider` (`<provider>/<model>`, e.g. `claude/claude-opus-5-5`), `modeId` → `settings.modeId`, `thinkingOptionId` → `settings.thinkingOptionId`, `featureValues` → `settings.features`. `notes` says when to use it. A lane written as a raw spec (`provider/model · mode · features`) maps the same way. If `list_profiles` does not have the profile, fall back to the raw spec in `decisions.md`, or tell the captain the profiles are not installed.
+A lane is a Paseo agent profile: `profile:fm-planning`, `profile:fm-contributor`, `profile:fm-fallback`. The daemon's profile (what `list_profiles` returns) is the only authority on provider, model, mode and thinking level; `config/paseo-profiles.json` is just its seed and snapshot (see `docs/PROFILES.md`). Never read the file to decide how to launch. There is no `profile` param on `mcp__paseo__create_agent`, so the one-profile read is:
 
-**Contributor fallback.** If the `fm-contributor` agent cannot start (the provider errors on launch, e.g. OpenCode too old for `muse-spark-1.3-contributor`), relaunch once with `profile:fm-fallback` and say so in one line to the captain; do not retry the failing profile.
+1. Call `mcp__paseo__list_profiles` and find the profile by `id`.
+2. Verify the fields you need exist (`provider`, `model`, `modeId`; `thinkingOptionId` and `featureValues` when present). Never guess a value.
+3. Copy: `provider` + `model` → `provider` (`<provider>/<model>`), `modeId` → `settings.modeId`, `thinkingOptionId` → `settings.thinkingOptionId`, `featureValues` → `settings.features`. `notes` says when to use it.
+4. If the profile is missing or a field is rejected, **stop and tell the captain** (`bin/page profiles --check` names the drift; a stale repo file is not a reason to stop, the daemon is right). Do not substitute a raw spec or another provider. Use `inspect_provider` only to learn why a value was rejected.
 
-Given a profile `{ "provider": "claude", "model": "opus", "modeId": "build", "thinkingOptionId": "think-hard", "featureValues": { "auto_accept": true } }`, the call becomes:
+A raw `provider/model · mode · features` spec is legal only as a per-task captain override (section 1.1).
+
+**Contributor fallback.** If an `fm-contributor` agent cannot start (the provider errors on launch), relaunch once with the `fallback` lane (`profile:fm-fallback`) and say so in one line to the captain; do not retry the failing profile.
+
+Given a profile `{ "provider": "<p>", "model": "<m>", "modeId": "<mode>", "thinkingOptionId": "<think>", "featureValues": { "<feature>": <value> } }`, the call becomes:
 
 ```json
 {
   "title": "Ship: add retry to sync worker",
-  "provider": "claude/opus",
+  "provider": "<p>/<m>",
   "workspaceId": "<worktree-id>",
   "initialPrompt": "<brief>",
   "notifyOnFinish": false,
-  "settings": { "modeId": "build", "thinkingOptionId": "think-hard", "features": { "auto_accept": true } },
+  "settings": { "modeId": "<mode>", "thinkingOptionId": "<think>", "features": { "<feature>": <value> } },
   "labels": { "fm.task": "<id>", "fm.project": "<project>", "fm.shape": "ship", "canvas": "on", "canvas.relay": "<your own agent id>", "canvas.strict": "on", "canvas.nudge": "on", "fm.notify": "plugin" }
 }
 ```
