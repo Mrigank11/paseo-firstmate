@@ -391,6 +391,29 @@ eq "$rc" 0; check "finish with an unknown branch still finishes" $?
 grep -q "skipped the code section" "$T/fin4.err"; check "...and says it skipped the code section" $?
 eq "$($F get fin4 | jq -r .state)" done; check "...with status done" $?
 refused "finish an unknown task" $F finish nope
+# finish saves the canvas itself and refuses without a saved copy (FLEET_PAGE_BIN stands in for bin/page)
+FAKE_OK="$T/page-ok.sh"; printf '#!/usr/bin/env bash\nmkdir -p "%s/tasks/$2"; echo "<div class=cv-snap>x</div>" >"%s/tasks/$2/canvas.final.html"\n' "$T" "$T" >"$FAKE_OK"
+FAKE_BAD="$T/page-bad.sh"; printf '#!/usr/bin/env bash\nexit 1\n' >"$FAKE_BAD"; chmod +x "$FAKE_OK" "$FAKE_BAD"
+$F add cs1 intent=x shape=scout state=active >/dev/null
+FLEET_PAGE_BIN="$FAKE_OK" $F finish cs1 >/dev/null 2>&1; eq "$($F get cs1 | jq -r .state)" done; check "finish saves the canvas and finishes" $?
+[[ -s "$T/tasks/cs1/canvas.final.html" ]]; check "the snapshot exists after finish, nobody ran canvas-snapshot by hand" $?
+$F add cs2 intent=x shape=scout state=active >/dev/null
+before="$(cat "$FLEET_FILE")"
+FLEET_PAGE_BIN="$FAKE_BAD" $F finish cs2 >/dev/null 2>"$T/cs2.err"; rc=$?
+[[ "$rc" -ne 0 && "$(cat "$FLEET_FILE")" == "$before" ]]; check "finish refuses when the canvas cannot be saved, and changes nothing" $?
+grep -q "canvas could not be saved" "$T/cs2.err"; check "the refusal says why" $?
+FLEET_PAGE_BIN="$FAKE_BAD" $F finish cs2 --no-canvas >/dev/null 2>&1; eq "$($F get cs2 | jq -r .state)" done; check "--no-canvas finishes a task that never had a canvas" $?
+$F add cs3 intent=x shape=scout state=active >/dev/null
+FLEET_PAGE_BIN="$FAKE_BAD" $F finish cs3 --failed >/dev/null 2>&1; eq "$($F get cs3 | jq -r .state)" failed; check "--failed is never blocked by a missing canvas" $?
+$F add cs4 intent=x shape=scout state=active >/dev/null
+mkdir -p "$T/tasks/cs4"; echo '<div>old</div>' >"$T/tasks/cs4/canvas.final.html"
+FLEET_PAGE_BIN="$FAKE_BAD" $F finish cs4 >/dev/null 2>&1; eq "$($F get cs4 | jq -r .state)" done; check "an earlier snapshot is enough when a refresh fails" $?
+# canvas-off crew or no crew agent: finish skips the refusal on its own (stub canvas-off prints "off")
+CSTUB="$T/stub-off.sh"; printf '#!/usr/bin/env bash\n[[ "$1" == canvas-off && "$3" == cs5 ]] && echo off\nexit 0\n' >"$CSTUB"; chmod +x "$CSTUB"
+$F add cs5 intent=x shape=scout state=active >/dev/null
+FLEET_STAGE_TOOL="$CSTUB" FLEET_PAGE_BIN="$FAKE_BAD" $F finish cs5 >/dev/null 2>&1; eq "$($F get cs5 | jq -r .state)" done; check "finish skips the canvas refusal when the crew has canvas off or there is no crew" $?
+$F add cs6 intent=x shape=scout state=active >/dev/null
+FLEET_STAGE_TOOL="$CSTUB" FLEET_PAGE_BIN="$FAKE_BAD" $F finish cs6 >/dev/null 2>&1; eq "$($F get cs6 | jq -r .state)" active; check "...but still refuses for a crew with a canvas" $?
 refused "finish with a bad option" $F finish fin --bogus
 
 # finish and open asks: never leave an answered question open

@@ -458,7 +458,6 @@ function row(t: Task, group: GroupKey, ctx: Ctx, idx = 0): string {
   if (group === "done" && t.card.trim() && t.notes.trim() && !t.card.includes(t.notes.trim())) {
     out.push(`<details class="cnotes" id="fn-${esc(t.id)}"><summary>Notes</summary>${markdown(t.notes)}</details>`);
   }
-  if (group === "done" && t.hasReport) out.push(`<div class="dp">Report: <code>state/tasks/${esc(t.id)}/report.md</code></div>`);
   const link = (id: string) => `<a href="#t-${esc(id)}">${esc(ctx.byId.get(id)!.title || ctx.byId.get(id)!.intent || id)}</a>`;
   const dep = t.depends_on.filter((d) => ctx.byId.has(d)).map(link);
   const unb = (ctx.unblocks.get(t.id) ?? []).map(link);

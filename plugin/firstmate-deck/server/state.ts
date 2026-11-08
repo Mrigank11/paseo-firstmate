@@ -74,8 +74,6 @@ export type Task = {
   /** The crew's "You asked / I did" recap from state/tasks/<id>/canvas.final.tsx (null when absent), and when that file was written (ms; 0 when absent). */
   canvasRecap: Recap | null;
   canvasFinalAt: number;
-  /** state/tasks/<id>/report.md exists: the page points at it. */
-  hasReport: boolean;
   /** `since` as epoch ms (0 when absent): what the Done group sorts by. */
   updatedMs: number;
   /** Time of an unanswered captain comment on the card body when two or more asks make it ambiguous which one it is about. */
@@ -278,7 +276,6 @@ function toTask(raw: any, root: string, label: string, inbox: Comment[] = [], ar
     canvasRecap: slug ? recapOfSource(readText(join(root, "state", "tasks", raw.id, "canvas.final.tsx"))) : null,
     canvasFinalAt: slug ? mtimeMs(join(root, "state", "tasks", raw.id, "canvas.final.tsx")) : 0,
     answered: loadAnswered(root, raw.id).filter((a) => !answeredIds.has(a.id)),
-    hasReport: slug && existsSync(join(root, "state", "tasks", raw.id, "report.md")),
     updatedMs: Date.parse(raw.since ?? (archived ? raw.lastEvent : "") ?? "") || 0,
     ...(bodyWaiting ? { commentWaiting: bodyWaiting.at } : {}),
   };
