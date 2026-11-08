@@ -3,7 +3,9 @@
 //   stage-cli.ts stages <root> [--project p] [--table]   every live task's stage, one pass (JSON array, or a table)
 //   stage-cli.ts drift <root> [project]                  "<n>" drift flags across live tasks; each flagged task on stderr
 //   stage-cli.ts agents <root> <taskId>                  JSON array of the ids of every agent labelled fm.task=<taskId>, oldest first
+//   stage-cli.ts canvas-off <root> <taskId>              "off" when the task has no crew agent or its newest one has canvas=off; else nothing
 //   stage-cli.ts task-of <root> <agentId>                the fm.task label of that agent ("" when it has none)
+import { currentAgent } from "./stage.ts";
 import { archiveRow, labelledAgents, stageRow, stages, table } from "./stage-data.ts";
 
 function die(msg: string): never {
@@ -12,7 +14,7 @@ function die(msg: string): never {
 }
 
 const [cmd, root, ...rest] = process.argv.slice(2);
-if (!cmd || !root) die("usage: stage-cli.ts <stage|stages|drift|agents|task-of> <root> ...");
+if (!cmd || !root) die("usage: stage-cli.ts <stage|stages|drift|agents|canvas-off|task-of> <root> ...");
 
 try {
 switch (cmd) {
@@ -44,6 +46,15 @@ switch (cmd) {
     if (!id) die("agents needs a task id");
     const mine = labelledAgents([id]).filter((r) => r.task === id).sort((a, b) => (Date.parse(a.createdAt ?? "") || 0) - (Date.parse(b.createdAt ?? "") || 0));
     console.log(JSON.stringify(mine.map((r) => r.id)));
+    break;
+  }
+  case "canvas-off": {
+    const id = rest[0];
+    if (!id) die("canvas-off needs a task id");
+    const mine = labelledAgents([id]).filter((r) => r.task === id);
+    const cur = currentAgent(mine.map((r) => ({ ...r, id: r.id })));
+    const cv = cur ? mine.find((r) => r.id === cur.id)?.labels?.canvas : undefined;
+    if (!cur || cv === "off") console.log("off");
     break;
   }
   case "task-of": {

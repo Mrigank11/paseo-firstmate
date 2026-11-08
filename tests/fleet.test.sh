@@ -408,6 +408,12 @@ FLEET_PAGE_BIN="$FAKE_BAD" $F finish cs3 --failed >/dev/null 2>&1; eq "$($F get 
 $F add cs4 intent=x shape=scout state=active >/dev/null
 mkdir -p "$T/tasks/cs4"; echo '<div>old</div>' >"$T/tasks/cs4/canvas.final.html"
 FLEET_PAGE_BIN="$FAKE_BAD" $F finish cs4 >/dev/null 2>&1; eq "$($F get cs4 | jq -r .state)" done; check "an earlier snapshot is enough when a refresh fails" $?
+# canvas-off crew or no crew agent: finish skips the refusal on its own (stub canvas-off prints "off")
+CSTUB="$T/stub-off.sh"; printf '#!/usr/bin/env bash\n[[ "$1" == canvas-off && "$3" == cs5 ]] && echo off\nexit 0\n' >"$CSTUB"; chmod +x "$CSTUB"
+$F add cs5 intent=x shape=scout state=active >/dev/null
+FLEET_STAGE_TOOL="$CSTUB" FLEET_PAGE_BIN="$FAKE_BAD" $F finish cs5 >/dev/null 2>&1; eq "$($F get cs5 | jq -r .state)" done; check "finish skips the canvas refusal when the crew has canvas off or there is no crew" $?
+$F add cs6 intent=x shape=scout state=active >/dev/null
+FLEET_STAGE_TOOL="$CSTUB" FLEET_PAGE_BIN="$FAKE_BAD" $F finish cs6 >/dev/null 2>&1; eq "$($F get cs6 | jq -r .state)" active; check "...but still refuses for a crew with a canvas" $?
 refused "finish with a bad option" $F finish fin --bogus
 
 # finish and open asks: never leave an answered question open

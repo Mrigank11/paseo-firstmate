@@ -412,7 +412,7 @@ NOTE_MAX=1200
 # FLEET_PAGE_BIN replaces bin/page (the tests use it); FLEET_NO_SNAPSHOT switches snapshots off.
 snapshots_on() { [[ -z "${FLEET_NO_SNAPSHOT:-}" && ( "$(basename "$STATE_DIR")" == state || -n "${FLEET_PAGE_BIN:-}" ) && -x "${FLEET_PAGE_BIN:-$ROOT/bin/page}" ]]; }
 canvas_snapshot() { # id; returns the snapshot command's status
-  FIRSTMATE_ROOT="$(dirname "$STATE_DIR")" timeout 20 "${FLEET_PAGE_BIN:-$ROOT/bin/page}" canvas-snapshot "$1" >/dev/null 2>&1
+  FIRSTMATE_ROOT="$(dirname "$STATE_DIR")" timeout 5 "${FLEET_PAGE_BIN:-$ROOT/bin/page}" canvas-snapshot "$1" >/dev/null 2>&1
 }
 canvas_snapshot_best_effort() { # id
   snapshots_on || return 0
@@ -688,7 +688,8 @@ cmd_finish() {
   done <<<"$open_ids"
   ((${#left[@]} == 0)) || die "finish refuses $id with ${#left[@]} open ask(s) ($(IFS=,; echo "${left[*]}" | sed 's/,/, /g')): answer them in the same command (--close-asks, or --answer ${left[0]}) or 'fleet answer' them first"
   # the canvas is the only deliverable: keep it now, before the crew is archived, and refuse to finish without a saved copy.
-  # --failed and --no-canvas (a chore that never had a canvas) skip the refusal; the snapshot is still tried for --failed.
+  # --failed and --no-canvas skip the refusal (the snapshot is still tried for --failed). --no-canvas is automatic for a task with no crew agent or whose crew was dispatched with canvas=off.
+  if snapshots_on && ((! nocanvas)) && [[ "$(stage_tool canvas-off "$id" 2>/dev/null || true)" == off ]]; then nocanvas=1; fi
   if snapshots_on && ((! nocanvas)); then
     if ! canvas_snapshot "$id" && ! has_canvas "$id"; then
       ((failed)) || die "finish refuses $id: its canvas could not be saved (state/tasks/$id/canvas.final.html), and the canvas is the only deliverable. Fix what 'bin/page canvas-snapshot $id' reports (crew canvas on, agent-canvas running), or pass --no-canvas for a task that never had a canvas"
