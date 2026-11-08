@@ -8,18 +8,18 @@
     "model": "claude-opus-5-5",
     "modeId": "bypassPermissions",
     "thinkingOptionId": "medium",
-    "notes": "Firstmate planning lane: first mate, secondmates and judgment work (architecture, ambiguous debugging, design, final review). Plan-only scouts, never a ship."
+    "notes": "Planning lane: the first mate, secondmates and judgment work (architecture, ambiguous debugging, design, final review). Plan-only scouts, never a ship."
   },
   {
     "id": "fm-contributor",
     "name": "FM contributor",
     "icon": "hammer",
     "color": "blue",
-    "provider": "opencode",
-    "model": "opencode-go/muse-spark-1.3-contributor",
-    "modeId": "build",
-    "featureValues": { "auto_accept": true },
-    "notes": "Firstmate contributor lane (default): most scouts, well-specified ships, fan-out, scraping, bulk edits. OpenCode has no bypassPermissions, so auto_accept stops it stalling on approvals. Needs a current OpenCode; use fm-fallback when the model is unavailable."
+    "provider": "claude",
+    "model": "claude-sonnet-5-5",
+    "modeId": "bypassPermissions",
+    "thinkingOptionId": "medium",
+    "notes": "Contributor lane (default): most scouts, well-specified ships, fan-out, scraping, bulk edits. To switch it back to the cheap OpenCode model, set provider opencode, model opencode-go/muse-spark-1.3-contributor, modeId build, featureValues {auto_accept: true} (OpenCode has no bypassPermissions; needs OpenCode >= 2.0.10), remove thinkingOptionId, then apply and check."
   },
   {
     "id": "fm-fallback",
@@ -30,6 +30,6 @@
     "model": "claude-sonnet-5-5",
     "modeId": "bypassPermissions",
     "thinkingOptionId": "medium",
-    "notes": "Contributor lane fallback when fm-contributor cannot start (OpenCode too old for muse-spark-1.3-contributor). Same role, Sonnet 5.5 at medium thinking."
+    "notes": "Fallback for the contributor lane when fm-contributor cannot start. Known-good Sonnet 5.5 at medium thinking; equal to fm-contributor while that is on Sonnet."
   }
 ]
