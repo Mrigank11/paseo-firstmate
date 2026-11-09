@@ -42,6 +42,11 @@ refused "blocked_on without blocked status" $F set b blocked_on="Nemath key"
 refused "empty blocked_on while blocked" $F set b state=blocked blocked_on=
 refused "blocked_on over 200" $F set b state=blocked blocked_on="$(printf 'x%.0s' $(seq 201))"
 $F set b state=blocked blocked_on="Nemath: Trigger Prod API key" >/dev/null; check "set blocked + blocked_on" $?
+# a wait on the captain is not a block: refused, with a pointer to asks
+refused "blocked_on captain refused" $F set b state=blocked blocked_on="captain"
+refused "blocked_on 'the captain: approve plan' refused" $F set b state=blocked blocked_on="the captain: approve plan"
+$F set b state=blocked blocked_on="Captainsville vendor" >/dev/null 2>&1; check "outside party containing 'captain' as a substring is allowed" $?
+$F set b blocked_on="Nemath: Trigger Prod API key" >/dev/null
 eq "$($F get b | jq -r '.state+"|"+.blocked_on')" "blocked|Nemath: Trigger Prod API key"; check "blocked_on stored" $?
 $F set b notes="still waiting" >/dev/null
 eq "$($F get b | jq -r .blocked_on)" "Nemath: Trigger Prod API key"; check "blocked_on kept across an unrelated set" $?

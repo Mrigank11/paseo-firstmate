@@ -168,6 +168,10 @@ check_obj() { # obj-json
 check_blocked() { # obj state blocked_on
   if [[ "$2" == "blocked" ]]; then
     [[ -n "$3" ]] || die "refused: state=blocked needs blocked_on=\"<what or who it waits on>\""
+    # "blocked on the captain" is the captain's move, not a block: it would hide the question from Needs you
+    if grep -Eqi '(^|[^a-z])(the )?(captain|human|user|mrigank)([^a-z]|$)' <<<"$3"; then
+      die "refused: blocked_on=\"$3\" means a wait on the captain. Do not park it as blocked: file an ask (bin/fleet ask) so the card lands in Needs you. blocked is only for outside parties or other tasks."
+    fi
   elif [[ -n "$3" ]]; then
     die "refused: blocked_on only goes with state=blocked (state is '$2')"
   fi

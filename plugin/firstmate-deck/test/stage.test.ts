@@ -128,6 +128,14 @@ test("canvas: an open canvas ask on an idle agent is Needs you", () => {
   assert.deepEqual([s.stage, s.group], ["Needs you", "you"]);
 });
 
+test("canvas: an open canvas question beats a 'blocked on captain' note; with no question the note still blocks", () => {
+  const blocked = task({ state: "blocked", blocked_on: "captain" });
+  const q = stage(blocked, [agent({ status: "idle" })], { canvas: cv([{ id: "db" }]) });
+  assert.deepEqual([q.stage, q.group], ["Needs you", "you"]);
+  assert.equal(stage(blocked, [agent({ status: "idle" })], { canvas: cv([]) }).group, "blocked");
+  assert.equal(stage(task({ state: "blocked", blocked_on: "Nemath" }), [], {}).group, "blocked");
+});
+
 test("canvas: a running agent with an open canvas ask is 'Running · 1 question' (agent-canvas's own rule)", () => {
   const one = stage(task(), [agent()], { canvas: cv([{ id: "db" }]) });
   assert.deepEqual([one.stage, one.group], ["Running · 1 question", "running"]);
@@ -154,8 +162,8 @@ test("canvas: registry asks, permissions and an errored agent keep their precede
   assert.equal(stage(task(), [agent({ status: "error" })], { canvas: cv([{ id: "db" }]) }).stage, "Failed (agent errored)");
 });
 
-test("canvas: only an active task listens to its canvas (parked, queued, done are the registry's)", () => {
-  for (const state of ["parked", "queued", "blocked", "done"] as const) {
+test("canvas: only an active or blocked task listens to its canvas (parked, queued, done are the registry's)", () => {
+  for (const state of ["parked", "queued", "done"] as const) {
     assert.ok(!/question|Needs you/.test(stage(task({ state }), [agent({ status: "idle" })], { canvas: cv([{ id: "db" }]) }).stage), state);
   }
 });

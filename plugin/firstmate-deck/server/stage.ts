@@ -168,7 +168,9 @@ export function computeStage(task: StageTask, agents: readonly StageAgent[], now
 
   // Registry intent that a running agent contradicts: the agent is what is happening (flagged so the first mate fixes the registry).
   if (task.state === "parked" && !running) return out("Parked", "parked", "parked by the first mate");
-  if (task.state === "blocked" && !running) return out("Blocked", "blocked", `blocked on ${task.blocked_on ?? "something outside"}`);
+  // A crew's open canvas question beats a "blocked" note: the move is the captain's, so the card must land in Needs you.
+  const crewQuestion = !!canvas && !!cur && cur.status !== "error" && canvas.asks.some((a) => !a.pending);
+  if (task.state === "blocked" && !running && !crewQuestion) return out("Blocked", "blocked", `blocked on ${task.blocked_on ?? "something outside"}`);
   if (task.state === "queued" && !running) return out("Next up", "next", "queued", "", cur ? [flag("queued-but-has-agent", "queued, but an agent exists", true)] : []);
   if (running && task.state === "parked") extra.push(flag("parked-but-running", "parked, but an agent is running", true));
   if (running && task.state === "blocked") extra.push(flag("blocked-but-running", "blocked, but an agent is running", true));
