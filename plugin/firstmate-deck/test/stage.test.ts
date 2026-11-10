@@ -43,10 +43,10 @@ test("5: queued; an existing agent is drift", () => {
   assert.deepEqual([stage(task({ state: "queued" }), [agent()]).group, keys(stage(task({ state: "queued" }), [agent()]))], ["running", ["queued-but-has-agent"]]); // T4
 });
 
-test("6: an unanswered ask is Needs you even while the agent runs; a replied one is with the first mate", () => {
-  assert.equal(stage(task({ asks: [{}] }), [agent()]).group, "you");
+test("6: an unanswered ask is Needs you once the agent is idle (a running crew outranks it); a replied one is with the first mate", () => {
+  assert.equal(stage(task({ asks: [{}] }), [agent({ status: "idle" })]).group, "you");
   assert.equal(stage(task({ asks: [{ repliedAt: "x" }] }), [agent()]).group, "fm");
-  assert.equal(stage(task({ asks: [{ repliedAt: "x" }, {}] }), [agent()]).group, "you");
+  assert.equal(stage(task({ asks: [{ repliedAt: "x" }, {}] }), [agent({ status: "idle" })]).group, "you");
 });
 
 test("7: a pending permission is Needs you", () => {
@@ -184,15 +184,16 @@ test("canvas: a curated ask whose canvas question is answered or gone closes its
   const idleClosed = stage(task({ asks: [{ ref }] }), [agent({ status: "idle", final: "DONE: x" })], { canvas: cv([]) });
   assert.deepEqual([idleClosed.stage, idleClosed.group, keys(idleClosed)], ["With the first mate", "fm", ["ref-closed"]]);
   // still open on the canvas: the curated ask stands, the captain's call
-  assert.deepEqual([stage(task({ asks: [{ ref }] }), [agent()], { canvas: cv([{ id: "db" }]) }).group, keys(stage(task({ asks: [{ ref }] }), [agent()], { canvas: cv([{ id: "db" }]) }))], ["you", []]);
+  const stands = stage(task({ asks: [{ ref }] }), [agent({ status: "idle" })], { canvas: cv([{ id: "db" }]) });
+  assert.deepEqual([stands.group, keys(stands)], ["you", []]);
   // a registry ask with no ref is never closed by the canvas; and with the canvas unread nothing closes
-  assert.equal(stage(task({ asks: [{}] }), [agent()], { canvas: cv([]) }).group, "you");
-  assert.equal(stage(task({ asks: [{ ref }] }), [agent()], {}).group, "you");
+  assert.equal(stage(task({ asks: [{}] }), [agent({ status: "idle" })], { canvas: cv([]) }).group, "you");
+  assert.equal(stage(task({ asks: [{ ref }] }), [agent({ status: "idle" })], {}).group, "you");
   // an unrelated canvas question still open beats the closed ask: the captain's call, flag kept
   const raw = stage(task({ asks: [{ ref }] }), [agent({ status: "idle" })], { canvas: cv([{ id: "other" }]) });
   assert.deepEqual([raw.stage, keys(raw)], ["Needs you", ["ref-closed"]]);
   // another curated ask is still open next to the closed one: the open one decides, the flag still tells the first mate
-  const two = stage(task({ asks: [{ ref }, {}] }), [agent()], { canvas: cv([]) });
+  const two = stage(task({ asks: [{ ref }, {}] }), [agent({ status: "idle" })], { canvas: cv([]) });
   assert.deepEqual([two.group, keys(two)], ["you", ["ref-closed"]]);
 });
 
@@ -249,13 +250,8 @@ test("T1: the captain replied, the first mate answered and the crew works again,
   const s = stage(t, [agent({ turnStartedAt: ago(3) })]);
   assert.deepEqual([s.stage, s.group, keys(s), s.flags[0].drift], ["Running", "running", ["ask-open-after-reply"], true]);
   assert.match(s.flags[0].text, /a1/);
-  // the crew has NOT started a turn since the reply: still the captain's
-  assert.equal(stage(t, [agent({ turnStartedAt: ago(10) })]).group, "you");
-  // a crew that is idle again with the ask open is the captain's; an ask nobody commented on stays the captain's even while running
+  // a crew that is idle again with the ask open is the captain's
   assert.equal(stage(t, [agent({ status: "idle", turnStartedAt: ago(3) })]).group, "you");
-  assert.equal(stage(task({ asks: [{ id: "a1" }] }), [agent()]).group, "you");
-  // one ask answered, another fresh: the fresh one needs the captain
-  assert.equal(stage(task({ asks: [{ id: "a1", answeredAt: ago(5) }, { id: "a2" }] }), [agent({ turnStartedAt: ago(3) })]).group, "you");
 });
 
 test("T3: a curated ask that resolved itself while the crew runs: Running plus the drift flag", () => {
@@ -290,7 +286,7 @@ test("T8: a Review whose branch is already merged is flagged as drift", () => {
 test("T11: 'the crew worked since' is measured from its turn start, which a label change or a steer does not move", () => {
   const t = task({ asks: [{ id: "a1", answeredAt: ago(5) }] });
   // lastActivityAt moved 1 minute ago (a re-label), but the turn that is running started before the reply
-  assert.equal(stage(t, [agent({ lastActivityAt: ago(1), turnStartedAt: ago(20) })]).group, "you");
+  assert.equal(stage(t, [agent({ lastActivityAt: ago(1), turnStartedAt: ago(20) })]).flags[0].key, "ask-open-while-running");
   assert.equal(stage(t, [agent({ lastActivityAt: ago(1) })]).group, "running", "without a turn start Paseo's activity is the fallback");
 });
 
@@ -300,4 +296,16 @@ test("the enforcer's verdict: a stalled With-the-first-mate task is Needs you, o
   assert.deepEqual([st.stage, st.group, st.owner, st.fp === fm.fp, keys(st)], ["Needs you · first mate stalled", "you", "captain", true, ["first-mate-stalled"]]);
   const running = stage(task(), [agent()]);
   assert.equal(applyStalled(running, "x"), running);
+});
+
+test("a running crew outranks an open fleet ask: Running, the ask stays as a note", () => {
+  const s = stage(task({ asks: [{ id: "a3" }] }), [agent()]);
+  assert.deepEqual([s.stage, s.group, keys(s)], ["Running", "running", ["ask-open-while-running"]]);
+  assert.equal(stage(task({ asks: [{ id: "a3" }, { id: "a4", answeredAt: ago(5) }] }), [agent({ turnStartedAt: ago(3) })]).group, "running");
+  // idle again with the ask open: the captain's
+  assert.equal(stage(task({ asks: [{ id: "a3" }] }), [agent({ status: "idle" })]).group, "you");
+});
+
+test("an open crew canvas question still beats a blocked note", () => {
+  assert.equal(stage(task({ state: "blocked" }), [agent({ status: "idle" })], { canvas: cv([{ id: "q1" }]) }).group, "you");
 });

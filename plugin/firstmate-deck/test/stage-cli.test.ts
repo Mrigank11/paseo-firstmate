@@ -56,7 +56,7 @@ test("stages: no canvas, an unreachable canvas, or 'off' leave the rows as befor
     const res = await run(["stages", r.root], { ...base, AGENT_CANVAS_URL: url });
     assert.equal(res.code, 0, url);
     const rows = JSON.parse(res.out);
-    assert.deepEqual(rows.map((x: any) => x.stage), ["Running", "Needs you"], url);
+    assert.deepEqual(rows.map((x: any) => x.stage), ["Running", "Running"], url);
     assert.ok(rows.every((x: any) => !x.canvas));
   }
 });

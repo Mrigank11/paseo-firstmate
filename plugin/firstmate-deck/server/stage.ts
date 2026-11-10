@@ -153,11 +153,14 @@ export function computeStage(task: StageTask, agents: readonly StageAgent[], now
   if (asks.length) {
     const unanswered = asks.filter((a) => !a.repliedAt);
     if (unanswered.length) {
-      // The first mate answered the captain's comment (bin/page reply) and put the crew back to work, but the ask is still open
-      // in the registry: the work is running, and the first mate only has to `bin/fleet answer` or `reask` it.
-      const turn = ms(activeSinceOf(cur));
-      if (running && unanswered.every((a) => a.answeredAt && ms(a.answeredAt) <= turn)) {
-        return out("Running", "running", `crew is working again after the captain's reply; ask ${ids(unanswered)} is still open`, "bin/fleet answer or reask", [flag("ask-open-after-reply", `ask ${ids(unanswered)} still open after the reply: bin/fleet answer or reask`, true)]);
+      // A running crew outranks an open ask: the card shows the work, and the ask stays as a note. After the first mate answered the
+      // captain's comment (bin/page reply) the note says it only has to `bin/fleet answer` or `reask` it.
+      if (running) {
+        const turn = ms(activeSinceOf(cur));
+        if (unanswered.every((a) => a.answeredAt && ms(a.answeredAt) <= turn)) {
+          return out("Running", "running", `crew is working again after the captain's reply; ask ${ids(unanswered)} is still open`, "bin/fleet answer or reask", [flag("ask-open-after-reply", `ask ${ids(unanswered)} still open after the reply: bin/fleet answer or reask`, true)]);
+        }
+        return out("Running", "running", `crew is working; ask ${ids(unanswered)} is still open`, "the captain answers it, or bin/fleet answer", [flag("ask-open-while-running", `ask ${ids(unanswered)} is open while the crew works`)]);
       }
       return out("Needs you", "you", `ask ${ids(unanswered)} waits for the captain`, "the captain answers on the page");
     }

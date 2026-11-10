@@ -64,6 +64,8 @@ test("viewFromItems: step count, the last 8 humanized, and the final DONE/BLOCKE
   assert.equal(v.final, "DONE: shipped it");
   assert.equal(finalLine([assistant("BLOCKED: no creds"), assistant("DONE: later")]), "DONE: later");
   assert.equal(finalLine([assistant("not DONE: yet")]), undefined);
+  // a DONE: from before the crew's latest turn (a user message came after it) is stale
+  assert.equal(finalLine([assistant("DONE: old"), { type: "user_message", text: "follow-up" } as TimelineItem, assistant("working")]), undefined);
 });
 
 // ---------- SdkPort ----------
