@@ -309,3 +309,11 @@ test("a running crew outranks an open fleet ask: Running, the ask stays as a not
 test("an open crew canvas question still beats a blocked note", () => {
   assert.equal(stage(task({ state: "blocked" }), [agent({ status: "idle" })], { canvas: cv([{ id: "q1" }]) }).group, "you");
 });
+
+test("after a canvas answer the crew ends its turn waiting on a monitor: the earlier DONE is gone, the canvas Waiting verdict keeps it Running", () => {
+  // the log reader drops a DONE: that precedes the delivered answer (see sdk-port.test.ts), so no final reaches the engine
+  const s = stage(task(), [agent({ status: "idle", final: undefined, turnStartedAt: ago(5) })], { canvas: cv([], "Waiting") });
+  assert.deepEqual([s.stage, s.group], ["Waiting", "running"]);
+  // an idle crew whose DONE is its latest message is still Review, whatever the canvas says
+  assert.equal(stage(task(), [agent({ status: "idle", final: "DONE: x" })], { canvas: cv([], "Waiting") }).stage, "Review");
+});
