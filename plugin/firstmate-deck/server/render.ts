@@ -373,11 +373,13 @@ function row(t: Task, group: GroupKey, ctx: Ctx, idx = 0): string {
   const data = done ? ` data-i="${idx}"${mark ? ` data-h="${cardHash(t.card)}"` : ""}` : "";
   const btn = mark ? `<button class="mr" type="button">Mark read</button>` : "";
   // the agent's canvas, when agent-canvas has one for it: the card shows it under the stage line and answers its raw asks
-  const sum = group === "done" || !aid ? undefined : ctx.canvas?.summaries[aid];
+  // an auto canvas (drawn from the timeline, nothing written) never outranks the crew's saved snapshot
+  const live = group === "done" || !aid ? undefined : ctx.canvas?.summaries[aid];
+  const sum = live?.auto && t.canvasFinal ? undefined : live;
   const curAgent = currentAgent(ctx.o.labeled?.[t.id] ?? []);
   const raw = sum ? rawAsks(t, sum, ctx.comments, ctx.o.now, activeSinceOf(curAgent)) : [];
   const rawTargets = new Set((sum?.openAsks ?? []).filter((a) => !t.asks.some((x) => x.ref?.block === a.id)).map((a) => `t-${t.id}#c-${a.id}`));
-  const recapSum = group === "done" ? undefined : ctx.canvas?.summaries[aid ?? ""];
+  const recapSum = group === "done" ? undefined : sum;
   // an open card whose crew is gone (archived, no live canvas) shows the snapshot taken when the ask was made, like a done card does
   const snapOnly = group !== "done" && !sum && !!t.canvasFinal;
   const strip = group === "done" || snapOnly ? recapStrip(t, group, t.canvasRecap, t.canvasFinalAt, ctx.comments, ctx.o.now) : recapStrip(t, group, recapSum?.recap, recapSum?.updatedAt, ctx.comments, ctx.o.now);

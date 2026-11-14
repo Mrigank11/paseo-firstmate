@@ -357,3 +357,17 @@ test("Needs you with no canvas ever: the full Context stays open, as before", ()
   assert.match(html, /<details class="actx" id="x-t1-a1" open><summary>Context<\/summary>/);
   assert.ok(!html.includes("cvf-t1"));
 });
+
+test("Needs you with a saved snapshot and only an auto-drawn live canvas: the snapshot shows, the auto canvas does not", () => {
+  const auto = data({}, summary("ag-1", { auto: true, bluf: "DONE: raw last message", runState: "idle" }));
+  const html = askCard({ "canvas.final.html": SNAP, "canvas.final.tsx": '<Canvas title="x" status="done">\n<Bluf>b</Bluf>\n<Markdown id="recap">**You asked:** plan it. **I did:** planned it.</Markdown>\n</Canvas>\n' }, {}, labeled, auto);
+  assert.match(html, /<details class="cnotes cv-d" id="cvf-t1" open><summary>Crew canvas<\/summary>.*CREW CANVAS/s);
+  assert.ok(!html.includes("auto canvas") && !html.includes("DONE: raw last message"), "the timeline-drawn canvas is not shown");
+  // a live canvas that is gone (store lost in a restart) leaves the snapshot too
+  const gone = askCard({ "canvas.final.html": SNAP }, {}, labeled, { status: "ok", css: "", summaries: {}, cards: {} });
+  assert.match(gone, /id="cvf-t1" open><summary>Crew canvas<\/summary>.*CREW CANVAS/s);
+  // a canvas the crew wrote still wins over an older snapshot
+  const written = askCard({ "canvas.final.html": SNAP }, {}, labeled, data());
+  assert.match(written, /class="cv has-full/);
+  assert.ok(!written.includes("cvf-t1"));
+});
