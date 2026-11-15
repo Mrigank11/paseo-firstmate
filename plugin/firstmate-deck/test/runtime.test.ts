@@ -67,7 +67,7 @@ function rig(fleet: object, o: { sdk?: boolean } = {}) {
 }
 const FLEET = { tasks: [{ id: "t1", intent: "do it", state: "active", project: "demo", agentId: "ag-1", shape: "ship" }] };
 
-test("page.html is rewritten only when the signature moves; live.js on every render", async () => {
+test("page.html is rewritten only when the signature moves; live.js only when its content moves, the version file on every render", async () => {
   const r = rig(FLEET);
   await r.deck.configure();
   await r.deck.render("demo");
@@ -81,7 +81,9 @@ test("page.html is rewritten only when the signature moves; live.js on every ren
   await sleep(20);
   await r.deck.render("demo");
   assert.equal(stamp(), before, "same signature: html untouched");
-  assert.notEqual(readFileSync(r.live, "utf8"), "MARKER", "live.js refreshed");
+  assert.equal(readFileSync(r.live, "utf8"), "MARKER", "nothing changed: the full payload is not rewritten");
+  assert.match(readFileSync(r.live.replace(".live.js", ".live.v.js"), "utf8"), /__fdVer\("[0-9a-f]{16}",\d+,/, "the version file is");
+  writeFileSync(r.live, "MARKER"); // (a later change must overwrite it)
 
   r.world.status = "idle"; // agent status is part of the signature
   r.deck.onAgentEvent("ag-1");
@@ -429,10 +431,10 @@ test("C3: with no last good view (plugin just started) a broken fleet.json rende
   r.deck.stop();
 });
 
-test("M4: every live payload carries a growing sequence number", async () => {
+test("M4: every version file carries a growing sequence number", async () => {
   const r = rig(FLEET);
   await r.deck.configure();
-  const seq = () => Number(/,(\d+)\);\n$/.exec(readFileSync(r.live, "utf8"))?.[1]);
+  const seq = () => Number(/,(\d+),"[^"]*"\);\n$/.exec(readFileSync(r.live.replace(".live.js", ".live.v.js"), "utf8"))?.[1]);
   await r.deck.render("demo");
   const a = seq();
   await r.deck.render("demo");

@@ -1,9 +1,10 @@
 // Deterministic renderer: node render-cli.ts <firstmateRoot> <project> [--out <file>] [--agents <agents.json>]
-import { randomBytes } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
 import { loadProject } from "./state.ts";
-import { liveJs, renderProject, type AgentView } from "./render.ts";
+import { assetDir, resolveAssets } from "./asset-store.ts";
+import { liveJs, liveVersionFileOf, liveVersionJs, renderProject, type AgentView } from "./render.ts";
 
 const args = process.argv.slice(2);
 const flag = (name: string): string | undefined => {
@@ -41,8 +42,14 @@ try {
     writeFileSync(tmp, text);
     renameSync(tmp, path);
   };
-  put(target, r.page);
-  put(target.replace(/\.[^./]*$/, "") + ".live.js", liveJs(r.live.replace(/\{TS\}/g, ts), now.toISOString()));
+  // no deck server here: pictures go back inline
+  const dir = assetDir(resolve(root));
+  const live = resolveAssets(r.live, "", dir);
+  const hash = createHash("sha1").update(live).digest("hex").slice(0, 16);
+  const seq = Date.now();
+  put(target, resolveAssets(r.page, "", dir));
+  put(target.replace(/\.[^./]*$/, "") + ".live.js", liveJs(live.replace(/\{TS\}/g, ts), now.toISOString(), seq, hash));
+  put(liveVersionFileOf(target), liveVersionJs(hash, now.toISOString(), seq));
   console.log(`wrote ${target} (signature ${r.signature.slice(0, 12)})`);
 } catch (e) {
   console.error((e as Error).message);

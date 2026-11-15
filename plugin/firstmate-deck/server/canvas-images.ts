@@ -16,3 +16,16 @@ export async function inlineImages(html: string, load: (hash: string) => Promise
   }));
   return html.replace(IMG, (all, a: string, h: string, z: string) => (got.has(h) ? a + got.get(h) + z : all));
 }
+
+/** Like inlineImages, but each picture is stored (`save`) and the card links to it (`link(hash)`): the page payload stays small. A picture that cannot be loaded or stored keeps its original link. */
+export async function linkImages(html: string, load: (hash: string) => Promise<LoadedImage | null>,
+  save: (hash: string, img: LoadedImage) => boolean, link: (hash: string) => string): Promise<string> {
+  const hashes = [...new Set([...html.matchAll(IMG)].map((m) => m[2]))];
+  if (!hashes.length) return html;
+  const got = new Set<string>();
+  await Promise.all(hashes.map(async (h) => {
+    const img = await load(h).catch(() => null);
+    if (img && save(h, img)) got.add(h);
+  }));
+  return html.replace(IMG, (all, a: string, h: string, z: string) => (got.has(h) ? a + link(h) + z : all));
+}

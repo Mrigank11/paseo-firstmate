@@ -3,11 +3,13 @@
 //   GET  /<project>/state  -> {"o":{...},"r":{...}}
 //   POST /<project>/state  body = the same shape (JSON, sent as text/plain to skip the CORS preflight) -> merged state
 // Stored per project in state/projects/<p>/ui-state.json, a file the plugin owns (it never writes fleet.json).
-// CORS is open: the only thing reachable is a list of "I have read this card" hashes on the tailnet.
+// GET /asset/<hash> serves a crew screenshot the deck stored (asset-store.ts); the pages link to it instead of embedding it.
+// CORS is open: the only things reachable are a list of "I have read this card" hashes and crew screenshots, on the tailnet.
 import { existsSync, readFileSync } from "node:fs";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { join } from "node:path";
 import { cleanUi, emptyUi, mergeUi, type UiState } from "./marks.ts";
+import { assetDir, readAsset } from "./asset-store.ts";
 import { projectDir, withLock, writeAtomic } from "./store.ts";
 
 export const uiStatePath = (root: string, project: string) => join(projectDir(root, project), "ui-state.json");
@@ -55,6 +57,15 @@ export class MarksServer {
   private handle = (req: IncomingMessage, res: ServerResponse): void => {
     try {
       if (req.method === "OPTIONS") return this.send(res, 204);
+      const a = /^\/asset\/([0-9a-f]{32})$/.exec((req.url ?? "").split("?")[0]);
+      if (a) {
+        const pic = req.method === "GET" || req.method === "HEAD" ? readAsset(assetDir(this.getRoot()), a[1]) : null;
+        if (!pic) return this.send(res, 404, '{"error":"no such picture"}');
+        // content-addressed, so it never changes: let the browser keep it
+        res.writeHead(200, { "Access-Control-Allow-Origin": "*", "Cross-Origin-Resource-Policy": "cross-origin", "Content-Type": pic.mime,
+          "Content-Length": pic.bytes.length, "Cache-Control": "public, max-age=31536000, immutable" });
+        return void res.end(req.method === "HEAD" ? undefined : pic.bytes);
+      }
       const m = /^\/([a-z0-9][a-z0-9-]*)\/state\/?$/.exec((req.url ?? "").split("?")[0]);
       const root = this.getRoot();
       if (!m || !root || !existsSync(join(projectDir(root, m[1]), "project.json"))) return this.send(res, 404, '{"error":"no such project"}');
@@ -98,6 +109,9 @@ export class MarksServer {
     if (ok.length) this.log(`read-marks endpoint on ${ok.join(", ")}`);
     return ok;
   }
+
+  /** The ports the listeners are bound to (a test listens on port 0). */
+  boundPorts(): number[] { return this.servers.map((s) => (s.address() as { port: number }).port); }
 
   async close(): Promise<void> {
     const all = this.servers;

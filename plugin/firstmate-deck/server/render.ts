@@ -608,10 +608,18 @@ function renderSection(model: ProjectModel, name: string): string {
  * never compares `iso` with the browser clock (they can disagree by minutes); it only notices that the payload keeps
  * changing, on its own clock.
  */
-export function liveJs(liveHtml: string, iso?: string, seq?: number): string {
-  const extra = iso || seq !== undefined ? `,${JSON.stringify(iso ?? "")}${seq !== undefined ? `,${seq}` : ""}` : "";
+export function liveJs(liveHtml: string, iso?: string, seq?: number, hash?: string): string {
+  const extra = iso || seq !== undefined || hash ? `,${JSON.stringify(iso ?? "")}${seq !== undefined || hash ? `,${seq ?? "null"}` : ""}${hash ? `,${JSON.stringify(hash)}` : ""}` : "";
   return `window.__fdLive&&window.__fdLive(${JSON.stringify(liveHtml)}${extra});\n`;
 }
+
+/** The tiny file an open page polls every second: the payload's content hash (the page fetches the full file only when it moved) and the growing sequence number its staleness check watches. */
+export function liveVersionJs(hash: string, iso: string, seq: number): string {
+  return `window.__fdVer&&window.__fdVer(${JSON.stringify(hash)},${seq},${JSON.stringify(iso)});\n`;
+}
+
+export const liveFileOf = (pageFile: string) => pageFile.replace(/\.[^./]*$/, "") + ".live.js";
+export const liveVersionFileOf = (pageFile: string) => pageFile.replace(/\.[^./]*$/, "") + ".live.v.js";
 
 export const STALE_TEXT = "This page stopped updating. Your comments may not reach the first mate until it's fixed (the first mate can run bin/page heal).";
 

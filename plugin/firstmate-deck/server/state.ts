@@ -1,5 +1,6 @@
 // Read-only loader: first-mate state on disk -> a typed model of one project's status page.
 // Missing files mean empty values. Malformed JSON throws a clear Error naming the file.
+import { assetDir, externalizeImages } from "./asset-store.ts";
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { recapOfSource, type Recap } from "./recap.ts";
 import { basename, join, resolve, sep } from "node:path";
@@ -272,7 +273,7 @@ function toTask(raw: any, root: string, label: string, inbox: Comment[] = [], ar
     pr: raw.pr || undefined,
     branch: raw.branch || undefined,
     card: slug ? readText(join(root, "state", "tasks", raw.id, "card.md")) : "",
-    canvasFinal: slug ? readText(join(root, "state", "tasks", raw.id, "canvas.final.html")) : "",
+    canvasFinal: slug ? externalizeImages(readText(join(root, "state", "tasks", raw.id, "canvas.final.html")), assetDir(root)) : "",
     canvasRecap: slug ? recapOfSource(readText(join(root, "state", "tasks", raw.id, "canvas.final.tsx"))) : null,
     canvasFinalAt: slug ? mtimeMs(join(root, "state", "tasks", raw.id, "canvas.final.tsx")) : 0,
     answered: loadAnswered(root, raw.id).filter((a) => !answeredIds.has(a.id)),

@@ -3,7 +3,8 @@
 // pulls here and writes the result into the page. Polls every POLL_MS while some page tracks an agent, backs off while
 // agent-canvas is unreachable, and fetches a card only when its summary `rev` moved. It never throws: no canvas is a soft state.
 
-import { inlineImages, type LoadedImage } from "./canvas-images.ts";
+import { assetLink, saveAsset } from "./asset-store.ts";
+import { inlineImages, linkImages, type LoadedImage } from "./canvas-images.ts";
 
 /** What `GET /api/fm/summary` returns per agent (agent-canvas server/hub.ts `FmSummary`). */
 export type FmSummary = {
@@ -57,6 +58,8 @@ export type CanvasPortOpts = {
   maxBackoffMs?: number;
   /** The theme of the page the canvas is embedded in (the deck page is light). agent-canvas then draws that theme, not the OS's. */
   theme?: "light" | "dark";
+  /** Where pictures are stored (the deck's asset dir). Set: a card links to its pictures (the deck's web server serves them). Unset: they are embedded as data: URIs. */
+  assetDir?: () => string;
 };
 
 export class CanvasPort {
@@ -127,6 +130,12 @@ export class CanvasPort {
     return this.flight;
   }
 
+  private async pictures(html: string, base: string): Promise<string> {
+    const dir = this.o.assetDir?.();
+    const load = (h: string) => this.picture(h, base);
+    return dir ? linkImages(html, load, (h, img) => saveAsset(dir, h, img.mime, img.bytes), assetLink) : inlineImages(html, load);
+  }
+
   private async picture(hash: string, base: string): Promise<LoadedImage | null> {
     const had = this.pics.get(hash);
     if (had) return had;
@@ -173,7 +182,7 @@ export class CanvasPort {
         this.sums.set(s.agentId, s);
         if (!card || card.rev !== s.rev || card.archived !== s.archived) {
           const c = await this.get(`/api/fm/card/${encodeURIComponent(s.agentId)}${s.archived ? "?archived=1" : ""}`, base);
-          if (c.ok) this.cards.set(s.agentId, { rev: s.rev, archived: s.archived, html: await inlineImages(await c.text(), (h) => this.picture(h, base)) });
+          if (c.ok) this.cards.set(s.agentId, { rev: s.rev, archived: s.archived, html: await this.pictures(await c.text(), base) });
         }
       }
       // agents the canvas no longer knows (or that nobody wants any more) leave the cache

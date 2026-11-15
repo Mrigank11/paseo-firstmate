@@ -9,7 +9,7 @@ import { ANCHOR_JS } from "./anchors.ts";
 export function pageScript(project: string, liveFile: string, tickSeconds: number, marksUrl = ""): string {
   const j = (v: unknown) => JSON.stringify(v).replace(/</g, "\\u003c");
   return `(function(){
-  var K=${j("fd:" + project + ":state")},P=K+"|",F=${j(liveFile)},MU=${j(marksUrl)},ls=null,S={};
+  var K=${j("fd:" + project + ":state")},P=K+"|",F=${j(liveFile)},V=${j(liveFile.replace(/\.js$/, ".v.js"))},MU=${j(marksUrl)},ls=null,S={};
   try{localStorage.setItem(K+"t","1");localStorage.removeItem(K+"t");ls=localStorage}catch(e){}
   try{var raw=(ls&&ls.getItem(K))||(window.name.indexOf(P)===0?window.name.slice(P.length):"");if(raw)S=JSON.parse(raw)||{}}catch(e){}
   function save(){var s=JSON.stringify(S);try{if(ls)ls.setItem(K,s)}catch(e){}
@@ -127,8 +127,14 @@ export function pageScript(project: string, liveFile: string, tickSeconds: numbe
   // with the browser's, so a skewed phone clock cannot raise a false alarm or hide a real stall.
   function stale(){var b=document.getElementById("fd-stale");staleNow=(Date.now()-changedAt)>STALE;if(b)b.hidden=!staleNow;meta()}
   setInterval(stale,5000);
-  window.__fdLive=function(html,iso,seq){var tk=seq!==undefined&&seq!==null?"s"+seq:(iso?"i"+iso:null);
-    if(tk!==null&&tk!==token){token=tk;changedAt=Date.now();stale()}
+  // The page polls a tiny version file (V) every second and loads the full payload (F) only when its content hash moved:
+  // an idle tab costs bytes, not the whole page. have is the hash of the payload on screen; loading stops a second fetch
+  // while one is in flight.
+  var have=null,loading=false;
+  function seen(seq,iso){var tk=seq!==undefined&&seq!==null?"s"+seq:(iso?"i"+iso:null);
+    if(tk!==null&&tk!==token){token=tk;changedAt=Date.now();stale()}}
+  window.__fdVer=function(hash,seq,iso){seen(seq,iso);if(hash&&hash!==have&&!loading)full()};
+  window.__fdLive=function(html,iso,seq,hash){seen(seq,iso);loading=false;if(hash)have=hash;
     var el=live();if(!el||html===last)return;last=html;
     var fk=fkey();snapshot();var y=window.scrollY,M="<!--LIVE-",I=window.Idiomorph;
     if(I&&I.morph&&window.Element&&el instanceof window.Element){
@@ -141,7 +147,10 @@ export function pageScript(project: string, liveFile: string, tickSeconds: numbe
         beforeNodeMorphed:function(n,m){if(n.nodeName==="IFRAME"&&m.nodeName==="IFRAME"&&n.getAttribute("srcdoc")===m.getAttribute("srcdoc"))return false}}});
       arrange();fill();refocus(fk);if(window.scrollY!==y)window.scrollTo(0,y);return}
     el.innerHTML=M+"START-->"+html+M+"END-->";restore(el);arrange();reapply(el);anchorIds(el);fill();refocus(fk);window.scrollTo(0,y)};
-  function tick(){var s=document.createElement("script");s.src=F+"?t="+Date.now();s.onload=s.onerror=function(){s.remove()};document.head.appendChild(s)}
-  tick();setInterval(tick,${Math.max(1, Math.round(tickSeconds)) * 1000});
+  function load(file,done){var s=document.createElement("script");s.src=file+"?t="+Date.now();s.onload=s.onerror=function(){s.remove();if(done)done()};document.head.appendChild(s)}
+  // a full fetch that never answers must not block the next one for good
+  function full(){loading=true;load(F,function(){setTimeout(function(){loading=false},4000)})}
+  function tick(){if(!loading)load(V)}
+  full();tick();setInterval(tick,${Math.max(1, Math.round(tickSeconds)) * 1000});
 })();`;
 }

@@ -2,7 +2,9 @@
 // Lavish poll, and relays page comments to the first mate.
 import { existsSync, readdirSync, readFileSync, statSync, watch, type FSWatcher } from "node:fs";
 import { basename, join, relative } from "node:path";
+import { createHash } from "node:crypto";
 import { execFile, type ChildProcess } from "node:child_process";
+import { assetDir, resolveAssets } from "./asset-store.ts";
 import { normalizeRoot, type DeckConfig } from "./config.ts";
 import { hasLivePoll, killAllPolls, killStalePoll, lavishEnv, PagePoller, removePid, resolveLavishBin, spawnPoll, writePid } from "./lavish.ts";
 import { decodePoll } from "./toon.ts";
@@ -13,7 +15,7 @@ import { NO_CLAIM_MESSAGE, NoFirstMateError, PortSelector, resolveFirstMate, sen
 import { Relay, newEntries, parseTarget, type AskLookup, type TargetInfo } from "./relay.ts";
 import type { Known } from "./target.ts";
 import { CanvasPort, type FmSummary } from "./canvas-port.ts";
-import { liveJs, renderProject, stageOf, stagesOf, type AgentView, type Banner } from "./render.ts";
+import { liveJs, liveVersionJs, liveVersionFileOf, renderProject, stageOf, stagesOf, type AgentView, type Banner } from "./render.ts";
 import { currentAgent, type LabeledAgent } from "./stage.ts";
 import { inputsMtimeMs, readSnapshot, writeSnapshot, type Snapshot, type StageRow } from "./stages-file.ts";
 import { ownerOf } from "./gate.ts";
@@ -118,6 +120,8 @@ export class Deck {
   private loadErrors = new Map<string, string>();
   private skippedLogged = new Map<string, number>();
   private liveSeq = Date.now();
+  /** Content hash of the payload last written to each page's live file. */
+  private liveHashes = new Map<string, string>();
   private watchedDir = "";
   private timers: ReturnType<typeof setInterval>[] = [];
   private debounce = new Map<string, ReturnType<typeof setTimeout>>();
@@ -177,6 +181,7 @@ export class Deck {
     this.o = o;
     this.canvas = new CanvasPort({
       url: () => this.cfg.canvasUrl ?? "",
+      assetDir: () => (this.cfg.root ? assetDir(this.cfg.root) : ""),
       fetch: o.canvasFetch,
       pollMs: o.canvasPollMs,
       log: (m) => this.log(m),
@@ -322,12 +327,18 @@ export class Deck {
 
   /** Where the page syncs its read marks: the host the captain reached the page on (the Lavish link), else the tailnet IP. */
   private marksUrl(project: string, pj: PageJson): string | undefined {
+    const base = this.marksBase(pj);
+    return base ? `${base}/${project}/state` : undefined;
+  }
+
+  /** `http://host:port` of the deck's web server as the captain reaches it; it also serves the crew screenshots. */
+  private marksBase(pj: PageJson): string {
     const port = this.cfg.readMarksPort ?? 0;
-    if (!port || !this.marks.bound.length) return undefined;
+    if (!port || !this.marks.bound.length) return "";
     let host = "";
     try { host = new URL(pj.lavishUrl ?? "").hostname; } catch {}
     if (!host) host = this.tailnetIp || "127.0.0.1";
-    return `http://${host}:${port}/${project}/state`;
+    return `http://${host}:${port}`;
   }
 
   private async detectWebBase(): Promise<void> {
@@ -768,6 +779,10 @@ export class Deck {
       marksUrl: this.marksUrl(project, pj), labeled: this.labeledFor(model), canvas: this.canvas.data(ids), stalled: this.stalled,
     });
     // first render of a page that has never stored what the captain saw: seed it, so turning this on does not light every page
+    // pictures are links to the deck's web server (or, with no server, the bytes inline)
+    const adir = assetDir(this.cfg.root), abase = this.marksBase(pj);
+    r.page = resolveAssets(r.page, abase, adir);
+    r.live = resolveAssets(r.live, abase, adir);
     if (!model.seen && !readUi(this.cfg.root, project).s) updateUi(this.cfg.root, project, { o: {}, r: {}, s: { at: now.toISOString(), keys: r.attention.keys } });
     const p2 = (n: number) => String(n).padStart(2, "0");
     const ts = `${p2(now.getHours())}:${p2(now.getMinutes())}:${p2(now.getSeconds())}`;
@@ -779,7 +794,16 @@ export class Deck {
       this.stamps.set(project, this.pageStamp(target));
       rewrote = true;
     }
-    writeAtomic(target.replace(/\.[^./]*$/, "") + ".live.js", liveJs(r.live.replace(/\{TS\}/g, ts), now.toISOString(), ++this.liveSeq));
+    // The page polls the tiny version file each second and fetches the full payload only when its content hash moved, so
+    // the payload is rewritten only then (the clock stamp is not part of the hash: it shows the last real change).
+    const hash = createHash("sha1").update(r.live).digest("hex").slice(0, 16);
+    const liveFile = target.replace(/\.[^./]*$/, "") + ".live.js";
+    const seq = ++this.liveSeq;
+    if (hash !== this.liveHashes.get(project) || !existsSync(liveFile)) {
+      writeAtomic(liveFile, liveJs(r.live.replace(/\{TS\}/g, ts), now.toISOString(), seq, hash));
+      this.liveHashes.set(project, hash);
+    }
+    writeAtomic(liveVersionFileOf(target), liveVersionJs(hash, now.toISOString(), seq));
     patchPageJson(pageJsonPath(this.cfg.root, project), { lastRender: now.toISOString(), banner: banner?.text ?? null, agentViews: this.agents.snapshot(ids) });
     if (rewrote) this.log(`rendered ${project} (${r.signature.slice(0, 8)})`);
   }
