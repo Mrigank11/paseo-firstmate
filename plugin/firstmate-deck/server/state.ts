@@ -131,13 +131,33 @@ export type ProjectModel = {
 
 const V1_MESSAGE = "fleet.json is a v1 registry (no \"version\": 2): run bin/migrate-fleet-v2";
 
-function readText(path: string): string {
-  try {
-    return readFileSync(path, "utf8");
-  } catch {
-    return "";
+// Every render reloads the whole model, which used to mean re-reading (and re-hashing) every task card and crew canvas
+// snapshot, hundreds of files, on each agent event. A file is read again only when its size or modified time moved.
+type Cached = { mtimeMs: number; size: number; text: string };
+const textCache = new Map<string, Cached>();
+let textCacheChars = 0;
+const TEXT_CACHE_MAX_CHARS = 96 * 1024 * 1024;
+let diskReads = 0;
+
+export const textCacheStats = () => ({ reads: diskReads, files: textCache.size, chars: textCacheChars });
+
+export function readTextCached(path: string): string {
+  let st;
+  try { st = statSync(path); } catch { const had = textCache.get(path); if (had) { textCacheChars -= had.text.length; textCache.delete(path); } return ""; }
+  const had = textCache.get(path);
+  if (had && had.mtimeMs === st.mtimeMs && had.size === st.size) return had.text;
+  let text = "";
+  try { text = readFileSync(path, "utf8"); diskReads++; } catch { return ""; }
+  if (had) { textCacheChars -= had.text.length; textCache.delete(path); }
+  if (text.length * 2 < TEXT_CACHE_MAX_CHARS) {
+    if (textCacheChars + text.length > TEXT_CACHE_MAX_CHARS) { textCache.clear(); textCacheChars = 0; }
+    textCache.set(path, { mtimeMs: st.mtimeMs, size: st.size, text });
+    textCacheChars += text.length;
   }
+  return text;
 }
+
+const readText = readTextCached;
 
 function parseJson(text: string, label: string): unknown {
   try {

@@ -42,7 +42,8 @@ const memo = new Map<string, string>();
 /** Turn every data: picture in `html` (a snapshot written before pictures were linked) into a stored picture and a link. Memoised, so a page render costs one hash of the text. */
 export function externalizeImages(html: string, dir: string): string {
   if (!html.includes("data:image/")) return html;
-  const key = createHash("sha1").update(html).digest("hex");
+  // keyed by the text itself: the same string instance (state.ts caches file text) is not re-hashed on every render
+  const key = html;
   const had = memo.get(key);
   if (had !== undefined) return had;
   const out = html.replace(DATA_IMG, (all, a: string, mime: string, b64: string, z: string) => {

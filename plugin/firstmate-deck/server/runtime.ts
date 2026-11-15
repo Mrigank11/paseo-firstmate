@@ -74,6 +74,9 @@ const DEBOUNCE_MS = 150;
 /** A poll still running after this long has registered as Lavish's listener. */
 const LISTENER_OK_AFTER_MS = 1200;
 const REPEAT_WINDOW_MS = 5000;
+/** Reasons that are background churn: see scheduleRender. */
+const THROTTLED = new Set(["agent", "canvas", "new-agent", "fs", "marks"]);
+const MIN_GAP_MS = 1000;
 /** Comment state changes (new comment, delivered, answered) render almost at once. */
 const INSTANT_MS = 30;
 /** An undelivered comment turns amber on the page after this long. */
@@ -127,6 +130,7 @@ export class Deck {
   private watchedDir = "";
   private timers: ReturnType<typeof setInterval>[] = [];
   private debounce = new Map<string, ReturnType<typeof setTimeout>>();
+  private lastRenderAt = new Map<string, number>();
   private late = new Set<ReturnType<typeof setTimeout>>();
   private rendering = new Map<string, { again: boolean }>();
   private sigs = new Map<string, string>();
@@ -447,14 +451,26 @@ export class Deck {
     for (const p of this.projectNames()) this.scheduleRender(p, delay, why);
   }
 
-  scheduleRender(project: string, delayMs = DEBOUNCE_MS, _why = ""): void {
+  /**
+   * Render this project after `delayMs`, restarting the wait on every call (a burst of writes is one render). Reasons in
+   * THROTTLED (a crew agent's status moved, a crew canvas changed, a stray file event) are background churn: they render
+   * at once after a quiet spell, but never more often than every MIN_GAP_MS, and a stream of them cannot starve the render
+   * by pushing it back forever. Everything else (a comment, an inbox change, fleet.json and task files where an ask
+   * appears, a listener change) keeps its own short delay and also takes over a throttled render that is still waiting.
+   */
+  scheduleRender(project: string, delayMs = DEBOUNCE_MS, why = ""): void {
     if (this.stopped) return;
+    const throttled = THROTTLED.has(why);
+    if (throttled && this.debounce.has(project)) return; // one is already coming and will read the newest state
+    let wait = delayMs;
+    if (throttled) wait = Math.max(wait, (this.lastRenderAt.get(project) ?? 0) + MIN_GAP_MS - Date.now());
     const t = this.debounce.get(project);
     if (t) clearTimeout(t);
     this.debounce.set(project, setTimeout(() => {
       this.debounce.delete(project);
+      this.lastRenderAt.set(project, Date.now());
       void this.render(project).catch((e) => this.log(`render ${project} failed: ${e}`));
-    }, delayMs));
+    }, wait));
   }
 
   /** `agent.turn_started`: remember when, unlike Paseo's updatedAt this does not move on a label change or a steer. */
