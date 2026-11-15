@@ -1,10 +1,12 @@
 process.env.TZ = "UTC";
+process.env.FM_DECK_POLL_MODE ??= "cli"; // the older tests drive a fake lavish-axi CLI; the HTTP path has its own tests (http-poll, runtime-http)
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Deck } from "../server/runtime.ts";
+import { hasLivePoll } from "../server/lavish.ts";
 import { readInbox, readPageJson } from "../server/store.ts";
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -58,7 +60,7 @@ function rig(fleet: object, o: { sdk?: boolean } = {}) {
     set labelled(l: unknown[]) { if (!l.length) fw.agents.get("fm-1")!.labels = {}; },
     set all(l: { id: string; status: string }[]) { for (const a of l) fw.add({ id: a.id, status: a.status as any }); },
   };
-  const mkDeck = () => new Deck({ exec, ports, batchMs: 30, readConfig: async () => ({ root, firstmateLabel: "firstmate=true" }) });
+  const mkDeck = (cfg: Record<string, string> = {}) => new Deck({ exec, ports, batchMs: 30, readConfig: async () => ({ root, firstmateLabel: "firstmate=true", ...cfg }) });
   const deck = mkDeck();
   return {
     root, pdir, world, fw, cliCalls, ports, deck, mkDeck, page: join(pdir, "page.html"), live: join(pdir, "page.live.js"),
@@ -572,6 +574,87 @@ test("an open session is polled through a real child: listener goes ok while the
   } finally {
     if (prev === undefined) delete process.env.LAVISH_AXI_BIN; else process.env.LAVISH_AXI_BIN = prev;
     r.deck.stop();
+  }
+});
+
+// ---------- comment checks over HTTP ----------
+
+import { createServer, type ServerResponse } from "node:http";
+import { killAllPolls } from "../server/lavish.ts";
+
+/** A fake Lavish whose /api/poll holds each request open until `answer` is called. */
+async function holdingLavish() {
+  const waiting: ServerResponse[] = [];
+  const server = createServer((req, res) => {
+    if (!req.url?.startsWith("/api/poll")) { res.writeHead(404); res.end(); return; }
+    res.writeHead(200, { "content-type": "application/json" });
+    res.write(" ");
+    waiting.push(res);
+    res.on("close", () => { const i = waiting.indexOf(res); if (i >= 0) waiting.splice(i, 1); });
+  });
+  await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
+  return {
+    port: String((server.address() as any).port),
+    get open() { return waiting.length; },
+    answer(body: unknown) { waiting.shift()!.end(JSON.stringify(body)); },
+    stop() { server.closeAllConnections(); server.close(); },
+  };
+}
+
+test("HTTP comment check: no helper process, a comment lands in the inbox once, the next wait is open at once, a repeated delivery is dropped, stop closes the wait", async () => {
+  const prev = process.env.FM_DECK_POLL_MODE;
+  delete process.env.FM_DECK_POLL_MODE;
+  const lv = await holdingLavish();
+  const r = rig(FLEET);
+  const deck = r.mkDeck({ lavishPort: lv.port });
+  try {
+    const pjp = join(r.pdir, "page.json");
+    writeFileSync(pjp, JSON.stringify({ lavishUrl: "http://x/session/1", session: "open", listener: "pending", lastRender: null, lastDelivery: null, undelivered: 0 }));
+    writeFileSync(r.page, "<p>x");
+    await deck.configure();
+    await until(() => lv.open === 1, 3000);
+    await until(() => readPageJson(pjp).listener === "ok", 3000);
+    assert.equal(hasLivePoll(r.page), false, "no lavish-axi poll process was started");
+    lv.answer({ status: "feedback", prompts: [{ uid: "", prompt: "look here", selector: "#t-t1", tag: "p", text: "x" }] });
+    await until(() => readInbox(join(r.pdir, "inbox.jsonl")).length === 1, 2000);
+    await until(() => lv.open === 1, 1000); // re-asked at once
+    lv.answer({ status: "feedback", prompts: [{ uid: "", prompt: "look here", selector: "#t-t1", tag: "p", text: "x" }] });
+    await until(() => lv.open === 1, 1000);
+    await sleep(100);
+    assert.equal(readInbox(join(r.pdir, "inbox.jsonl")).length, 1, "the same delivery again is one comment");
+    lv.answer({ status: "feedback", prompts: [{ uid: "", prompt: "a different one", selector: "#t-t1", tag: "p", text: "x" }] });
+    await until(() => readInbox(join(r.pdir, "inbox.jsonl")).length === 2, 2000);
+    await until(() => lv.open === 1, 1000);
+    deck.stop();
+    await until(() => lv.open === 0, 2000);
+  } finally {
+    if (prev !== undefined) process.env.FM_DECK_POLL_MODE = prev;
+    deck.stop(); lv.stop(); killAllPolls();
+  }
+});
+
+test("HTTP comment check falls back to the lavish-axi CLI when Lavish refuses connections", async () => {
+  const prev = process.env.FM_DECK_POLL_MODE;
+  const prevBin = process.env.LAVISH_AXI_BIN;
+  delete process.env.FM_DECK_POLL_MODE;
+  const r = rig(FLEET);
+  const fake = join(r.root, "lavish-axi", "cli.mjs");
+  mkdirSync(join(r.root, "lavish-axi"));
+  writeFileSync(fake, `import { writeFileSync } from "node:fs"; writeFileSync(${JSON.stringify(join(r.root, "poll.pid"))}, String(process.pid)); setTimeout(() => {}, 60000);`);
+  process.env.LAVISH_AXI_BIN = fake;
+  const dead = await holdingLavish(); const port = dead.port; dead.stop();
+  const deck = r.mkDeck({ lavishPort: port, lavishBin: fake });
+  try {
+    const pjp = join(r.pdir, "page.json");
+    writeFileSync(pjp, JSON.stringify({ lavishUrl: "http://x/session/1", session: "open", listener: "pending", lastRender: null, lastDelivery: null, undelivered: 0 }));
+    writeFileSync(r.page, "<p>x");
+    await deck.configure();
+    await until(() => existsSync(join(r.root, "poll.pid")), 8000);
+    await until(() => readPageJson(pjp).listener === "ok", 3000);
+  } finally {
+    if (prev !== undefined) process.env.FM_DECK_POLL_MODE = prev;
+    if (prevBin === undefined) delete process.env.LAVISH_AXI_BIN; else process.env.LAVISH_AXI_BIN = prevBin;
+    deck.stop(); killAllPolls();
   }
 });
 

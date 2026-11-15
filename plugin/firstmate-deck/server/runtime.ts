@@ -6,8 +6,9 @@ import { createHash } from "node:crypto";
 import { execFile, type ChildProcess } from "node:child_process";
 import { assetDir, resolveAssets } from "./asset-store.ts";
 import { normalizeRoot, type DeckConfig } from "./config.ts";
-import { hasLivePoll, killAllPolls, killStalePoll, lavishEnv, PagePoller, removePid, resolveLavishBin, spawnPoll, writePid } from "./lavish.ts";
-import { decodePoll } from "./toon.ts";
+import { hasLivePoll, killAllPolls, killStalePoll, lavishEnv, PagePoller, removePid, resolveLavishBin, spawnPoll, writePid, type PollRun } from "./lavish.ts";
+import { httpPoll, PollSource } from "./http-poll.ts";
+import type { Prompt } from "./toon.ts";
 import { AgentViews } from "./agent-views.ts";
 import { coldLabelled } from "./cold-agents.ts";
 import { CliPort, type Exec } from "./paseo-cli.ts";
@@ -72,6 +73,7 @@ const RESCAN_MS = 30_000;
 const DEBOUNCE_MS = 150;
 /** A poll still running after this long has registered as Lavish's listener. */
 const LISTENER_OK_AFTER_MS = 1200;
+const REPEAT_WINDOW_MS = 5000;
 /** Comment state changes (new comment, delivered, answered) render almost at once. */
 const INSTANT_MS = 30;
 /** An undelivered comment turns amber on the page after this long. */
@@ -86,8 +88,8 @@ const plainTitle = (t: Task) => t.title || t.intent || t.id;
 /** The first question still open on a crew canvas, for a Needs-you line that has no registry ask behind it. */
 const canvasQuestion = (s: FmSummary | undefined): string => s?.openAsks.find((a) => !a.pending)?.question ?? "";
 
-type PollerEntry = { poller: PagePoller; child: ChildProcess | null; last: ChildProcess | null };
-const killEntry = (e: PollerEntry) => { e.poller.stop(); try { e.child?.kill("SIGTERM"); } catch {} };
+type PollerEntry = { poller: PagePoller; child: ChildProcess | null; last: ChildProcess | null; ac: AbortController; http: number; lastEnd: number };
+const killEntry = (e: PollerEntry) => { e.poller.stop(); e.ac.abort(); try { e.child?.kill("SIGTERM"); } catch {} };
 
 export class Deck {
   private cfg: DeckConfig = { root: "", firstmateLabel: "firstmate=true" };
@@ -879,29 +881,52 @@ export class Deck {
       this.stalePollsChecked.add(project);
       if (killStalePoll(pidFile, page)) this.log(`killed a stale poll for ${project}`);
     }
-    try { this.lavishBin ??= await resolveLavishBin(this.cfg.lavishBin); } catch (e) { this.log(`${e}`); this.setListener(project, "error", String(e instanceof Error ? e.message : e)); return; }
+    const force = process.env.FM_DECK_POLL_MODE === "cli" ? "cli" : process.env.FM_DECK_POLL_MODE === "http" ? "http" : undefined;
+    // The CLI is only needed as the fallback (or when forced), so a missing lavish-axi is no longer fatal for the page.
+    const cliBin = async (): Promise<string> => (this.lavishBin ??= await resolveLavishBin(this.cfg.lavishBin));
+    if (force === "cli") {
+      try { await cliBin(); } catch (e) { this.log(`${e}`); this.setListener(project, "error", String(e instanceof Error ? e.message : e)); return; }
+    }
     if (this.stopped || this.pollers.has(project)) return;
-    const bin = this.lavishBin;
     const env = lavishEnv({ LAVISH_AXI_PORT: this.cfg.lavishPort, LAVISH_AXI_STATE_DIR: this.cfg.lavishStateDir });
-    const entry: PollerEntry = { poller: null as any, child: null, last: null };
+    const entry: PollerEntry = { poller: null as any, child: null, last: null, ac: new AbortController(), http: 0, lastEnd: 0 };
+    const listening = (alive: () => boolean) => {
+      // A poll that is still waiting after a moment holds the Lavish listener (an unavailable listener or any
+      // other error answers within ~200 ms), so the listener is fine even if this poll blocks for minutes.
+      const t = setTimeout(() => { if (alive()) this.setListener(project, "ok", ""); }, LISTENER_OK_AFTER_MS);
+      t.unref?.();
+      return t;
+    };
+    const runHttp = async (): Promise<PollRun> => {
+      entry.http++;
+      const t = listening(() => entry.http > 0 && !entry.ac.signal.aborted);
+      try {
+        return await httpPoll(page, { port: this.cfg.lavishPort ?? process.env.LAVISH_AXI_PORT ?? 4387, signal: entry.ac.signal });
+      } finally { clearTimeout(t); entry.http--; entry.lastEnd = Date.now(); }
+    };
+    const runCli = async (): Promise<PollRun> => {
+      const bin = await cliBin();
+      const sp = spawnPoll(bin, page, env);
+      entry.child = sp.child;
+      entry.last = sp.child;
+      writePid(pidFile, sp.child.pid);
+      const okTimer = listening(() => entry.child === sp.child);
+      const res = await sp.result;
+      clearTimeout(okTimer);
+      removePid(pidFile, sp.child.pid);
+      if (entry.child === sp.child) entry.child = null;
+      return res;
+    };
+    const source = new PollSource({
+      http: runHttp,
+      cli: () => runCli().catch((e): PollRun => ({ code: -1, stdout: String(e instanceof Error ? e.message : e) })),
+      log: (m) => this.log(`[poll ${project}] ${m}`),
+      force,
+    });
     entry.poller = new PagePoller({
-      run: async () => {
-        const sp = spawnPoll(bin, page, env);
-        entry.child = sp.child;
-        entry.last = sp.child;
-        writePid(pidFile, sp.child.pid);
-        // A poll that is still waiting after a moment holds the Lavish listener (an unavailable listener or any
-        // other error answers within ~200 ms), so the listener is fine even if this poll blocks for minutes.
-        const okTimer = setTimeout(() => { if (entry.child === sp.child) this.setListener(project, "ok", ""); }, LISTENER_OK_AFTER_MS);
-        okTimer.unref?.();
-        const res = await sp.result;
-        clearTimeout(okTimer);
-        removePid(pidFile, sp.child.pid);
-        if (entry.child === sp.child) entry.child = null;
-        return res;
-      },
-      decode: (out) => decodePoll(out, bin),
-      onBatch: (prompts) => this.ingest(project, prompts),
+      run: () => source.run(),
+      decode: (out) => source.decode(out),
+      onBatch: (prompts) => { const fresh = this.dropRepeats(project, prompts); if (fresh.length) this.ingest(project, fresh); },
       onEnded: () => {
         this.listener.set(project, { state: "ok", detail: "" });
         patchPageJson(pageJsonPath(root, project), { session: "ended", listener: "ok", listenerDetail: null });
@@ -910,7 +935,8 @@ export class Deck {
         this.scheduleRender(project, 0);
       },
       onListener: (state, detail) => this.setListener(project, state, detail),
-      ownAlive: () => hasLivePoll(page, entry.last),
+      // Our own earlier poll is "alive" while its connection is still closing on Lavish's side, or its process is still running.
+      ownAlive: () => entry.http > 0 || Date.now() - entry.lastEnd < 5000 || hasLivePoll(page, entry.last),
       log: (m) => this.log(`[poll ${project}] ${m}`),
     });
     this.pollers.set(project, entry);
@@ -926,6 +952,22 @@ export class Deck {
   }
 
   // ---------- comments ----------
+
+  /**
+   * A batch Lavish hands over twice (a reply lost and the request retried) must not become two comments. A prompt that
+   * matches one the inbox recorded in the last few seconds (same text, target and uid) is the same delivery, not a second comment.
+   */
+  private dropRepeats(project: string, prompts: Prompt[]): Prompt[] {
+    const key = (p: any) => JSON.stringify([p.prompt ?? "", p.selector ?? "", p.uid ?? "", p.text ?? ""]);
+    const since = Date.now() - REPEAT_WINDOW_MS;
+    const recent = new Set(readInbox(inboxPath(this.cfg.root, project)).filter((e) => Date.parse(e.at) >= since).map((e) => key(e.prompt)));
+    const out: Prompt[] = [];
+    for (const p of prompts) {
+      if (recent.has(key(p))) { this.log(`${project}: dropped a repeated delivery of "${String(p.prompt).slice(0, 40)}"`); continue; }
+      out.push(p);
+    }
+    return out;
+  }
 
   ingest(project: string, prompts: { prompt: string; selector?: string }[]): void {
     let known: Known = { tasks: [] as string[], sections: [] as string[] };
