@@ -16,12 +16,12 @@ import { NO_CLAIM_MESSAGE, NoFirstMateError, PortSelector, resolveFirstMate, sen
 import { Relay, newEntries, parseTarget, type AskLookup, type TargetInfo } from "./relay.ts";
 import type { Known } from "./target.ts";
 import { CanvasPort, type FmSummary } from "./canvas-port.ts";
-import { liveJs, liveVersionJs, liveVersionFileOf, renderProject, stageOf, stagesOf, type AgentView, type Banner } from "./render.ts";
+import { liveJs, liveVersionJs, liveVersionFileOf, renderProject, splitLive, stageOf, stagesOf, type AgentView, type Banner } from "./render.ts";
 import { currentAgent, type LabeledAgent } from "./stage.ts";
 import { inputsMtimeMs, readSnapshot, writeSnapshot, type Snapshot, type StageRow } from "./stages-file.ts";
 import { ownerOf } from "./gate.ts";
 import { branchMerged } from "./merged.ts";
-import { MarksServer, readUi, updateUi } from "./marks-server.ts";
+import { MarksServer, readUi, updateUi, type LiveSnap } from "./marks-server.ts";
 import { loadLive, loadProject, type ProjectModel, type Task } from "./state.ts";
 import { appendInbox, inboxPath, pageJsonPath, patchPageJson, pidPath, projectDir, readInbox, readPageJson, updateInbox, writeAtomic, type InboxEntry, type PageJson } from "./store.ts";
 
@@ -127,6 +127,7 @@ export class Deck {
   private liveSeq = Date.now();
   /** Content hash of the payload last written to each page's live file. */
   private liveHashes = new Map<string, string>();
+  private liveSnaps = new Map<string, LiveSnap>();
   private watchedDir = "";
   private timers: ReturnType<typeof setInterval>[] = [];
   private debounce = new Map<string, ReturnType<typeof setTimeout>>();
@@ -199,6 +200,7 @@ export class Deck {
     this.log = o.log ?? (() => {});
     this.agents = new AgentViews((m) => this.log(m));
     this.marks = new MarksServer(() => this.cfg.root, (m) => this.log(m));
+    this.marks.getLive = (p) => this.liveSnaps.get(p) ?? null;
     this.ports = o.ports ?? new PortSelector(new CliPort(o.exec), (m) => this.log(m));
     // the first handle: everything on the pages was last-known until now, so ask about it all
     this.ports.onFirstHandle = () => this.scheduleAll("handle", 0);
@@ -817,6 +819,12 @@ export class Deck {
     const hash = createHash("sha1").update(r.live).digest("hex").slice(0, 16);
     const liveFile = target.replace(/\.[^./]*$/, "") + ".live.js";
     const seq = ++this.liveSeq;
+    // the deck's own server hands the same payload to open pages, split into a skeleton and cards (marks-server.ts), compressed and in pieces
+    const prev = this.liveSnaps.get(project);
+    if (!prev || prev.hash !== hash) {
+      const parts = splitLive(r.live.replace(/\{TS\}/g, ts));
+      this.liveSnaps.set(project, { hash, seq, iso: now.toISOString(), skel: parts.skel, cards: parts.cards });
+    } else this.liveSnaps.set(project, { ...prev, seq, iso: now.toISOString() });
     if (hash !== this.liveHashes.get(project) || !existsSync(liveFile)) {
       writeAtomic(liveFile, liveJs(r.live.replace(/\{TS\}/g, ts), now.toISOString(), seq, hash));
       this.liveHashes.set(project, hash);
