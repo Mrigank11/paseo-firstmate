@@ -62,15 +62,14 @@ test("attention keys: a new ask, a reply and an edited card are news; needsYou c
   assert.notEqual(edited.keys["t-a"], attentionOf(m0, m0.tasks, stagesOf(m0, {}, { now: NOW })).keys["t-a"], "an edited card");
 });
 
-test("the live payload carries count and keys, not the stored seen keys; the shell does not change with them", () => {
+test("the live payload carries count, keys and the stored seen keys; the shell does not change with them", () => {
   const w = world([T("active")]);
   const m = loadProject(w.root, "demo");
   const o = { now: NOW, paseoAgentUrl: (id: string) => id, tickSeconds: 1 };
   const a = renderProject(m, {}, o);
   assert.match(a.live, /<div hidden data-attn data-n="0" data-title="Demo" data-keys="[^"]*"><\/div>/);
   const b = renderProject({ ...m, seen: { at: "2026-10-25T09:00:00.000Z", keys: { "t-a": "00000000" } } }, {}, o);
-  assert.ok(!b.live.includes("data-seen"), "the seen keys are not in the payload: looking at the page must not make tabs re-download it");
-  assert.equal(a.live, b.live);
+  assert.match(b.live, /data-seen="/);
   assert.equal(a.signature, b.signature, "page.html stays still");
 });
 
@@ -106,6 +105,7 @@ function boot(lavish: any | null, data: { n: number; keys: object; seen?: object
   const intervals: (() => void)[] = [];
   const posts: any[] = [];
   const attrs: Record<string, string> = { "data-n": String(data.n), "data-title": "Demo", "data-keys": JSON.stringify(data.keys) };
+  if (data.seen) attrs["data-seen"] = JSON.stringify(data.seen);
   const attnEl = { getAttribute: (k: string) => attrs[k] ?? null };
   const liveEl: any = { contains: () => false, querySelectorAll: () => [], querySelector: (s: string) => (s === "[data-attn]" ? attnEl : null), set innerHTML(_h: string) {} };
   const styles = new Map<string, any>();
@@ -122,25 +122,25 @@ function boot(lavish: any | null, data: { n: number; keys: object; seen?: object
     Date: class extends Date { static now() { return clock; } }, Promise,
     setInterval: (fn: () => void) => intervals.push(fn), clearTimeout: (t: any) => { const i = timers.findIndex((x: any) => x === t); if (i >= 0) timers.splice(i, 1); },
     setTimeout: (fn: () => void, ms: number) => { const t = { fn, at: clock + ms }; timers.push(t); return t; },
-    fetch: (_u: string, init?: any) => { if (init?.method === "POST" && !_u.endsWith("/live")) posts.push(JSON.parse(init.body)); return Promise.resolve({ ok: true, json: () => Promise.resolve(data.seen && !init?.method ? { s: data.seen } : {}) }); },
+    fetch: (_u: string, init?: any) => { if (init?.method === "POST") posts.push(JSON.parse(init.body)); return Promise.resolve({ json: () => Promise.resolve({}) }); },
   });
   vm.runInContext(pageScript("p", "page.live.js", 1, "http://marks.test/demo/state"), ctx);
   const tick = (ms: number) => { clock += ms; for (const t of timers.filter((x) => x.at <= clock)) { timers.splice(timers.indexOf(t), 1); t.fn(); } };
-  return { win, doc, posts, styles, tick, intervals, live: async (seq = 1) => { for (let i = 0; i < 5; i++) await Promise.resolve(); return win.__fdLive("<p>" + seq + "</p>", "2026-10-25T10:00:00Z", seq); } };
+  return { win, doc, posts, styles, tick, intervals, live: (seq = 1) => win.__fdLive("<p>" + seq + "</p>", "2026-10-25T10:00:00Z", seq) };
 }
 const SEEN = { at: "2026-10-25T09:00:00.000Z", keys: { "t-a": "aaaaaaaa", page: "pppppppp" } };
 const iconSvg = (u: string) => decodeURIComponent(u.slice("data:image/svg+xml,".length));
 
-test("tab: quiet, needs you, new, both; the new dot clears after 3 s of looking and is posted", async () => {
+test("tab: quiet, needs you, new, both; the new dot clears after 3 s of looking and is posted", () => {
   const metas: any[] = [];
   const lavish = { setDocumentMeta: (m: any) => metas.push(m) };
   const quiet = boot(lavish, { n: 0, keys: { "t-a": "aaaaaaaa", page: "pppppppp" }, seen: SEEN });
-  await quiet.live();
+  quiet.live();
   assert.equal(metas.at(-1).title, "Demo");
   assert.ok(!/circle/.test(iconSvg(metas.at(-1).icon)), "plain glyph");
   metas.length = 0;
   const both = boot(lavish, { n: 2, keys: { "t-a": "bbbbbbbb", page: "pppppppp" }, seen: SEEN });
-  await both.live();
+  both.live();
   assert.equal(metas.at(-1).title, "(2) * Demo");
   const svg = iconSvg(metas.at(-1).icon);
   assert.match(svg, /#d97706/, "count badge");
@@ -157,35 +157,35 @@ test("tab: quiet, needs you, new, both; the new dot clears after 3 s of looking 
   assert.equal(both.styles.get("fd-new").textContent, "");
 });
 
-test("tab: a hidden tab does not mark anything seen; a page with no stored seen shows nothing new", async () => {
+test("tab: a hidden tab does not mark anything seen; a page with no stored seen shows nothing new", () => {
   const lavish = { setDocumentMeta: () => {} };
   const bg = boot(lavish, { n: 0, keys: { "t-a": "bbbbbbbb" }, seen: SEEN });
   bg.doc.visibilityState = "hidden";
-  await bg.live();
+  bg.live();
   bg.tick(10000);
   assert.equal(bg.posts.length, 0);
   const metas: any[] = [];
   const first = boot({ setDocumentMeta: (m: any) => metas.push(m) }, { n: 0, keys: { "t-a": "bbbbbbbb" }, seen: null });
-  await first.live();
+  first.live();
   first.tick(10000);
   assert.equal(metas.at(-1).title, "Demo");
   assert.equal(first.posts.length, 0);
 });
 
-test("tab: stock Lavish (no setDocumentMeta) is left alone; a late hook is picked up; stale shows the warning", async () => {
+test("tab: stock Lavish (no setDocumentMeta) is left alone; a late hook is picked up; stale shows the warning", () => {
   const none = boot({}, { n: 1, keys: { "t-a": "bbbbbbbb" }, seen: SEEN });
-  await assert.doesNotReject(none.live());
+  assert.doesNotThrow(() => none.live());
   const none2 = boot(null, { n: 1, keys: { "t-a": "bbbbbbbb" }, seen: SEEN });
-  await assert.doesNotReject(none2.live());
+  assert.doesNotThrow(() => none2.live());
   const metas: any[] = [];
   const late = boot({}, { n: 1, keys: { "t-a": "aaaaaaaa" }, seen: SEEN });
-  await late.live(1);
+  late.live(1);
   late.win.lavish.setDocumentMeta = (m: any) => metas.push(m);
-  await late.live(2);
+  late.live(2);
   assert.equal(metas.at(-1).title, "(1) Demo");
   const st: any[] = [];
   const old = boot({ setDocumentMeta: (m: any) => st.push(m) }, { n: 1, keys: { "t-a": "bbbbbbbb" }, seen: SEEN });
-  await old.live();
+  old.live();
   old.tick(61000);
   old.intervals.forEach((f) => f());
   assert.equal(st.at(-1).title, "\u26a0 Demo", "not updating for 60 s");

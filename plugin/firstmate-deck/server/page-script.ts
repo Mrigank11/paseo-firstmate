@@ -44,13 +44,11 @@ export function pageScript(project: string, liveFile: string, tickSeconds: numbe
   var pt=null;
   function push(){if(!MU)return;clearTimeout(pt);pt=setTimeout(function(){try{var o={};Object.keys(S).forEach(function(k){if(k!=="_r")o[k]=S[k]});
     fetch(MU,{method:"POST",headers:{"Content-Type":"text/plain"},body:JSON.stringify({o:o,r:R})}).catch(function(){})}catch(e){}},400)}
-  // the page may pick a "first task" itself only once it has the stored selection (pull) and the full task list (FULL): never from a stale or partial view
-  var PULLED=!MU,FULL=false;window.__fdReady=function(){return PULLED&&FULL};
   function pull(){if(!MU)return;try{fetch(MU).then(function(r){return r.json()}).then(function(j){var ch=false,rr=(j&&j.r)||{},oo=(j&&j.o)||{};
     Object.keys(rr).forEach(function(k){if(R[k]!==rr[k]){R[k]=rr[k];ch=true}});
     Object.keys(oo).forEach(function(k){if(!(k in S)){S[k]=oo[k];ch=true}});
     if(j&&j.s&&j.s.at>SA){SA=j.s.at;SEEN=j.s.keys||{};attn()}
-    PULLED=true;if(ch){save();restore(document);arrange()}tn()}).catch(function(){PULLED=true;tn()})}catch(e){PULLED=true}}
+    if(ch){save();restore(document);arrange();tn()}}).catch(function(){})}catch(e){}}
   document.addEventListener("click",function(e){var b=e.target.closest&&e.target.closest("button.mr,button.mra");if(!b)return;
     if(b.classList.contains("mr")){var t=b.closest(".task"),h=t&&t.getAttribute("data-h");if(h)R[t.id]=h}
     else [].slice.call(document.querySelectorAll("#g-doneu .task")).forEach(function(t){var h=t.getAttribute("data-h");if(h)R[t.id]=h});
@@ -66,8 +64,7 @@ export function pageScript(project: string, liveFile: string, tickSeconds: numbe
       el.querySelectorAll("[data-slot-for]").forEach(function(x){if(x.getAttribute("data-slot-for")===k)src=x});
       if(src&&s.innerHTML!==src.innerHTML)s.innerHTML=src.innerHTML});tn();attn()}
   // ---- the browser tab and the "new" dots. The live block carries (data-attn) the Needs-you count, one attention key per
-  // task. The keys the captain last saw come from the marks endpoint (pull), never from the payload: looking at the page must not make
-  // every open tab download it again. Unseen = keys that differ from the seen ones (nothing is unseen until
+  // task and the keys the captain last saw. Unseen = keys that differ from the seen ones (nothing is unseen until
   // something has been stored). Looking at the page for 3 s while its tab is visible marks what it showed as seen, and
   // that is shared through the marks endpoint. The tab itself is set through Lavish's window.lavish.setDocumentMeta when
   // the Lavish serving this page has it (stock Lavish does not: then only the dots work).
@@ -93,8 +90,10 @@ export function pageScript(project: string, liveFile: string, tickSeconds: numbe
       var at=new Date().toISOString();if(at<=SA)at=new Date(Date.parse(SA)+1).toISOString();SA=at;SEEN=shown;
       if(MU)try{fetch(MU,{method:"POST",headers:{"Content-Type":"text/plain"},body:JSON.stringify({s:{at:at,keys:shown}})}).catch(function(){})}catch(e){}
       attn()},3000)}
-  function attn(){var el=live(),a=el&&el.querySelector&&el.querySelector("[data-attn]");if(!a)return;var keys={};
+  function attn(){var el=live(),a=el&&el.querySelector&&el.querySelector("[data-attn]");if(!a)return;var keys={},seen=null;
     try{keys=JSON.parse(a.getAttribute("data-keys")||"{}")}catch(e){}
+    try{var sj=a.getAttribute("data-seen");seen=sj?JSON.parse(sj):null}catch(e){}
+    if(seen&&seen.at&&seen.at>SA){SA=seen.at;SEEN=seen.keys||{}}
     A={n:parseInt(a.getAttribute("data-n"),10)||0,title:a.getAttribute("data-title")||"",keys:keys};
     var u=unseen();dots(u);meta();seeSoon(u)}
   document.addEventListener("visibilitychange",function(){attn()});
@@ -126,16 +125,17 @@ export function pageScript(project: string, liveFile: string, tickSeconds: numbe
   // Staleness is measured on THIS browser's clock only: how long ago the payload last CHANGED (the plugin stamps every
   // render with a growing sequence number and re-renders at least every 20 s). The daemon's timestamp is never compared
   // with the browser's, so a skewed phone clock cannot raise a false alarm or hide a real stall.
-  function stale(){var b=document.getElementById("fd-stale");staleNow=(Date.now()-changedAt)>STALE;if(b)b.hidden=!staleNow;recon();meta()}
+  function stale(){var b=document.getElementById("fd-stale");staleNow=(Date.now()-changedAt)>STALE;if(b)b.hidden=!staleNow;meta()}
   setInterval(stale,5000);
-  // Two ways to get the payload. With the deck's server reachable (MU) the page asks it over fetch: a tiny version check, then the
-  // task skeleton first (so the sidebar shows at once) and then only the task cards whose hash moved, gzipped by the server. Without
-  // it (or when it cannot be reached) the page loads the payload file next to the page file through a script element, as before.
-  // Either way one request is in flight at a time, each has a timeout, and an answer older than what is on screen is dropped.
-  var have=null,loading=false,curSeq=-1,TICK=${Math.max(1, Math.round(tickSeconds)) * 1000};
+  // The page polls a tiny version file (V) every second and loads the full payload (F) only when its content hash moved:
+  // an idle tab costs bytes, not the whole page. have is the hash of the payload on screen; loading stops a second fetch
+  // while one is in flight.
+  var have=null,loading=false;
   function seen(seq,iso){var tk=seq!==undefined&&seq!==null?"s"+seq:(iso?"i"+iso:null);
     if(tk!==null&&tk!==token){token=tk;changedAt=Date.now();stale()}}
-  function paint(html){var el=live();if(!el||html===last)return;last=html;
+  window.__fdVer=function(hash,seq,iso){seen(seq,iso);if(hash&&hash!==have&&!loading)full()};
+  window.__fdLive=function(html,iso,seq,hash){seen(seq,iso);loading=false;if(hash)have=hash;
+    var el=live();if(!el||html===last)return;last=html;
     var fk=fkey();snapshot();var y=window.scrollY,M="<!--LIVE-",I=window.Idiomorph;
     if(I&&I.morph&&window.Element&&el instanceof window.Element){
       // Morph, do not replace: build the new block off-screen, bring it in line with what this browser has done to the
@@ -146,44 +146,11 @@ export function pageScript(project: string, liveFile: string, tickSeconds: numbe
         beforeAttributeUpdated:function(a,n){if(a==="open"&&n.id&&n.id in S)return false},
         beforeNodeMorphed:function(n,m){if(n.nodeName==="IFRAME"&&m.nodeName==="IFRAME"&&n.getAttribute("srcdoc")===m.getAttribute("srcdoc"))return false}}});
       arrange();fill();refocus(fk);if(window.scrollY!==y)window.scrollTo(0,y);return}
-    el.innerHTML=M+"START-->"+html+M+"END-->";restore(el);arrange();reapply(el);anchorIds(el);fill();refocus(fk);window.scrollTo(0,y)}
-  // the payload file (or a test) delivers a whole payload: older than what is shown is ignored
-  window.__fdLive=function(html,iso,seq,hash){if(seq!==undefined&&seq!==null){if(seq<curSeq)return;curSeq=seq}
-    seen(seq,iso);loading=false;if(hash)have=hash;FULL=true;paint(html)};
-  window.__fdVer=function(hash,seq,iso){seen(seq,iso);if(hash&&hash!==have&&!busy())full()};
+    el.innerHTML=M+"START-->"+html+M+"END-->";restore(el);arrange();reapply(el);anchorIds(el);fill();refocus(fk);window.scrollTo(0,y)};
   function load(file,done){var s=document.createElement("script");s.src=file+"?t="+Date.now();s.onload=s.onerror=function(){s.remove();if(done)done()};document.head.appendChild(s)}
-  // a script that never answers must not block the next load for good (30 s), and one that loaded without answering frees it
-  // after 4 s; time stamps, not timers, so an old load can never clear a newer load's guard
-  var loadAt=0;
-  function busy(){return loading&&Date.now()-loadAt<30000}
-  function full(){loading=true;var at=loadAt=Date.now();load(F,function(){if(loadAt===at)loadAt=Math.min(at,Date.now()-26000)})}
-  function tick(){if(!busy())load(V)}
-  function legacy(){full();tick();setInterval(tick,${Math.max(1, Math.round(tickSeconds)) * 1000})}
-  var HTTP=!!MU&&/\\/state\\/?$/.test(MU);
-  if(!HTTP){legacy();return}
-  var LU=MU.replace(/\\/state\\/?$/,"/live"),LV=LU+"/v",cards={},hs={},fails=0,loaded=false,skel=false,inflight=false;
-  function recon(){var b=document.getElementById("fd-recon");if(b)b.hidden=!(fails>0&&!staleNow)}
-  // one request, with a hard timeout (abort where the browser honours it, give up on it where it does not)
-  function net(url,body,ms){return new Promise(function(res,rej){var ac=window.AbortController?new window.AbortController():null,done=false,
-      t=setTimeout(function(){if(done)return;done=true;try{if(ac)ac.abort()}catch(e){}rej(new Error("timeout"))},ms),init={};
-    if(body){init.method="POST";init.headers={"Content-Type":"text/plain"};init.body=JSON.stringify(body)}if(ac)init.signal=ac.signal;
-    fetch(url,init).then(function(r){if(r&&r.ok===false)throw new Error("http "+r.status);return r.json()}).then(function(j){if(done)return;done=true;clearTimeout(t);res(j)},
-      function(e){if(done)return;done=true;clearTimeout(t);rej(e)})})}
-  function assemble(j){return j.skel.replace(/<!--c:([^>]+?)-->/g,function(_m,id){return cards[id]!==undefined?cards[id]:""})}
-  function take(j,partial){if(!j||typeof j.skel!=="string")throw new Error("bad payload");
-    if(j.seq<curSeq)return;curSeq=j.seq;seen(j.seq,j.iso);
-    Object.keys(j.cards||{}).forEach(function(k){cards[k]=j.cards[k];hs[k]=j.hashes[k]});
-    if(!partial){Object.keys(cards).forEach(function(k){if(!(k in j.hashes)){delete cards[k];delete hs[k]}});have=j.hash;loaded=true;FULL=true}
-    paint(assemble(j))}
-  function pullAll(){var p=Promise.resolve();
-    if(!skel&&!loaded)p=net(LU,{cards:0},20000).then(function(j){take(j,true);skel=true});
-    return p.then(function(){return net(LU,{have:hs},60000)}).then(function(j){take(j,false)})}
-  function cycle(){if(inflight)return;inflight=true;
-    net(LV,null,8000).then(function(v){seen(v.seq,v.iso);if(!loaded||(v.hash&&v.hash!==have))return pullAll()})
-      .then(function(){fails=0},function(){fails++})
-      .then(function(){inflight=false;recon();
-        if(fails>=3&&!loaded){legacy();return}
-        setTimeout(cycle,fails?Math.min(15000,1000*Math.pow(2,fails-1)):TICK)})}
-  cycle();
+  // a full fetch that never answers must not block the next one for good
+  function full(){loading=true;load(F,function(){setTimeout(function(){loading=false},4000)})}
+  function tick(){if(!loading)load(V)}
+  full();tick();setInterval(tick,${Math.max(1, Math.round(tickSeconds)) * 1000});
 })();`;
 }

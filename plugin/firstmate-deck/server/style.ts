@@ -90,7 +90,7 @@ details.sec>summary{padding:2px 0}
 .actx>div{padding:4px 0 0 4px;border-left:2px solid #f3d5bc;margin-top:4px;padding-left:12px}.actx p,.nt p{margin:4px 0}
 .banner{margin:12px 0 0;padding:8px 12px;border-radius:8px;font-size:13.5px;font-weight:500}
 .banner[hidden]{display:none}
-.b-bad{background:#fee2e2;color:#991b1b;border:1px solid #fecaca}.b-warn{background:#fef3c7;color:#92400e;border:1px solid #fde68a}.b-off{background:var(--soft);color:var(--mut);border:1px solid var(--line)}
+.b-bad{background:#fee2e2;color:#991b1b;border:1px solid #fecaca}.b-off{background:var(--soft);color:var(--mut);border:1px solid var(--line)}
 pre{overflow-x:auto;background:#fff;border:1px solid var(--line);border-radius:8px;padding:8px 12px;font:12.5px/1.5 ui-monospace,monospace}pre code{background:none;padding:0;overflow-wrap:normal}
 [data-section]{scroll-margin-top:48px}
 .tt{flex-wrap:wrap}.ttl{min-width:0;overflow-wrap:anywhere}.nt,.ask,.actx,.cur{overflow-wrap:anywhere}

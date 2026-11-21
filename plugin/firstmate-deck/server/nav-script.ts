@@ -30,15 +30,10 @@ export function navScript(): string {
   // set to 1 (the marks endpoint stores only 0/1 flags, so switching sets the old key to 0). Both persist like the fold.
   var fbar=$("tn-fbar");
   function fp(k,v){return window.__fdPref?(arguments.length<2?window.__fdPref(k):window.__fdPref(k,v)):undefined}
-  function saved(){var ks=window.__fdPrefKeys?window.__fdPrefKeys("tn-sel:"):[];return ks.map(function(k){return k.slice(7)})}
-  function selected(){var ks=saved();for(var i=0;i<ks.length;i++)if($(ks[i]))return ks[i];return null}
+  function selected(){var ks=window.__fdPrefKeys?window.__fdPrefKeys("tn-sel:"):[];for(var i=0;i<ks.length;i++){var id=ks[i].slice(7);if($(id))return id}return null}
   function select(id){if(!window.__fdPrefKeys)return;window.__fdPrefKeys("tn-sel:").forEach(function(k){if(k!=="tn-sel:"+id)fp(k,0)});if(fp("tn-sel:"+id)!==1)fp("tn-sel:"+id,1)}
-  // The saved selection is the captain's: a card that is not on the page YET (the page is still loading, or the stored selection has
-  // not arrived) means wait, never "pick another and save it". Only once the page has its stored state and the full task list
-  // (window.__fdReady) and the card is still missing is the first task chosen.
-  function ready(){return window.__fdReady?window.__fdReady():true}
   function applyFocus(){var want=fp("tn-focus")===1,id=want?selected():null;
-    if(want&&!id&&ready()){var a=(cur&&fl.querySelector('.tn-a[data-t="'+cur+'"]'))||fl.querySelector(".tn-a");if(a){id=a.getAttribute("data-t");select(id)}}
+    if(want&&!id){var a=(cur&&fl.querySelector('.tn-a[data-t="'+cur+'"]'))||fl.querySelector(".tn-a");if(a){id=a.getAttribute("data-t");select(id)}}
     var on=want&&!!id;body.classList.toggle("tn-focus",on);
     q(d,".task.tn-sel").forEach(function(t){if(t.id!==id)t.classList.remove("tn-sel")});
     if(on){var t=$(id);t.classList.add("tn-sel");q(t,"details.cv-d").forEach(function(x){x.open=true});for(var p=t.parentElement;p;p=p.parentElement)if(p.tagName==="DETAILS"&&!p.open)p.open=true}
