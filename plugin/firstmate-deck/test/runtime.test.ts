@@ -993,7 +993,7 @@ test("first render seeds what the captain has seen; a later change is unseen; th
   assert.deepEqual(Object.keys(ui().s.keys).sort(), ["page", "t-t1"], "seeded with the keys of the first render");
   const seeded = ui().s.keys["t-t1"];
   await r.deck.render("demo");
-  assert.ok(!readFileSync(r.live, "utf8").includes("data-seen"), "the seen keys are served by the marks endpoint, not carried in the payload");
+  assert.match(readFileSync(r.live, "utf8"), /data-seen=/, "the next payload carries the seen keys");
   assert.equal(ui().s.keys["t-t1"], seeded, "the seed is not re-written");
   writeFileSync(join(r.root, "state", "fleet.json"), JSON.stringify({ version: 2, tasks: [{ ...FLEET.tasks[0], state: "done" }] }));
   await r.deck.render("demo");

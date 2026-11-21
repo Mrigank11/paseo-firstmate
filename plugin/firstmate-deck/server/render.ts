@@ -55,22 +55,7 @@ export type RenderOpts = {
   stalled?: Record<string, { fp: string; why: string }>;
 };
 
-/** The live block split for delivery: `skel` is the block with every task card replaced by a `<!--c:t-<id>-->` placeholder, `cards` the card html by DOM id. Joining them gives back `live`. */
-export type LiveParts = { skel: string; cards: Record<string, string> };
-
-export type Rendered = { page: string; live: string; parts: LiveParts; signature: string; attention: Attention };
-
-/** Split a block whose cards sit between `<!--c:ID-->` and `<!--/c-->` markers. */
-export function splitLive(marked: string): LiveParts {
-  const cards: Record<string, string> = {};
-  const skel = marked.replace(/<!--c:([^>]+?)-->([\s\S]*?)<!--\/c-->/g, (_m, id: string, html: string) => { cards[id] = html; return `<!--c:${id}-->`; });
-  return { skel, cards };
-}
-
-/** Put cards back into a skeleton (a card that is missing leaves nothing). */
-export function joinLive(skel: string, cards: Record<string, string>): string {
-  return skel.replace(/<!--c:([^>]+?)-->/g, (_m, id: string) => cards[id] ?? "");
-}
+export type Rendered = { page: string; live: string; signature: string; attention: Attention };
 
 const GROUPS = [
   ["you", "Needs you"],
@@ -485,7 +470,7 @@ function row(t: Task, group: GroupKey, ctx: Ctx, idx = 0): string {
         "</div>",
     );
   }
-  return `<!--c:t-${esc(t.id)}-->` + out.join("") + "</article><!--/c-->";
+  return out.join("") + "</article>";
 }
 
 /**
@@ -598,10 +583,10 @@ function renderLive(model: ProjectModel, agents: Record<string, AgentView>, o: R
   // The two time-varying bits of the shell travel here too, so page.html stays still while the page is live.
   parts.push(`<div hidden data-slots><div data-slot-for="stamp">${esc(stampLong(o.now))}</div><div data-slot-for="banner">${bannerHtml(o.banner)}</div></div>`);
   parts.push(`<div hidden data-tn>${navHtml(buckets)}</div>`);
-  // What the browser tab says: the Needs-you count, and the attention keys (see attention.ts). The keys the captain last saw are NOT in the payload: they change when the
-  // captain merely looks at the page, which would force every open tab to download it again; the page reads them from the marks endpoint.
+  // What the browser tab says: the Needs-you count, the attention keys, and the keys the captain last saw (see attention.ts).
+  // No stored "seen" yet (first render) means nothing is new: the runtime seeds it from these keys.
   const attention = attentionOf(model, [...model.tasks, ...archive], stages, o.canvas);
-  parts.push(`<div hidden data-attn data-n="${attention.needsYou}" data-title="${esc(model.title)}" data-keys="${esc(JSON.stringify(attention.keys))}"></div>`);
+  parts.push(`<div hidden data-attn data-n="${attention.needsYou}" data-title="${esc(model.title)}" data-keys="${esc(JSON.stringify(attention.keys))}"${model.seen ? ` data-seen="${esc(JSON.stringify(model.seen))}"` : ""}></div>`);
   return { html: parts.join("\n"), attention };
 }
 
@@ -643,9 +628,7 @@ function bannerHtml(b: RenderOpts["banner"]): string {
 }
 
 export function renderProject(model: ProjectModel, agents: Record<string, AgentView>, opts: RenderOpts): Rendered {
-  const { html: marked, attention } = renderLive(model, agents, opts);
-  const parts = splitLive(marked);
-  const live = joinLive(parts.skel, parts.cards);
+  const { html: live, attention } = renderLive(model, agents, opts);
   const pageFile = opts.pageFile ?? (model.page ? model.page.slice(model.page.lastIndexOf("/") + 1) : "page.html");
   const liveFile = pageFile.replace(/\.[^./]*$/, "") + ".live.js";
 
@@ -671,7 +654,6 @@ ${CSS}
 <div class="sub">Kept current by the firstmate-deck plugin · last update <b data-slot="stamp">${stamp}</b></div>
 <p class="chan"><b>This page is our channel.</b> Comment on any card or block, then Send; the first mate answers here.</p>
 <div class="trail-slot" data-trail-slot="page"></div>
-<div class="banner b-warn" id="fd-recon" role="status" hidden>Reconnecting&hellip; the page is showing what it last received.</div>
 <div class="banner b-bad" id="fd-stale" role="status" hidden>${esc(STALE_TEXT)}</div>
 <div data-slot="banner">${banner}</div>
 <nav>${nav}</nav>
@@ -693,8 +675,6 @@ ${pageScript(model.project, liveFile, opts.tickSeconds, opts.marksUrl)}
   // scripts, marks url) moves it and a task, agent or stage change does not: Lavish reloads the page when page.html is
   // rewritten, so that file must stay still while crews work.
   const signature = createHash("sha1").update(shell("", "", "")).digest("hex");
-  // With the deck's server reachable the page file is only the shell: the page asks the server for its tasks (small skeleton first, then
-  // the cards), so a reload never paints a stale list. Without a server the snapshot stays in the file.
-  const page = opts.marksUrl ? shell("", "", "") : shell(live.replace(/\{TS\}/g, stampShort(opts.now)), esc(stampLong(opts.now)), bannerHtml(opts.banner));
-  return { page, live, parts, signature, attention };
+  const page = shell(live.replace(/\{TS\}/g, stampShort(opts.now)), esc(stampLong(opts.now)), bannerHtml(opts.banner));
+  return { page, live, signature, attention };
 }
