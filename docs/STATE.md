@@ -31,9 +31,16 @@ state/
       sections/*.md|html
       inbox.jsonl
       page.json
+      conventions.md    # optional: this project's brief preamble, finish requirements, standing rules (see below)
 ```
 
 `state/` is gitignored — it is runtime state, not source. Durable *learnings* ("provider X keeps wedging on task type Y") do not belong here; graduate them to the captain's basic-memory instead.
+
+## Project conventions
+
+`state/projects/<project>/conventions.md` (template: `state/conventions.example.md`) holds what crews on one project must do. It is optional, gitignored with the rest of `state/`, and written only by the first mate, when the captain states a rule for that project. A folder without `project.json` is not a page, so the file works for projects with no page. Headings: **Brief preamble** (pasted into every brief), **Finish requirements** (checked against a crew's final message before the task is finished or merged), **Standing rules**, **On plan ship** (optional).
+
+It sits beside, not inside, the other stores: the first mate's memory holds how the captain wants *it* to work everywhere; `decisions.md` holds global policy; conventions hold per-project crew obligations.
 
 ## Who owns what
 

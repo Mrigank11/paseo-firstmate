@@ -31,9 +31,9 @@ The first mate may merge ONLY under one of these authorities, never on its own i
 
 A green-only posture NEVER authorizes merging a red PR. When in doubt about which authority applies, escalate.
 
-## 2a. Wiki line
+## 2a. Project conventions
 
-For a project with a `## Project wikis` entry in `state/decisions.md`, the crew's final message must carry `Wiki: <notes created or edited>` or `Wiki: no new facts: <reason>` (a bare "none" is not a reason). Without it, nudge the crew once and do not merge or close the task until it is there. Spot-check that a listed note exists, and that `today/` was edited only for facts already merged, deployed and verified.
+If the task's project has `state/projects/<project>/conventions.md`, check each **Finish requirement** against the crew's final message before merging or closing. If one is missing or its answer is empty, nudge the crew once and do not merge or close the task until it is met. Spot-check one claim it makes.
 
 ## 3. Check green before merging
 
@@ -83,15 +83,9 @@ Teardown is keyed to the work **landing**, not to *you* merging it. Run this sec
 
 REFUSE teardown while there is unlanded work: unmerged commits, an open PR, or a dirty worktree. Surface the unlanded state to the captain instead of archiving.
 
-## 6a. Plan ship (projects with a wiki)
+## 6a. Plan ship (conventions)
 
-When the PR just landed is the **last one of its plan** (the plan overview's PR list is all merged), the wiki must catch up before you close the task. The crew that merged it runs the plan overview's ship checklist: each lasting fact moves into `today/` (edit, never copy), the plan note keeps a one-line pointer, status becomes `shipped`. If you merged it yourself, send that crew (or a fresh contributor-lane crew) now; it does not wait for the captain.
-
-Then, in the same turn:
-
-1. Dispatch the lint crew: a cheap contributor-lane scout (`claude-sonnet-5-5`, thinking medium) that runs the wiki's own checks (stale notes, open work items, leftover unverified facts, branch facts in `today/`) and lists fixes on its canvas for the captain's OK. It edits nothing.
-2. Ask the captain once whether anything in the vision changes (`bin/fleet ask`, one-line options: nothing / change, with his words). A change goes through the standing-corrections route in `writing-briefs`.
-3. Do not `bin/fleet finish` the task until its `Wiki:` line shows the move into `today/` (or `no new facts: <reason>`).
+If the project's `conventions.md` has an **On plan ship** section and the PR just landed is the last of its plan, make sure those steps happen before you close the task: send the crew that merged it (or a fresh contributor-lane crew) to do them, dispatch any crew the steps name, and put any question they say to ask the captain through `bin/fleet ask`. Do not `bin/fleet finish` until the crew's final message satisfies the project's Finish requirements for them.
 
 ## 7. Finish
 
