@@ -136,6 +136,20 @@ export function navScript(): string {
       var best=null,bt=1e9;Object.keys(vis).forEach(function(id){var t=vis[id]&&$(id);if(!t)return;var top=t.getBoundingClientRect().top;if(top<bt){bt=top;best=id}});
       if(best)setCur(best)},{rootMargin:"-60px 0px -55% 0px"});
     var live=$("live");if(live)q(live,"article.task[id]").forEach(function(t){io.observe(t)})}
+  // ---- zoom into a group (task tree): only that group's cards show, until "Show all". A style tag keyed on each card's data-in path,
+  // so a live swap needs no re-application. Not remembered across reloads.
+  var zbar=null,zst=null;
+  function zoom(g){
+    if(!zst){zst=d.createElement("style");d.head.appendChild(zst)}
+    if(!zbar){zbar=d.createElement("div");zbar.className="tn-zbar";zbar.setAttribute("data-lavish-action","");zbar.hidden=true;var lv=$("live");lv.parentNode.insertBefore(zbar,lv)}
+    if(!g){zst.textContent="";zbar.hidden=true;zbar.textContent="";return}
+    var sel='[data-in~="'+g+'"]';
+    zst.textContent='#live .task:not('+sel+'){display:none}#live .grp:not(:has(.task'+sel+')){display:none}';
+    var a=fl.querySelector('.tn-a[data-t="t-'+g+'"]');
+    zbar.innerHTML="";var t=el("span","","Zoomed into ");var b=el("b","",a?a.firstChild.textContent:g);t.appendChild(b);zbar.appendChild(t);
+    var x=el("button","gz","Show all tasks");x.type="button";x.setAttribute("data-zoom-off","");zbar.appendChild(x);zbar.hidden=false;
+    var c=$("t-"+g);if(c)c.scrollIntoView()}
+  d.addEventListener("click",function(e){var z=e.target.closest&&e.target.closest(".gz[data-g],[data-zoom-off]");if(!z)return;e.preventDefault();zoom(z.hasAttribute("data-zoom-off")?null:z.getAttribute("data-g"))});
   function measure(){var n=d.querySelector("main > nav");if(n)d.documentElement.style.setProperty("--navh",n.offsetHeight+"px")}
   window.addEventListener("resize",function(){measure();if(!phone())closeSheet(false);if(exp&&!wide())setExp(false,false);else if(!exp&&wide()&&applied!==0)setExp(true,false);if(flyKey)renderFly()});
   measure();setExp(exp,false);

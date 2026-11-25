@@ -49,6 +49,8 @@ export type Task = {
   parent?: string;
   /** "group": a node with no crew of its own whose stage rolls up from its children. Absent for a task. */
   kind?: "group";
+  /** The second mate (agent id) that owns this group's subtree: state/tasks/<id>/claim.json. Only read for groups. */
+  mate?: string;
   shape?: string;
   /** Archive lines only (v1 history): "<provider>/<model>" as the first mate recorded it. Live v2 tasks have none; Paseo knows the model. */
   provider?: string;
@@ -127,6 +129,8 @@ export type ProjectModel = {
   tasks: Task[];
   /** The project's archived tasks, oldest first: the last 30, or project.json `archiveLimit`. A task archived twice (bin/fleet archive-update) appears once, as its newest line. */
   archive: Task[];
+  /** Finished children of this project's live groups (any age): they count as done leaves in a group's roll-up. */
+  groupKids: { id: string; parent: string; kind?: string; failed: boolean }[];
   /** Archive lines skipped because they are not valid JSON (a crash mid-append leaves one). */
   archiveSkipped: number;
   /** Set when fleet.json exists but cannot be used (empty or malformed). `tasks` is then empty: the caller keeps its last good model. */
@@ -229,6 +233,12 @@ function loadAnswered(root: string, id: string): AnsweredAsk[] {
   return out;
 }
 
+/** The second mate a group's claim.json names ("" -> undefined). */
+function mateOf(root: string, id: string): string | undefined {
+  if (!/^[\w.-]+$/.test(id)) return undefined;
+  try { const a = JSON.parse(readText(join(root, "state", "tasks", id, "claim.json")) || "{}")?.agentId; return typeof a === "string" && a ? a : undefined; } catch { return undefined; }
+}
+
 function toTask(raw: any, root: string, label: string, inbox: Comment[] = [], archived = false): Task {
   if (!raw || typeof raw !== "object" || typeof raw.id !== "string") throw new Error(`${label}: task without a string id`);
   const asks: Ask[] = (Array.isArray(raw.asks) ? raw.asks : []).map((a: any, i: number) => {
@@ -285,6 +295,7 @@ function toTask(raw: any, root: string, label: string, inbox: Comment[] = [], ar
     project: raw.project || undefined,
     parent: typeof raw.parent === "string" && raw.parent ? raw.parent : undefined,
     kind: raw.kind === "group" ? "group" : undefined,
+    ...(raw.kind === "group" && !archived ? { mate: mateOf(root, raw.id) } : {}),
     shape: raw.shape,
     provider: typeof raw.provider === "string" && raw.provider ? raw.provider : undefined,
     order: orderOf(raw.order),
@@ -428,6 +439,7 @@ export function loadProject(root: string, project: string): ProjectModel {
     comments: inbox.map(({ atMs: _a, ...c }) => c),
     tasks,
     archive: [...archive.values()].slice(-archiveLimit),
+    groupKids: archivedChildren(root, new Set(tasks.filter((t) => t.kind === "group").map((t) => t.id))),
     archiveSkipped,
     ...(fleetError ? { fleetError } : {}),
   };

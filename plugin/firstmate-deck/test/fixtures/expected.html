@@ -100,6 +100,19 @@ pre{overflow-x:auto;background:#fff;border:1px solid var(--line);border-radius:8
 /* task navigator (nav-script.ts): a sidebar that folds to a 48 px spine of stage icons; a bar and a drop-down sheet on phones */
 .tn,.tn-bar,.tn-fly,.tn-sheet,.tn-back{display:none}
 .tn-ic{width:16px;height:16px;flex:none;display:block;fill:none;stroke:currentColor;stroke-width:1.75;stroke-linecap:round;stroke-linejoin:round}
+/* task tree: breadcrumbs, group cards, the tree section of the navigator, zoom */
+.crumb{font-size:calc(12px*var(--ts,1));color:var(--mut);margin:0 0 2px}.crumb a{color:var(--mut)}.crumb .sep{color:#b8b2a3}
+.gcard{background:var(--soft);border:1px solid var(--line);border-radius:10px;padding:12px 14px;margin:0 0 10px}
+.gcard .gst{margin-left:auto}.gmeta{font-size:calc(13px*var(--ts,1));color:var(--mut);margin-top:4px}
+.gbar{height:5px;border-radius:3px;background:var(--line);margin:6px 0 8px;overflow:hidden}.gbar i{display:block;height:100%;background:var(--ok)}
+.gchips{display:flex;flex-wrap:wrap;gap:6px;margin:6px 0}
+.gchip{font-size:calc(12px*var(--ts,1));padding:1px 9px;border-radius:999px;background:#fff;border:1px solid var(--line);color:var(--fg);text-decoration:none}
+.gchip.s-you{background:#fde6cf;border-color:#f4c79d}.gchip.s-running{background:#dbeafe;border-color:#bfd4fb}.gchip.s-done{color:var(--ok)}.gchip.s-fm{background:#ede9fe;border-color:#d7cffb}
+.gx{display:flex;gap:12px;align-items:center;font-size:calc(12.5px*var(--ts,1));color:var(--mut);margin-top:6px}
+.gz{font:inherit;font-size:calc(12.5px*var(--ts,1));border:1px solid var(--line);background:#fff;border-radius:6px;padding:2px 9px;cursor:pointer;color:var(--fg)}.gz:hover{background:var(--soft)}
+.gcard.s-you{border-color:#f4c79d}
+.t-tree{--sc:var(--fg)}.tn-st .tn-g>ul{margin-left:12px;border-left:1px solid var(--line)}.tn-gc{margin-left:6px;font-size:calc(11px*var(--ts,1));color:var(--mut);font-weight:400}.tn-ug{display:block;padding:0 8px;line-height:var(--rh);font-size:calc(12px*var(--ts,1));color:var(--mut)}
+.tn-zbar{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin:12px 0;padding:8px 12px;border:1px solid var(--line);border-radius:8px;background:var(--soft);font-size:calc(13px*var(--ts,1))}.tn-zbar[hidden]{display:none}
 .tn-st,.tn-bd,.tn-chip{--sc:var(--mut)}
 .t-you{--sc:var(--you)}.t-fm,.t-running{--sc:var(--run)}.t-blocked{--sc:#b91c1c}.t-next,.t-parked{--sc:var(--park)}.t-done{--sc:var(--ok)}
 .tn-st{margin:0 0 8px;--rh:28px;--ind:32px}.tn-st ul{list-style:none;margin:0;padding:0}.tn-st li{margin:0}
@@ -398,6 +411,20 @@ body.tn-focus .task.tn-sel .cv.has-full .cv-c{display:none}
       var best=null,bt=1e9;Object.keys(vis).forEach(function(id){var t=vis[id]&&$(id);if(!t)return;var top=t.getBoundingClientRect().top;if(top<bt){bt=top;best=id}});
       if(best)setCur(best)},{rootMargin:"-60px 0px -55% 0px"});
     var live=$("live");if(live)q(live,"article.task[id]").forEach(function(t){io.observe(t)})}
+  // ---- zoom into a group (task tree): only that group's cards show, until "Show all". A style tag keyed on each card's data-in path,
+  // so a live swap needs no re-application. Not remembered across reloads.
+  var zbar=null,zst=null;
+  function zoom(g){
+    if(!zst){zst=d.createElement("style");d.head.appendChild(zst)}
+    if(!zbar){zbar=d.createElement("div");zbar.className="tn-zbar";zbar.setAttribute("data-lavish-action","");zbar.hidden=true;var lv=$("live");lv.parentNode.insertBefore(zbar,lv)}
+    if(!g){zst.textContent="";zbar.hidden=true;zbar.textContent="";return}
+    var sel='[data-in~="'+g+'"]';
+    zst.textContent='#live .task:not('+sel+'){display:none}#live .grp:not(:has(.task'+sel+')){display:none}';
+    var a=fl.querySelector('.tn-a[data-t="t-'+g+'"]');
+    zbar.innerHTML="";var t=el("span","","Zoomed into ");var b=el("b","",a?a.firstChild.textContent:g);t.appendChild(b);zbar.appendChild(t);
+    var x=el("button","gz","Show all tasks");x.type="button";x.setAttribute("data-zoom-off","");zbar.appendChild(x);zbar.hidden=false;
+    var c=$("t-"+g);if(c)c.scrollIntoView()}
+  d.addEventListener("click",function(e){var z=e.target.closest&&e.target.closest(".gz[data-g],[data-zoom-off]");if(!z)return;e.preventDefault();zoom(z.hasAttribute("data-zoom-off")?null:z.getAttribute("data-g"))});
   function measure(){var n=d.querySelector("main > nav");if(n)d.documentElement.style.setProperty("--navh",n.offsetHeight+"px")}
   window.addEventListener("resize",function(){measure();if(!phone())closeSheet(false);if(exp&&!wide())setExp(false,false);else if(!exp&&wide()&&applied!==0)setExp(true,false);if(flyKey)renderFly()});
   measure();setExp(exp,false);

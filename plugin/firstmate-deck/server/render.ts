@@ -14,6 +14,7 @@ import { activeSinceOf, applyStalled, computeStage, currentAgent, stageAgentsFor
 import { attentionOf, type Attention } from "./attention.ts";
 import { canvasInput, clickedPick, SAFE_ASK } from "./canvas-view.ts";
 import type { CanvasData, FmSummary } from "./canvas-port.ts";
+import { withRollups, type RowLike } from "./tree.ts";
 
 export type AgentView = {
   status: "initializing" | "idle" | "running" | "error" | "closed" | "archived" | "unknown";
@@ -284,7 +285,7 @@ export function recapStrip(t: Task, group: GroupKey, recap: Recap | null | undef
   return { html: `<div class="recap">${row("You asked", esc(cut(recap.asked, 200)), recap.asked)}${row(`Crew did${crewAt ? hm(crewAt) : ""}`, esc(cut(recap.did, 200)), recap.did)}</div>` };
 }
 
-type Ctx = { snapCss: Set<string>; byId: Map<string, Task>; unblocks: Map<string, string[]>; agents: Record<string, AgentView>; o: RenderOpts; comments: TrailComment[]; stages: Map<string, Stage>; canvas?: CanvasData };
+type Ctx = { title: string; archived: Set<string>; snapCss: Set<string>; byId: Map<string, Task>; unblocks: Map<string, string[]>; agents: Record<string, AgentView>; o: RenderOpts; comments: TrailComment[]; stages: Map<string, Stage>; canvas?: CanvasData };
 
 /**
  * An ask's context repeats the ask text when it came from a longer text (the first sentence, bold or not). Show it once:
@@ -359,13 +360,52 @@ const finalCanvas = (t: Task, css: Set<string>, label = "Final canvas"): string 
 /** A done task whose card the captain can mark read: it has a non-empty card.md. */
 export const markable = (t: Task): boolean => t.card.trim() !== "";
 
+/** The group ids above a task, root first. */
+function groupPath(t: Task, byId: Map<string, Task>): string[] {
+  const up: string[] = [];
+  const seen = new Set([t.id]);
+  for (let p = t.parent; p && !seen.has(p) && up.length < 4; p = byId.get(p)?.parent) { seen.add(p); up.unshift(p); if (!byId.has(p)) break; }
+  return up;
+}
+
+const taskName = (t: Task) => esc(t.title || t.intent || t.id);
+
+/** Breadcrumb up to the task's groups (task tree). Empty for a top-level task. */
+function crumbHtml(t: Task, ctx: Ctx): string {
+  const up = groupPath(t, ctx.byId).filter((id) => ctx.byId.has(id));
+  return up.length ? `<div class="crumb">${esc(ctx.title)}${up.map((id) => `<span class="sep"> › </span><a href="#t-${esc(id)}">${taskName(ctx.byId.get(id)!)}</a>`).join("")}</div>` : "";
+}
+
+/** A group card's header: roll-up line, progress bar, one chip per child, the second mate and the zoom button. */
+function groupHead(t: Task, st: Stage, ctx: Ctx): string {
+  const ro = st.rollup;
+  const kids = [...ctx.byId.values()].filter((k) => k.parent === t.id && ctx.stages.has(k.id));
+  const live = kids.filter((k) => !ctx.archived.has(k.id));
+  const finished = kids.length - live.length;
+  const chip = (k: Task) => {
+    const ks = ctx.stages.get(k.id)!;
+    const n = k.kind === "group" && ks.rollup ? ` <span class="tn-gc">${ks.rollup.done}/${ks.rollup.total}</span>` : "";
+    return `<a class="gchip s-${ks.group}" href="#t-${esc(k.id)}">${taskName(k)}${n}</a>`;
+  };
+  const pct = ro && ro.total ? Math.round((ro.done / ro.total) * 100) : 0;
+  const meta = ro && ro.total ? `${ro.done} of ${ro.total} done · ${esc(st.reason)}` : esc(st.reason);
+  const mate = t.mate ? `<span class="mate">second mate · <a class="open" href="${esc(ctx.o.paseoAgentUrl(t.mate))}">${esc(t.mate.slice(0, 8))}</a></span>` : "";
+  return `<div class="gmeta">${meta}</div>` +
+    `<div class="gbar" role="img" aria-label="${ro ? ro.done : 0} of ${ro ? ro.total : 0} done"><i style="width:${pct}%"></i></div>` +
+    `<div class="gchips">${live.map(chip).join("")}${finished ? `<span class="gmeta">+${finished} finished</span>` : ""}</div>` +
+    `<div class="gx"><button type="button" class="gz" data-g="${esc(t.id)}" data-lavish-action>Zoom into group</button>${mate}</div>`;
+}
+
 function row(t: Task, group: GroupKey, ctx: Ctx, idx = 0): string {
   const name = esc(t.title || t.intent || t.id);
   const st = ctx.stages.get(t.id)!;
   const aid = st.agentId;
   const title = aid ? `<a href="${esc(ctx.o.paseoAgentUrl(aid))}">${name}</a>` : name;
   const failed = st.failed;
-  const chip = failed ? `<span class="chip c-fail">failed</span>` : "";
+  const isGroup = t.kind === "group";
+  const chip = (failed ? `<span class="chip c-fail">failed</span>` : "") + (isGroup ? `<span class="chip gst c-${group}">${esc(st.stage)}</span>` : "");
+  const up = groupPath(t, ctx.byId);
+  const tree = up.length || isGroup ? ` data-in="${[...up, t.id].map(esc).join(" ")}"` : "";
   // Done cards carry their position (data-i) so the page can put a card back in order when it moves it between the
   // unread and read groups, and (when they have a card) the hash the read mark is keyed by (data-h) and a button.
   const done = group === "done";
@@ -386,8 +426,10 @@ function row(t: Task, group: GroupKey, ctx: Ctx, idx = 0): string {
   // one long explanation per card: when a crew canvas is on it, the first mate's context folds (a short note stays open)
   const hasCanvas = !!sum || !!t.canvasFinal;
   const out = [
-    `<article class="task s-${group}${failed ? " s-failed" : ""}" id="t-${esc(t.id)}"${data}>`,
+    `<article class="task${isGroup ? " gcard" : ""} s-${group}${failed ? " s-failed" : ""}" id="t-${esc(t.id)}"${data}${tree}>`,
+    crumbHtml(t, ctx),
     `<div class="tt"><span class="ttl">${title}</span>${chip}${btn}</div>`,
+    isGroup ? groupHead(t, st, ctx) : "",
     strip.html,
     // card-level comments, plus comments on asks that are gone (an answered ask takes its own trail with it); the strip already shows a newer one
     trailHtml(ctx.comments.filter((c) => c.id !== strip.consumes), `t-${t.id}`, ctx.o.now, (c) => c.target.startsWith(`t-${t.id}#`) && !t.asks.some((a) => c.target === `t-${t.id}#${a.id}`) && !rawTargets.has(c.target)),
@@ -478,8 +520,8 @@ function row(t: Task, group: GroupKey, ctx: Ctx, idx = 0): string {
  * in the live block as a hidden template; the page script (nav-script.ts) builds the rail, the spine, the flyouts and the
  * phone bar from it, so the navigator updates with the cards and a new stage in GROUPS needs no client change.
  */
-export function navHtml(buckets: Record<GroupKey, { t: Task }[]>): string {
-  return GROUPS.filter(([k]) => buckets[k].length).map(([k, label]) => {
+export function navHtml(buckets: Record<GroupKey, { t: Task }[]>, tree = ""): string {
+  return tree + GROUPS.filter(([k]) => buckets[k].length).map(([k, label]) => {
     const items = buckets[k];
     const cap = items.length > NAV_CAP;
     const lis = items.map(({ t }) => {
@@ -491,6 +533,39 @@ export function navHtml(buckets: Record<GroupKey, { t: Task }[]>): string {
     return `<div class="tn-st t-${k}" data-k="${k}" data-n="${items.length}" data-label="${esc(label)}"${cap ? " data-cap" : ""}>` +
       `<button class="tn-h" type="button" aria-expanded="true">${svg(STAGE_ICON[k])}<span class="tn-l">${esc(label)}</span><span class="tn-c">${items.length}</span>${svg(ICON.down)}</button><ul>${lis}</ul>${more}</div>`;
   }).join("");
+}
+
+/** Live groups, each root first and its nested groups right after it (file order within a level). */
+export function groupOrder(tasks: readonly Task[]): Task[] {
+  const groups = tasks.filter((t) => t.kind === "group");
+  const ids = new Set(groups.map((g) => g.id));
+  const out: Task[] = [];
+  const seen = new Set<string>();
+  const add = (g: Task) => { if (seen.has(g.id)) return; seen.add(g.id); out.push(g); groups.filter((c) => c.parent === g.id).forEach(add); };
+  groups.filter((g) => !g.parent || !ids.has(g.parent)).forEach(add);
+  return out;
+}
+
+/** The navigator's tree section: each root group with its tasks and nested groups, then the count of tasks outside any group. */
+export function treeNavHtml(tasks: readonly Task[], stages: ReadonlyMap<string, Stage>): string {
+  const groups = groupOrder(tasks);
+  if (!groups.length) return "";
+  const live = new Set(tasks.map((t) => t.id));
+  const a = (t: Task, extra = "") => {
+    const name = taskName(t);
+    return `<a class="tn-a" href="#t-${esc(t.id)}" data-t="t-${esc(t.id)}" title="${name}">${name}${extra}</a>`;
+  };
+  const node = (t: Task): string => {
+    const kids = tasks.filter((k) => k.parent === t.id);
+    if (t.kind !== "group") return `<li${t.state === "failed" ? ` class="fail"` : ""}>${a(t)}</li>`;
+    const ro = stages.get(t.id)?.rollup;
+    return `<li class="tn-g t-${stages.get(t.id)?.group ?? "next"}">${a(t, ro ? `<span class="tn-gc">${ro.done}/${ro.total}</span>` : "")}<ul>${kids.map(node).join("")}</ul></li>`;
+  };
+  const roots = groups.filter((g) => !g.parent || !live.has(g.parent));
+  const loose = tasks.filter((t) => t.kind !== "group" && !t.parent).length;
+  return `<div class="tn-st t-tree" data-k="tree" data-n="${groups.length}" data-label="Groups">` +
+    `<button class="tn-h" type="button" aria-expanded="true">${svg(ICON.tree)}<span class="tn-l">Groups</span><span class="tn-c">${groups.length}</span>${svg(ICON.down)}</button>` +
+    `<ul>${roots.map(node).join("")}${loose ? `<li class="tn-u"><span class="tn-ug">Ungrouped · ${loose}</span></li>` : ""}</ul></div>`;
 }
 
 /** Tasks with an `order` come first, lowest first; the rest keep their incoming order (a stable sort). */
@@ -507,6 +582,19 @@ export function stagesOf(model: ProjectModel, agents: Record<string, AgentView>,
   const so = { ...o, comments: model.comments };
   for (const t of model.archive) out.set(t.id, stageOf(t, false, so));
   for (const t of model.tasks) out.set(t.id, stageOf(t, true, so, (id) => agents[id]));
+  // task tree: a group's stage is what its leaves roll up to (finished children included), not an agent's
+  if (model.tasks.some((t) => t.kind === "group")) {
+    const rows = model.tasks.map((t) => {
+      const s = out.get(t.id)!;
+      return { id: t.id, project: t.project ?? null, state: t.state, stage: s.stage, group: s.group as string, agentId: s.agentId, flags: s.flags, owner: s.owner as string, reason: s.reason, clears: s.clears, fp: s.fp, parent: t.parent ?? null, kind: t.kind ?? null } as RowLike;
+    });
+    const kids = [...(model.groupKids ?? []), ...model.archive.filter((a) => a.parent && !model.tasks.some((t) => t.id === a.id)).map((a) => ({ id: a.id, parent: a.parent!, kind: a.kind, failed: a.state === "failed" }))];
+    for (const r of withRollups(rows, kids)) {
+      if (r.kind !== "group") continue;
+      const s = out.get(r.id)!;
+      out.set(r.id, { ...s, stage: r.stage, group: r.group as GroupKey, owner: r.owner as Stage["owner"], reason: r.reason, clears: r.clears, flags: r.flags, fp: r.fp, failed: r.rollup?.failed ?? s.failed, ...(r.rollup ? { rollup: r.rollup } : {}) });
+    }
+  }
   return out;
 }
 
@@ -518,10 +606,10 @@ function renderLive(model: ProjectModel, agents: Record<string, AgentView>, o: R
   const unblocks = new Map<string, string[]>();
   for (const t of all) for (const d of t.depends_on) unblocks.set(d, [...(unblocks.get(d) ?? []), t.id]);
   const stages = stagesOf(model, agents, o);
-  const ctx: Ctx = { snapCss: new Set(), byId, unblocks, agents, o, comments: model.comments, stages, canvas: o.canvas };
+  const ctx: Ctx = { title: model.title, archived: new Set(archive.map((t) => t.id)), snapCss: new Set(), byId, unblocks, agents, o, comments: model.comments, stages, canvas: o.canvas };
 
   const buckets: Record<GroupKey, { t: Task; g: GroupKey }[]> = { you: [], fm: [], running: [], blocked: [], next: [], parked: [], done: [] };
-  for (const t of model.tasks) buckets[stages.get(t.id)!.group].push({ t, g: stages.get(t.id)!.group });
+  for (const t of model.tasks) if (t.kind !== "group") buckets[stages.get(t.id)!.group].push({ t, g: stages.get(t.id)!.group });
   for (const t of archive) buckets.done.push({ t, g: "done" });
   // Done: most recently updated (lastEvent) first, live and archived together. An explicit `order` on a live task still pins it
   // ahead of the rest in any group. An archive line's `order` is ignored: it is the position the task had in a group of the
@@ -555,6 +643,10 @@ function renderLive(model: ProjectModel, agents: Record<string, AgentView>, o: R
   if (busy) summary += `<span class="sum c-running">${busy} agent${busy > 1 ? "s" : ""} working</span>`;
   if (o.canvas?.status === "down") summary += `<span class="fl cv-down" title="agent-canvas could not be reached from the deck">canvas unavailable</span>`;
   const parts = [`<div class="summary">${summary}<span class="m">live: the page checks ${o.tickSeconds === 1 ? "every second" : `every ${o.tickSeconds} s`}; the plugin refreshes it on every change and at least every ${o.refreshSeconds ?? 20} s (last refresh {TS})</span></div>`];
+  const groups = groupOrder(model.tasks);
+  if (groups.length) {
+    parts.push(`<section class="grp" id="g-groups"><h3>Groups <span class="n">(${groups.length})</span></h3>\n${groups.map((g) => row(g, stages.get(g.id)!.group, ctx)).join("\n")}</section>`);
+  }
   for (const [k, n] of GROUPS) {
     const items = buckets[k];
     if (!items.length) continue;
@@ -582,7 +674,7 @@ function renderLive(model: ProjectModel, agents: Record<string, AgentView>, o: R
   parts.push(`<div hidden data-trails>${slots}</div>`);
   // The two time-varying bits of the shell travel here too, so page.html stays still while the page is live.
   parts.push(`<div hidden data-slots><div data-slot-for="stamp">${esc(stampLong(o.now))}</div><div data-slot-for="banner">${bannerHtml(o.banner)}</div></div>`);
-  parts.push(`<div hidden data-tn>${navHtml(buckets)}</div>`);
+  parts.push(`<div hidden data-tn>${navHtml(buckets, treeNavHtml(model.tasks, stages))}</div>`);
   // What the browser tab says: the Needs-you count, the attention keys, and the keys the captain last saw (see attention.ts).
   // No stored "seen" yet (first render) means nothing is new: the runtime seeds it from these keys.
   const attention = attentionOf(model, [...model.tasks, ...archive], stages, o.canvas);

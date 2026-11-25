@@ -97,6 +97,19 @@ pre{overflow-x:auto;background:#fff;border:1px solid var(--line);border-radius:8
 /* task navigator (nav-script.ts): a sidebar that folds to a 48 px spine of stage icons; a bar and a drop-down sheet on phones */
 .tn,.tn-bar,.tn-fly,.tn-sheet,.tn-back{display:none}
 .tn-ic{width:16px;height:16px;flex:none;display:block;fill:none;stroke:currentColor;stroke-width:1.75;stroke-linecap:round;stroke-linejoin:round}
+/* task tree: breadcrumbs, group cards, the tree section of the navigator, zoom */
+.crumb{font-size:12px;color:var(--mut);margin:0 0 2px}.crumb a{color:var(--mut)}.crumb .sep{color:#b8b2a3}
+.gcard{background:var(--soft);border:1px solid var(--line);border-radius:10px;padding:12px 14px;margin:0 0 10px}
+.gcard .gst{margin-left:auto}.gmeta{font-size:13px;color:var(--mut);margin-top:4px}
+.gbar{height:5px;border-radius:3px;background:var(--line);margin:6px 0 8px;overflow:hidden}.gbar i{display:block;height:100%;background:var(--ok)}
+.gchips{display:flex;flex-wrap:wrap;gap:6px;margin:6px 0}
+.gchip{font-size:12px;padding:1px 9px;border-radius:999px;background:#fff;border:1px solid var(--line);color:var(--fg);text-decoration:none}
+.gchip.s-you{background:#fde6cf;border-color:#f4c79d}.gchip.s-running{background:#dbeafe;border-color:#bfd4fb}.gchip.s-done{color:var(--ok)}.gchip.s-fm{background:#ede9fe;border-color:#d7cffb}
+.gx{display:flex;gap:12px;align-items:center;font-size:12.5px;color:var(--mut);margin-top:6px}
+.gz{font:inherit;font-size:12.5px;border:1px solid var(--line);background:#fff;border-radius:6px;padding:2px 9px;cursor:pointer;color:var(--fg)}.gz:hover{background:var(--soft)}
+.gcard.s-you{border-color:#f4c79d}
+.t-tree{--sc:var(--fg)}.tn-st .tn-g>ul{margin-left:12px;border-left:1px solid var(--line)}.tn-gc{margin-left:6px;font-size:11px;color:var(--mut);font-weight:400}.tn-ug{display:block;padding:0 8px;line-height:var(--rh);font-size:12px;color:var(--mut)}
+.tn-zbar{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin:12px 0;padding:8px 12px;border:1px solid var(--line);border-radius:8px;background:var(--soft);font-size:13px}.tn-zbar[hidden]{display:none}
 .tn-st,.tn-bd,.tn-chip{--sc:var(--mut)}
 .t-you{--sc:var(--you)}.t-fm,.t-running{--sc:var(--run)}.t-blocked{--sc:#b91c1c}.t-next,.t-parked{--sc:var(--park)}.t-done{--sc:var(--ok)}
 .tn-st{margin:0 0 8px;--rh:28px;--ind:32px}.tn-st ul{list-style:none;margin:0;padding:0}.tn-st li{margin:0}
