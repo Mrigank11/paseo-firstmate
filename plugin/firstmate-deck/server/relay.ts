@@ -177,6 +177,13 @@ export function formatMessage(project: string, entries: Line[], describe?: Descr
 export type RelayDeps = {
   /** Send the message to the first mate (resolving it afresh). Resolves to the agent id; rejects on failure. */
   send: (project: string, message: string) => Promise<string>;
+  /**
+   * Task tree: the agent that owns this comment's target when it is not the project's first mate (the nearest live second mate above
+   * the task), else null. Without `route` every comment goes to the first mate, as before.
+   */
+  route?: (project: string, entry: InboxEntry) => Promise<string | null>;
+  /** Send a message straight to the agent `route` named. Rejects on failure. */
+  sendTo?: (agentId: string, message: string) => Promise<void>;
   /** Persist the delivery: mark the entries delivered, update page.json. */
   markDelivered: (project: string, ids: string[], at: string) => void;
   /** Tell the page about the queue (banner) and the project's undelivered count. */
@@ -224,17 +231,41 @@ export class Relay {
     if (q.timer) { clearTimeout(q.timer); q.timer = null; }
     if (q.sending || !q.pending.length) return;
     q.sending = true;
-    const batch = q.pending.splice(0);
+    const all = q.pending.splice(0);
     const log = this.d.log ?? (() => {});
-    let agentId: string;
-    try {
-      agentId = await this.d.send(project, formatMessage(project, batch, this.d.describe && ((t) => this.d.describe!(project, t))));
-    } catch (e) {
-      q.pending.unshift(...batch);
+    // comments owned by a second mate go to it, the rest to the first mate; each group is sent and marked on its own
+    const parts: { to: string | null; entries: InboxEntry[] }[] = [];
+    for (const e of all) {
+      let to: string | null = null;
+      if (this.d.route && this.d.sendTo) { try { to = await this.d.route(project, e); } catch { to = null; } }
+      const part = parts.find((x) => x.to === to);
+      if (part) part.entries.push(e); else parts.push({ to, entries: [e] });
+    }
+    // the first mate's group goes last, so the common case (no second mate) is one send exactly as before
+    parts.sort((a, b) => Number(a.to === null) - Number(b.to === null));
+    const okParts: { id: string; entries: InboxEntry[] }[] = [];
+    let failure: Error | null = null;
+    let left: InboxEntry[] = [];
+    for (const part of parts) {
+      const msg = formatMessage(project, part.entries, this.d.describe && ((t) => this.d.describe!(project, t)));
+      try {
+        if (part.to) await this.d.sendTo!(part.to, msg);
+        const id = part.to ?? (await this.d.send(project, msg));
+        okParts.push({ id, entries: part.entries });
+      } catch (e) {
+        failure = e as Error; // this group stays queued; the others are still tried
+        left.push(...part.entries);
+      }
+    }
+    const batch = okParts.flatMap((p) => p.entries);
+    const agentId = okParts.at(-1)?.id ?? "";
+    if (failure) {
+      q.pending.unshift(...left);
       q.failures++;
       q.sending = false;
       const delay = q.failures <= RETRY_MS.length ? RETRY_MS[q.failures - 1] : RETRY_EVERY_MS;
-      log(`delivery to first mate failed (${(e as Error).message}); ${q.pending.length} queued, retry in ${delay} ms`);
+      log(`delivery to first mate failed (${failure.message}); ${q.pending.length} queued, retry in ${delay} ms`);
+      if (batch.length) { try { this.d.markDelivered(project, batch.map((e) => e.id), (this.d.now?.() ?? new Date()).toISOString()); } catch (e) { log(`could not mark delivered: ${e}`); } }
       this.d.onQueue(project, q.pending.length, true);
       q.timer = setTimeout(() => void this.flush(project), delay);
       return;
@@ -249,10 +280,12 @@ export class Relay {
     }
     this.d.onQueue(project, q.pending.length, false);
     if (q.pending.length) q.timer = setTimeout(() => void this.flush(project), this.d.batchMs ?? BATCH_MS);
-    try {
-      await this.d.afterSend?.(project, batch, agentId);
-    } catch (e) {
-      log(`timeline row skipped: ${e}`);
+    for (const p of okParts) {
+      try {
+        await this.d.afterSend?.(project, p.entries, p.id);
+      } catch (e) {
+        log(`timeline row skipped: ${e}`);
+      }
     }
   }
 

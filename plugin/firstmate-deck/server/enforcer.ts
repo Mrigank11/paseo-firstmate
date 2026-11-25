@@ -11,6 +11,11 @@
 //
 // It cannot loop: reminders only go to an idle owner, one per item per gap, at most 2 per item, 1 per crew, all remembered in
 // state/enforcer.json across restarts. The state it writes is the plugin's own; it never touches fleet.json.
+//
+// Task tree: an item belongs to the nearest live second mate above its task (snapshot.nodeOwners along the parent chain), else the
+// project's first mate. A second mate that ignores an item through all its reminders does not stall it: the item moves up one
+// level (a fresh count for the next owner), and only after the last owner in the chain does it reach the captain. Group rows are
+// never items: their leaves are.
 import { mkdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { PortSelector } from "./paseo-port.ts";
@@ -30,6 +35,8 @@ type Entry = {
   awaiting: boolean;
   stalled: boolean;
   why?: string;
+  /** How far up the owner chain the item has been escalated (0 = the nearest owner). */
+  level?: number;
 };
 type Store = { items: Record<string, Entry>; crews: Record<string, number> };
 
@@ -56,6 +63,26 @@ export function enforcerOn(root: string): boolean {
 }
 
 const isStalledRow = (r: StageRow) => r.flags.some((f) => f.key === "first-mate-stalled");
+
+/** Who may act on a row, nearest first: the live second mates of the groups above it, then the project's first mate. */
+export function handlersOf(snap: Snapshot, r: StageRow): string[] {
+  const by = new Map(snap.rows.map((x) => [x.id, x]));
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (let n: string | null | undefined = r.id; n && !seen.has(n); n = by.get(n)?.parent) {
+    seen.add(n);
+    const a = snap.nodeOwners?.[n];
+    if (a && !out.includes(a)) out.push(a);
+  }
+  const p = snap.owners[r.project ?? ""];
+  if (p && !out.includes(p)) out.push(p);
+  return out;
+}
+
+const handlerAt = (hs: string[], level: number | undefined): string | undefined => hs[Math.min(level ?? 0, hs.length - 1)];
+
+/** Every agent that owns something in this snapshot: project first mates and second mates. */
+const allOwners = (snap: Snapshot): string[] => [...new Set([...Object.values(snap.owners), ...Object.values(snap.nodeOwners ?? {})].filter((x): x is string => !!x))];
 
 export class Enforcer {
   private o: EnforcerOptions;
@@ -131,8 +158,8 @@ export class Enforcer {
     for (const a of Object.keys(s.crews)) if (!liveCrews.has(a)) { delete s.crews[a]; changed = true; }
     // a task for which there is no first mate to do anything: stalled at once, the captain has to see it
     for (const r of snap.rows) {
-      if (r.group !== "fm" || r.owner !== "firstmate") continue;
-      const owner = snap.owners[r.project ?? ""];
+      if (r.group !== "fm" || r.owner !== "firstmate" || r.kind === "group") continue;
+      const owner = handlersOf(snap, r).length > 0;
       const e = s.items[r.id];
       if (!owner && !(e?.stalled)) {
         s.items[r.id] = { fp: r.fp, stage: r.stage, nudges: e?.nudges ?? 0, lastNudgeAt: e?.lastNudgeAt ?? 0, awaiting: false, stalled: true, why: `no first mate is claimed for ${r.project ?? "this checkout"}, so nobody can act on it: ${r.stage}: ${r.reason}` };
@@ -140,7 +167,7 @@ export class Enforcer {
       }
     }
     if (changed) { this.save(); this.publish(); }
-    for (const owner of new Set(Object.values(snap.owners).filter((x): x is string => !!x))) this.arm(owner);
+    for (const owner of allOwners(snap)) this.arm(owner);
     for (const r of snap.rows) if (r.owner === "crew" && r.stage.startsWith("Crew stopped") && r.agentId) this.arm(r.agentId);
   }
 
@@ -154,7 +181,7 @@ export class Enforcer {
   tick(): void {
     const snap = this.o.snapshot();
     if (!snap || this.stopped || !this.on()) return;
-    for (const owner of new Set(Object.values(snap.owners).filter((x): x is string => !!x))) this.arm(owner);
+    for (const owner of allOwners(snap)) this.arm(owner);
     for (const r of snap.rows) if (r.owner === "crew" && r.stage.startsWith("Crew stopped") && r.agentId) this.arm(r.agentId);
   }
 
@@ -188,16 +215,17 @@ export class Enforcer {
   private async check(agentId: string, afterTurn: boolean): Promise<void> {
     const snap = this.o.snapshot();
     if (!snap || !this.on()) return;
-    const asOwner = Object.entries(snap.owners).filter(([, id]) => id === agentId).map(([p]) => p);
-    if (asOwner.length) await this.checkOwner(agentId, asOwner, snap, afterTurn);
+    if (allOwners(snap).includes(agentId)) await this.checkOwner(agentId, snap, afterTurn);
     const crewRow = snap.rows.find((r) => r.agentId === agentId && r.owner === "crew" && r.stage.startsWith("Crew stopped"));
     if (crewRow) await this.checkCrew(agentId, crewRow);
   }
 
-  private async checkOwner(owner: string, projects: string[], snap: Snapshot, afterTurn: boolean): Promise<void> {
+  private async checkOwner(owner: string, snap: Snapshot, afterTurn: boolean): Promise<void> {
     if ((await this.status(owner)) !== "idle") return; // working: its turn end will come back here
     const s = this.load();
-    const items = snap.rows.filter((r) => r.group === "fm" && r.owner === "firstmate" && projects.includes(r.project ?? ""));
+    const chain = new Map<string, string[]>(snap.rows.map((r) => [r.id, handlersOf(snap, r)]));
+    const items = snap.rows.filter((r) => r.group === "fm" && r.owner === "firstmate" && r.kind !== "group" && handlerAt(chain.get(r.id)!, s.items[r.id]?.fp === r.fp ? s.items[r.id].level : 0) === owner);
+    let escalatedTo: string | undefined;
     let changed = false;
     // A reminder's turn has ended with the item untouched: that was the answer (or, after a long silence, assume it was).
     for (const r of items) {
@@ -206,18 +234,28 @@ export class Enforcer {
       if (!afterTurn && this.now() - e.lastNudgeAt < this.gap()) continue;
       e.awaiting = false;
       if (e.nudges >= MAX_NUDGES) {
-        e.stalled = true;
-        e.why = `the first mate did not act on ${e.nudges} reminders: ${r.stage}: ${r.reason}`;
-        this.o.log(`enforcer: ${r.id} stalled after ${e.nudges} reminders`);
+        const hs = chain.get(r.id)!;
+        const next = hs[(e.level ?? 0) + 1];
+        if (next) {
+          // the owner nearest the task ignored it: the next one up takes it over with a fresh count, before it reaches the captain
+          e.level = (e.level ?? 0) + 1; e.nudges = 0; e.lastNudgeAt = 0; escalatedTo = next;
+          this.o.log(`enforcer: ${r.id} escalated from ${owner.slice(0, 8)} to ${next.slice(0, 8)} after ${MAX_NUDGES} reminders`);
+        } else {
+          e.stalled = true;
+          e.why = `the first mate did not act on ${e.nudges} reminders: ${r.stage}: ${r.reason}`;
+          this.o.log(`enforcer: ${r.id} stalled after ${e.nudges} reminders`);
+        }
       }
       changed = true;
     }
     const due = items.filter((r) => {
       const e = s.items[r.id];
+      if (e?.fp === r.fp && handlerAt(chain.get(r.id)!, e.level) !== owner) return false; // escalated just now: it is the next owner's
       if (!e || e.fp !== r.fp) return true;
       return !e.stalled && !e.awaiting && e.nudges < MAX_NUDGES && this.now() - e.lastNudgeAt >= this.gap();
     });
     if (changed) { this.save(); this.publish(); }
+    if (escalatedTo) this.arm(escalatedTo);
     if (!due.length) return;
     const text = this.digest(due, s);
     try {
@@ -228,7 +266,7 @@ export class Enforcer {
     }
     for (const r of due) {
       const e = s.items[r.id]?.fp === r.fp ? s.items[r.id] : undefined;
-      s.items[r.id] = { fp: r.fp, stage: r.stage, nudges: (e?.nudges ?? 0) + 1, lastNudgeAt: this.now(), awaiting: true, stalled: false };
+      s.items[r.id] = { fp: r.fp, stage: r.stage, nudges: (e?.nudges ?? 0) + 1, lastNudgeAt: this.now(), awaiting: true, stalled: false, ...(e?.level ? { level: e.level } : {}) };
     }
     this.save();
     this.o.log(`enforcer: reminded ${owner.slice(0, 8)} about ${due.map((r) => r.id).join(", ")}`);

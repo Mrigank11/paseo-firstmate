@@ -22,6 +22,10 @@ export type StageRow = {
   /** When the current (owner, fingerprint) took over, ISO. Absent on a row computed locally. */
   owedSince?: string;
   note?: string;
+  /** The task tree (bin/fleet parent= / kind=group): a group's stage is rolled up from its leaves (tree.ts withRollups). */
+  parent?: string | null;
+  kind?: string | null;
+  rollup?: { counts: Record<string, number>; total: number; done: number; failed: boolean };
   canvas?: { verdict: string; bluf: string; asks: number };
   /** Where the row came from: the plugin's snapshot, or a local computation (no plugin, degraded). */
   source?: "plugin" | "local";
@@ -35,6 +39,8 @@ export type Snapshot = {
   inputsMtimeMs: number;
   /** The first mate that owns each project ("" = checkout-wide / no project): its agent id, or null when none is live. */
   owners: Record<string, string | null>;
+  /** The live second mate (agent id) of each claimed group node: the nearest-owner lookup for a node's wakes and comments. */
+  nodeOwners?: Record<string, string>;
   rows: StageRow[];
 };
 

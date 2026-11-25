@@ -19,10 +19,12 @@ import { CanvasPort, type FmSummary } from "./canvas-port.ts";
 import { liveJs, liveVersionJs, liveVersionFileOf, renderProject, stageOf, stagesOf, type AgentView, type Banner } from "./render.ts";
 import { currentAgent, type LabeledAgent } from "./stage.ts";
 import { inputsMtimeMs, readSnapshot, writeSnapshot, type Snapshot, type StageRow } from "./stages-file.ts";
-import { ownerOf } from "./gate.ts";
+import { ownerHops, ownerOf } from "./gate.ts";
+import { nodeClaimedId } from "./claims.ts";
+import { withRollups } from "./tree.ts";
 import { branchMerged } from "./merged.ts";
 import { MarksServer, readUi, updateUi } from "./marks-server.ts";
-import { loadLive, loadProject, type ProjectModel, type Task } from "./state.ts";
+import { archivedChildren, loadLive, loadProject, type ProjectModel, type Task } from "./state.ts";
 import { appendInbox, inboxPath, pageJsonPath, patchPageJson, pidPath, projectDir, readInbox, readPageJson, updateInbox, writeAtomic, type InboxEntry, type PageJson } from "./store.ts";
 
 export type Summary = {
@@ -216,6 +218,14 @@ export class Deck {
           throw e;
         }
       },
+      // task tree: a comment on a task (or group card) under a live second mate's group goes to that second mate
+      route: async (p, e) => {
+        const t = parseTarget(e.target);
+        if (!t || !this.cfg.root) return null;
+        const hop = (await ownerHops(this.ports, this.cfg.root, p || undefined, t.task))[0];
+        return hop && hop.via !== "project" ? hop.id : null;
+      },
+      sendTo: async (id, msg) => { await this.ports.send(id, msg); },
       describe: (p, target) => this.describeTarget(p, target),
       markDelivered: (p, ids, at) => this.markDelivered(p, ids, at),
       onQueue: (p, queued, failing) => this.onQueue(p, queued, failing),
@@ -599,7 +609,7 @@ export class Deck {
       this.owedLoaded = true;
       for (const r of readSnapshot(root)?.rows ?? []) if (r.owedSince) this.owed.set(r.id, { key: `${r.owner}|${r.fp}`, since: r.owedSince });
     }
-    const rows: StageRow[] = live.tasks.map((t) => {
+    const rows0: StageRow[] = live.tasks.map((t) => {
       const st = stageOf(t, true, { now, labeled, canvas, comments: live.comments.get(t.project ?? "") ?? [], stalled: this.stalled }, (id) => this.agents.peek(id) ?? STALE_UNKNOWN);
       const key = `${st.owner}|${st.fp}`;
       const prev = this.owed.get(t.id);
@@ -607,16 +617,32 @@ export class Deck {
       this.owed.set(t.id, { key, since: owedSince });
       const sum = st.agentId ? canvas.summaries[st.agentId] : undefined;
       return {
-        id: t.id, project: t.project ?? null, state: t.state, stage: st.stage, group: st.group, agentId: st.agentId, flags: st.flags,
+        id: t.id, project: t.project ?? null, ...(t.parent ? { parent: t.parent } : {}), ...(t.kind ? { kind: t.kind } : {}),
+        state: t.state, stage: st.stage, group: st.group, agentId: st.agentId, flags: st.flags,
         owner: st.owner, reason: st.reason, clears: st.clears, fp: st.fp, owedSince,
         ...(sum ? { canvas: { verdict: sum.verdict.label, bluf: sum.bluf.replace(/\s+/g, " ").slice(0, 80), asks: sum.openAsks.length } } : {}),
       };
     });
     for (const id of [...this.owed.keys()]) if (!live.tasks.some((t) => t.id === id)) this.owed.delete(id);
+    const groups = live.tasks.filter((t) => t.kind === "group");
+    // a group's stage rolls up from its leaves (finished children included); the page and bin/fleet read the same rows
+    const rows = withRollups(rows0, archivedChildren(root, new Set(groups.map((t) => t.id))));
     const owners = await this.ownersOf([...new Set(live.tasks.map((t) => t.project ?? ""))]);
-    const snap: Snapshot = { version: 1, writtenAt: now.toISOString(), pid: process.pid, inputsMtimeMs: mtime, owners, rows };
+    const nodeOwners = await this.nodeOwnersOf(groups.map((t) => t.id));
+    const snap: Snapshot = { version: 1, writtenAt: now.toISOString(), pid: process.pid, inputsMtimeMs: mtime, owners, ...(Object.keys(nodeOwners).length ? { nodeOwners } : {}), rows };
     writeSnapshot(root, snap);
     for (const fn of this.stagesListeners) { try { fn(snap); } catch (e) { this.log(`stages listener failed: ${e}`); } }
+  }
+
+  /** The live second mate of each claimed group node (tasks/<id>/claim.json). Without a claim, or with its agent gone, the node is absent and the project's first mate owns it. */
+  private async nodeOwnersOf(groupIds: string[]): Promise<Record<string, string>> {
+    const out: Record<string, string> = {};
+    const claims = groupIds.map((g) => [g, nodeClaimedId(this.cfg.root, g)] as const).filter((x): x is readonly [string, string] => !!x[1]);
+    if (!claims.length) return out;
+    let live: Awaited<ReturnType<ReturnType<PortSelector["current"]>["listAgents"]>> = [];
+    try { live = await this.ports.current().listAgents(); } catch { return out; }
+    for (const [g, id] of claims) if (live.some((a) => a.id === id && !a.archived)) out[g] = id;
+    return out;
   }
 
   /** The owning first mate of each project (claim, else checkout claim; live only), cached for a few seconds. */

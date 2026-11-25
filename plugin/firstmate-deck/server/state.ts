@@ -45,6 +45,10 @@ export type Task = {
   intent: string;
   title?: string;
   project?: string;
+  /** The group this task hangs under (bin/fleet parent=), absent for a top-level task. */
+  parent?: string;
+  /** "group": a node with no crew of its own whose stage rolls up from its children. Absent for a task. */
+  kind?: "group";
   shape?: string;
   /** Archive lines only (v1 history): "<provider>/<model>" as the first mate recorded it. Live v2 tasks have none; Paseo knows the model. */
   provider?: string;
@@ -279,6 +283,8 @@ function toTask(raw: any, root: string, label: string, inbox: Comment[] = [], ar
     intent: String(raw.intent ?? ""),
     title: raw.title || undefined,
     project: raw.project || undefined,
+    parent: typeof raw.parent === "string" && raw.parent ? raw.parent : undefined,
+    kind: raw.kind === "group" ? "group" : undefined,
     shape: raw.shape,
     provider: typeof raw.provider === "string" && raw.provider ? raw.provider : undefined,
     order: orderOf(raw.order),
@@ -318,6 +324,32 @@ export function loadLive(root: string): { tasks: Task[]; comments: Map<string, T
   };
   const tasks = live.filter((t) => t && typeof t.id === "string").map((t) => toTask(t, root, "fleet.json", inboxOf(t.project)));
   return { tasks, comments: new Map([...inboxes].map(([p, cs]) => [p, cs.map(({ atMs: _a, ...c }) => c)])) };
+}
+
+/**
+ * Finished children of live groups (archive lines whose `parent` chain reaches a live group): they still count, as done leaves, in
+ * the group's roll-up. Only lines that mention "parent" are parsed, so a long archive of flat tasks costs one substring test each.
+ */
+export function archivedChildren(root: string, liveGroups: ReadonlySet<string>): { id: string; parent: string; kind?: string; failed: boolean }[] {
+  if (!liveGroups.size) return [];
+  const lines: any[] = [];
+  for (const line of readText(join(root, "state", "fleet-archive.jsonl")).split("\n")) {
+    if (!line.includes('"parent"')) continue;
+    try { const t = JSON.parse(line); if (t && typeof t.id === "string" && typeof t.parent === "string") lines.push(t); } catch { /* bad line */ }
+  }
+  const newest = new Map<string, any>(lines.map((t) => [t.id, t]));
+  const reach = new Set(liveGroups);
+  const out = new Map<string, { id: string; parent: string; kind?: string; failed: boolean }>();
+  for (let grew = true; grew;) {
+    grew = false;
+    for (const t of newest.values()) {
+      if (out.has(t.id) || !reach.has(t.parent)) continue;
+      out.set(t.id, { id: t.id, parent: t.parent, ...(t.kind === "group" ? { kind: "group" } : {}), failed: archiveStateOf(t) === "failed" });
+      if (t.kind === "group") reach.add(t.id);
+      grew = true;
+    }
+  }
+  return [...out.values()];
 }
 
 /** Every live task, for the CLI: the same Task model the page renders. */

@@ -115,3 +115,58 @@ export function ownerChain(nodes: readonly NodeLike[], id: string, claimOf: (nod
   for (const c of projectClaims) add(c, "project");
   return out;
 }
+
+/** The parts of a stage row the roll-up reads and writes (stages-file.ts `StageRow` fits). */
+export type RowLike = {
+  id: string;
+  project: string | null;
+  state: string;
+  stage: string;
+  group: string;
+  agentId: string | null;
+  flags: { key: string; text: string; drift: boolean }[];
+  owner: string;
+  reason: string;
+  clears: string;
+  fp: string;
+  parent?: string | null;
+  kind?: string | null;
+  rollup?: { counts: Record<RollGroup, number>; total: number; done: number; failed: boolean };
+};
+
+const OWNER_OF: Record<RollGroup, string> = { you: "captain", fm: "firstmate", running: "crew", blocked: "outside", next: "nobody", parked: "nobody", done: "nobody" };
+
+/**
+ * Give every group row the stage its leaves roll up to. `archived` are finished children no longer in the live index (they count as
+ * done leaves). A group keeps its own stage when it has an open ask (Needs you) or its own done/failed verdict, and stays parked when
+ * parked. Its other flags are dropped: a group has no crew, so "no agent" is not drift. Rows without groups come back as they were.
+ */
+export function withRollups<R extends RowLike>(rows: readonly R[], archived: readonly (NodeLike & { failed?: boolean })[]): R[] {
+  if (!rows.some((r) => r.kind === "group")) return rows as R[];
+  const nodes: NodeLike[] = [...rows.map((r) => ({ id: r.id, parent: r.parent, kind: r.kind })), ...archived];
+  const stage = new Map<string, { group: RollGroup; failed?: boolean }>();
+  for (const r of rows) stage.set(r.id, { group: r.group as RollGroup, failed: r.stage.startsWith("Failed") });
+  for (const a of archived) stage.set(a.id, { group: "done", failed: a.failed });
+  return rows.map((r) => {
+    if (r.kind !== "group") return r;
+    const ro = rollup(nodes, r.id, (id) => stage.get(id) ?? { group: "done" });
+    const info = { counts: ro.counts, total: ro.total, done: ro.done, failed: ro.failed };
+    const own = r.group === "you" || r.state === "done" || r.state === "failed" || (r.state === "parked" && r.group === "parked");
+    if (own) return { ...r, rollup: info };
+    const group = ro.group;
+    return { ...r, stage: ro.stage, group, owner: OWNER_OF[group], reason: ro.reason, clears: group === "fm" ? "the tasks under it say how" : "", flags: [], fp: `${ro.stage}|${ro.reason}|${r.id}`, rollup: info };
+  });
+}
+
+/** The group's card: counts in one line, then each leaf's stage. Rebuilt from the rows, so it is never stale. */
+export function cardMarkdown(g: RowLike, rows: readonly RowLike[], nameOf: (id: string) => string, archived: readonly (NodeLike & { failed?: boolean })[] = []): string {
+  const ro = g.rollup;
+  const nodes: NodeLike[] = [...rows.map((r) => ({ id: r.id, parent: r.parent, kind: r.kind })), ...archived];
+  const leaves = leavesUnder(nodes, g.id);
+  const by = new Map(rows.map((r) => [r.id, r]));
+  const head = ro && ro.total ? `**${nameOf(g.id)}** · ${g.stage}\n\n${ro.done} of ${ro.total} done · ${g.reason}` : `**${nameOf(g.id)}** · ${g.stage}\n\n${g.reason}`;
+  if (!leaves.length) return head;
+  const cell = (s: string) => s.replace(/\|/g, "\\|").replace(/\s+/g, " ");
+  const lines = leaves.map((l) => `| ${cell(nameOf(l.id))} | ${cell(by.get(l.id)?.stage ?? (archived.find((a) => a.id === l.id)?.failed ? "Failed" : "Done"))} |`);
+  return [head, "", "| Task | Stage |", "|---|---|", ...lines].join("\n");
+}

@@ -79,3 +79,57 @@ test("ownerChain: nearest claimed live node first, then the project and checkout
   // the same agent never appears twice
   assert.deepEqual(ownerChain(nodes, "a", () => "x", ["x"]), [{ id: "x", via: "a" }]);
 });
+
+import { cardMarkdown, withRollups, type RowLike } from "../server/tree.ts";
+
+const row = (id: string, group: string, extra: Partial<RowLike> = {}): RowLike => ({
+  id, project: "p", state: "active", stage: group, group, agentId: null, flags: [], owner: "crew", reason: "r", clears: "", fp: `${id}|${group}`, ...extra,
+});
+
+test("withRollups: a group row takes its leaves' roll-up; its own flags (Lost, no agent) are dropped; leaves are untouched", () => {
+  const rows = [
+    row("g", "fm", { kind: "group", flags: [{ key: "no-agent", text: "x", drift: true }], stage: "Lost" }),
+    row("a", "done", { parent: "g" }), row("b", "running", { parent: "g" }), row("c", "you", { parent: "sub" }),
+    row("sub", "next", { kind: "group", parent: "g" }),
+  ];
+  const out = withRollups(rows, []);
+  const g = out.find((r) => r.id === "g")!;
+  assert.equal(g.group, "you");
+  assert.equal(g.stage, "Needs you");
+  assert.equal(g.owner, "captain");
+  assert.deepEqual(g.flags, []);
+  assert.equal(g.rollup!.total, 3);
+  assert.match(g.reason, /1 needs you/);
+  assert.equal(out.find((r) => r.id === "a")!.group, "done");
+  assert.equal(out.find((r) => r.id === "sub")!.rollup!.total, 1);
+});
+
+test("withRollups: archived children count as done leaves; a failed one flags the group", () => {
+  const rows = [row("g", "next", { kind: "group" })];
+  const done = withRollups(rows, [{ id: "old", parent: "g" }]);
+  assert.equal(done[0].group, "done");
+  assert.equal(done[0].rollup!.done, 1);
+  const failed = withRollups(rows, [{ id: "old", parent: "g", failed: true } as any]);
+  assert.equal(failed[0].rollup!.failed, true);
+});
+
+test("withRollups: a group with an open ask or a done/failed verdict keeps its own stage; a parked group stays parked", () => {
+  const ask = withRollups([row("g", "you", { kind: "group", stage: "Needs you" }), row("a", "done", { parent: "g" })], []);
+  assert.equal(ask[0].stage, "Needs you");
+  assert.equal(ask[0].rollup!.done, 1);
+  const parked = withRollups([row("g", "parked", { kind: "group", state: "parked", stage: "Parked" }), row("a", "running", { parent: "g" })], []);
+  assert.equal(parked[0].group, "parked");
+});
+
+test("withRollups: with no groups the rows come back unchanged", () => {
+  const rows = [row("a", "running"), row("b", "you")];
+  assert.deepEqual(withRollups(rows, []), rows);
+});
+
+test("cardMarkdown: one line of counts and a table of the children", () => {
+  const rows = withRollups([row("g", "next", { kind: "group" }), row("a", "done", { parent: "g", stage: "Done" }), row("b", "running", { parent: "g", stage: "Running" })], []);
+  const md = cardMarkdown(rows.find((r) => r.id === "g")!, rows, (id) => ({ a: "PR one", b: "PR two" } as Record<string, string>)[id] ?? id);
+  assert.match(md, /1 of 2 done/);
+  assert.match(md, /\| PR two \| Running \|/);
+  assert.match(md, /\| PR one \| Done \|/);
+});

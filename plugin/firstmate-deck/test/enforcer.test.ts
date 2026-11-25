@@ -13,22 +13,22 @@ const row = (id: string, over: Partial<StageRow> = {}): StageRow => ({
   id, project: "p", state: "active", stage: "With the first mate", group: "fm", agentId: "crew-1", flags: [], owner: "firstmate",
   reason: `ask a1: the captain replied (${id})`, clears: "bin/page reply p --task " + id, fp: `fp-${id}-1`, owedSince: "2026-10-24T10:00:00Z", ...over,
 });
-const snap = (rows: StageRow[], owners: Record<string, string | null> = { p: "fm" }): Snapshot => ({ version: 1, writtenAt: new Date().toISOString(), pid: 1, inputsMtimeMs: 1, owners, rows });
+const snap = (rows: StageRow[], owners: Record<string, string | null> = { p: "fm" }, nodeOwners?: Record<string, string>): Snapshot => ({ version: 1, writtenAt: new Date().toISOString(), pid: 1, inputsMtimeMs: 1, owners, rows, ...(nodeOwners ? { nodeOwners } : {}) });
 
-function setup(o: { fmStatus?: "idle" | "running"; rows?: StageRow[]; owners?: Record<string, string | null>; root?: string } = {}) {
+function setup(o: { fmStatus?: "idle" | "running"; rows?: StageRow[]; owners?: Record<string, string | null>; nodeOwners?: Record<string, string>; root?: string } = {}) {
   const root = o.root ?? mkdtempSync(join(tmpdir(), "enf-"));
   mkdirSync(join(root, "state"), { recursive: true });
   const world = new FakeWorld().add({ id: "fm", status: o.fmStatus ?? "idle", labels: { firstmate: "true" } }, { id: "crew-1", status: "idle", labels: { "fm.task": "t1" } });
   const ports = new PortSelector(new CliPort(async (a) => { if (a[0] === "send") throw new Error("daemon down"); return "[]"; }), () => {});
   ports.capture({ paseo: fakePaseo(world) }, "test");
   let clock = Date.parse("2026-10-24T12:00:00Z");
-  let current = snap(o.rows ?? [row("t1")], o.owners);
+  let current = snap(o.rows ?? [row("t1")], o.owners, o.nodeOwners);
   const changes: { crews: string[]; stalled: Record<string, { fp: string; why: string }> }[] = [];
   const mk = () => new Enforcer({ ports, root: () => root, snapshot: () => current, log: () => {}, now: () => clock, settleMs: 1, onChange: (crews, stalled) => changes.push({ crews, stalled }) });
   const enf = mk();
   return {
     root, world, enf, mk, changes,
-    feed: (rows: StageRow[], owners?: Record<string, string | null>) => { current = snap(rows, owners ?? current.owners); enf.onStages(current); },
+    feed: (rows: StageRow[], owners?: Record<string, string | null>) => { current = snap(rows, owners ?? current.owners, current.nodeOwners); enf.onStages(current); },
     advance: (ms: number) => { clock += ms; },
     toFm: () => world.sent.filter((s) => s.id === "fm"),
   };
@@ -192,5 +192,53 @@ test("state/enforcer.json records the count so the next run knows", async () => 
   await s.enf.checkNow("fm");
   const saved = JSON.parse(readFileSync(join(s.root, "state", "enforcer.json"), "utf8"));
   assert.deepEqual([saved.items.t1.nudges, saved.items.t1.awaiting, saved.items.t1.stalled], [1, true, false]);
+  s.enf.stop();
+});
+
+const grp = (id: string): StageRow => row(id, { kind: "group", group: "running", owner: "crew", stage: "Running", reason: "1 running" });
+
+test("tree: an item under a group goes to that group's second mate, not the first mate", async () => {
+  const s = setup({ rows: [grp("g"), row("t1", { parent: "g" })], nodeOwners: { g: "sm" } });
+  s.world.add({ id: "sm", status: "idle", labels: {} });
+  s.feed([grp("g"), row("t1", { parent: "g" })]);
+  await s.enf.checkNow("fm");
+  assert.equal(s.toFm().length, 0, "the first mate is not asked about a task a second mate owns");
+  await s.enf.checkNow("sm");
+  const sent = s.world.sent.filter((m) => m.id === "sm");
+  assert.equal(sent.length, 1);
+  assert.match(sent[0].text, /t1/);
+  assert.doesNotMatch(sent[0].text, /\bg ·/, "a group row is never an item");
+  s.enf.stop();
+});
+
+test("tree: a second mate that ignores an item through both reminders escalates it to the first mate; only then does it reach the captain", async () => {
+  const rows = () => [grp("g"), row("t1", { parent: "g" })];
+  const s = setup({ rows: rows(), nodeOwners: { g: "sm" } });
+  s.world.add({ id: "sm", status: "idle", labels: {} });
+  s.feed(rows());
+  await s.enf.checkNow("sm");
+  await s.enf.checkNow("sm", true);
+  s.advance(GAP_MS + 1);
+  await s.enf.checkNow("sm");
+  await s.enf.checkNow("sm", true); // second reminder ignored: up one level
+  assert.equal(s.world.sent.filter((m) => m.id === "sm").length, MAX_NUDGES);
+  assert.deepEqual(s.changes.at(-1)?.stalled ?? {}, {}, "not in front of the captain yet");
+  await s.enf.checkNow("fm");
+  assert.equal(s.toFm().length, 1, "the first mate now has it, with a fresh count");
+  assert.match(s.toFm()[0].text, /t1/);
+  await s.enf.checkNow("fm", true);
+  s.advance(GAP_MS + 1);
+  await s.enf.checkNow("fm");
+  await s.enf.checkNow("fm", true);
+  assert.deepEqual(Object.keys(s.changes.at(-1)!.stalled), ["t1"]);
+  assert.equal(s.world.sent.filter((m) => m.id === "sm").length, MAX_NUDGES, "the second mate is not asked again");
+  s.enf.stop();
+});
+
+test("tree: with the second mate gone the item belongs to the first mate at once", async () => {
+  const s = setup({ rows: [grp("g"), row("t1", { parent: "g" })] });
+  s.feed([grp("g"), row("t1", { parent: "g" })]);
+  await s.enf.checkNow("fm");
+  assert.equal(s.toFm().length, 1);
   s.enf.stop();
 });
