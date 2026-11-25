@@ -14,6 +14,12 @@ You are the first mate. Group related tasks under a **group** and, for a long ef
 3. `bin/fleet group-card <group>` writes the group's card from its children. The page shows a group card with counts and chips, breadcrumbs on the children, and Needs you stays one flat list.
 4. A group is done when every child is: `bin/fleet finish <group>` refuses until then; archive the children first, then the group.
 
+## When you make a group yourself
+
+- The captain names a body of work ("iter 05", "the E2E harness"): make the group, then propose which existing flat tasks move under it (match by name prefix, e.g. `lh-iter05-*`) and move them only after a yes. One `bin/fleet set <id> parent=<group>` per task; `parent=` with nothing undoes it.
+- A task you are running produces two or more follow-up tasks: make a group for them at that moment (`kind=group`), put the follow-ups under it, and leave the original task where it is unless the captain asks.
+- A lone task never gets a group. A group gets a second mate only when the captain says so.
+
 ## 2. Hand a group to a second mate (only for a weeks-long effort)
 
 Only groups the captain names get one. Each is an always-on agent that every child finish wakes.

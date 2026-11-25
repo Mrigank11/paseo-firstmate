@@ -93,3 +93,41 @@ test("the group's own state is not counted as a needs-you item in the tab count"
   const r = render(rig());
   assert.equal(r.attention.needsYou, 1);
 });
+
+test("fold: every group in the tree and on the cards has a fold control keyed by its id", () => {
+  const live = render(rig()).live;
+  const tn = live.slice(live.indexOf("data-tn>"));
+  assert.match(tn, /<li class="tn-g" data-s="\w+" data-g="g"><button class="tn-fold" type="button" data-fold="g" aria-expanded="true"/);
+  assert.match(tn, /data-g="sub"><button class="tn-fold"[^>]*data-fold="sub"/);
+  for (const g of ["g", "sub"]) assert.match(live, new RegExp(`class="gf" data-fold="${g}" aria-expanded="true"`));
+  assert.ok(!/data-fold="c1"/.test(live), "leaves have no fold control");
+});
+
+test("fold: an open ask under a group is counted on the group (card and tree node), nested groups included", () => {
+  const live = render(rig()).live;
+  const tn = live.slice(live.indexOf("data-tn>"));
+  assert.match(tn, /data-g="g">[^]*?<span class="tn-ask" title="1 open ask below">1<\/span>/);
+  assert.match(live, /<span class="gask">1 needs you<\/span>/);
+  // the sub group holds only a running-less task, so it carries no marker
+  assert.ok(!/data-g="sub">[^]*?<\/a>/.exec(tn)![0].includes("tn-ask"));
+});
+
+test("fold: the ask stays in the flat Needs you list, once, whatever is folded", () => {
+  const live = render(rig()).live;
+  const you = live.slice(live.indexOf('id="g-you"'), live.indexOf("</section>", live.indexOf('id="g-you"')));
+  assert.equal((you.match(/id="t-c1"/g) ?? []).length, 1);
+  assert.ok(!/gcard/.test(you));
+});
+
+test("fold: the nav script keeps the fold in a pref and re-applies it after every swap", async () => {
+  const { navScript } = await import("../server/nav-script.ts");
+  const js = navScript();
+  assert.match(js, /__fdPref\("tn-f-"\+g,folded\(g\)\?0:1\)/);
+  assert.match(js, /build\(html\)[^]*applyFold\(\)/);
+  assert.match(js, /adopt\(\);applyFold\(\);unread/);
+});
+
+test("fold: the folded card rule hides everything after the header row except the card's own asks", async () => {
+  const css = (await import("node:fs")).readFileSync(new URL("../server/style.ts", import.meta.url), "utf8");
+  assert.match(css, /\.gcard\.gfold>\.gx~\*:not\(\[class\*="ask"\]\):not\(\.opts\)\{display:none\}/);
+});

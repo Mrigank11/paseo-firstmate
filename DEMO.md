@@ -15,6 +15,8 @@ Everything here runs on a separate Paseo daemon (home `.isolated/fm-task-tree-bu
 5. **Comments route to the nearest owner.** Comments on `PR 2` and on the group card went to the second mate (see its Paseo timeline: "Page comments"); a page-level comment went to the stand-in first mate.
 6. **Wake routing.** The PR 4 crew's `DONE:` woke the second mate, not the first mate (`state/gate-log.jsonl` in the demo state, note = second mate's id), and the enforcer's `## With you` reminder went to it too.
 
+7. **Fold.** The chevron beside a group in the tree, or Fold/Unfold on its card, hides its children (tree) or its bar, chips and tables (card). The group keeps its counts and an orange "N need you" marker; the asks stay in Needs you. Reload: the fold holds.
+
 ## Commands (demo state only)
 
 ```

@@ -48,6 +48,15 @@ export function navScript(): string {
   function shut(k){return window.__fdPref?window.__fdPref("tn-c-"+k)===1:false}
   function applyShut(root){q(root,".tn-st").forEach(function(s){var on=shut(s.getAttribute("data-k")),h=s.querySelector(".tn-h");
     s.classList.toggle("shut",on);if(h)h.setAttribute("aria-expanded",on?"false":"true")})}
+  // ---- fold a group (task tree): the choice ("tn-f-<group>", 1 = folded) is stored like the stage fold. It hides a group's
+  // children in the tree and the chips and bar on its card; the cards of its children and the Needs-you list are untouched.
+  function folded(g){return window.__fdPref?window.__fdPref("tn-f-"+g)===1:false}
+  function applyFold(){[fl,sl].forEach(function(r){q(r,"li.tn-g[data-g]").forEach(function(li){var on=folded(li.getAttribute("data-g")),b=li.querySelector(":scope>.tn-fold");
+      li.classList.toggle("folded",on);if(b)b.setAttribute("aria-expanded",on?"false":"true")})});
+    q(d,"#live .gcard").forEach(function(c){var b=c.querySelector(".gf"),g=b&&b.getAttribute("data-fold"),on=!!g&&folded(g);
+      c.classList.toggle("gfold",on);if(b){b.setAttribute("aria-expanded",on?"false":"true");var sp=b.querySelector("span");if(sp)sp.textContent=on?"Unfold":"Fold"}})}
+  d.addEventListener("click",function(e){var b=e.target.closest&&e.target.closest("[data-fold]");if(!b||!window.__fdPref)return;e.preventDefault();
+    var g=b.getAttribute("data-fold");window.__fdPref("tn-f-"+g,folded(g)?0:1);applyFold()});
   // ---- build from the template
   function stages(){return q(fl,".tn-st")}
   function applyMore(root){q(root,".tn-st[data-cap]").forEach(function(s){var on=!!more[s.getAttribute("data-k")],b=s.querySelector(".tn-more");
@@ -58,7 +67,7 @@ export function navScript(): string {
     if(tagName==="button"){b.type="button";b.setAttribute("data-k",k);b.setAttribute("aria-controls","tn-fly");b.setAttribute("aria-expanded",flyKey===k?"true":"false");
       b.setAttribute("aria-label",s.getAttribute("data-label")+", "+n+(n==="1"?" task":" tasks"));b.title=s.getAttribute("data-label")+" ("+n+")"}
     return b}
-  function build(html){fl.innerHTML=html;sl.innerHTML=html;applyMore(fl);applyMore(sl);applyShut(fl);applyShut(sl);
+  function build(html){fl.innerHTML=html;sl.innerHTML=html;applyMore(fl);applyMore(sl);applyShut(fl);applyShut(sl);applyFold();
     var ss=stages(),on=ss.length>0;aside.hidden=!on;bar.hidden=!on;body.classList.toggle("tn-on",on);
     bds.textContent="";bar.textContent="";
     ss.forEach(function(s){bds.appendChild(badge(s,"button"));bar.appendChild(badge(s,"span"))});
@@ -71,7 +80,7 @@ export function navScript(): string {
     [fl,sl,fly].forEach(function(r){q(r,".tn-a").forEach(function(a){a.parentNode.classList.toggle("un",!!ids[a.getAttribute("data-t")])})})}
   window.__tn=function(){var live=$("live"),src=live&&live.querySelector("[data-tn]"),html=src?src.innerHTML:"";
     if(html!==tpl){tpl=html;var y=fl.scrollTop;build(html);fl.scrollTop=y}
-    adopt();unread();observe();mark()};
+    adopt();applyFold();unread();observe();mark()};
   // ---- flyout beside the spine
   function renderFly(){var s=fl.querySelector('.tn-st[data-k="'+flyKey+'"]');if(!s)return;
     fly.innerHTML="";var c=s.cloneNode(true);c.classList.remove("shut");var ch=c.querySelector(".tn-h");if(ch){ch.removeAttribute("aria-expanded");ch.tabIndex=-1}fly.appendChild(c);applyMore(fly);unread();mark();fly.hidden=false;

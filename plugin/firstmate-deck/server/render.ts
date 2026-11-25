@@ -377,6 +377,11 @@ function crumbHtml(t: Task, ctx: Ctx): string {
 }
 
 /** A group card's header: roll-up line, progress bar, one chip per child, the second mate and the zoom button. */
+/** Leaves under a group (any depth) that are waiting on the captain: a fold must never hide them without a marker. */
+function askBelow(id: string, tasks: readonly Task[], stages: ReadonlyMap<string, Stage>): number {
+  return tasks.filter((k) => k.parent === id).reduce((n, k) => n + (k.kind === "group" ? askBelow(k.id, tasks, stages) : stages.get(k.id)?.group === "you" ? 1 : 0), 0);
+}
+
 function groupHead(t: Task, st: Stage, ctx: Ctx): string {
   const ro = st.rollup;
   const kids = [...ctx.byId.values()].filter((k) => k.parent === t.id && ctx.stages.has(k.id));
@@ -388,12 +393,13 @@ function groupHead(t: Task, st: Stage, ctx: Ctx): string {
     return `<a class="gchip s-${ks.group}" href="#t-${esc(k.id)}">${taskName(k)}${n}</a>`;
   };
   const pct = ro && ro.total ? Math.round((ro.done / ro.total) * 100) : 0;
-  const meta = ro && ro.total ? `${ro.done} of ${ro.total} done · ${esc(st.reason)}` : esc(st.reason);
+  const asks = askBelow(t.id, [...ctx.byId.values()], ctx.stages);
+  const meta = (ro && ro.total ? `${ro.done} of ${ro.total} done · ${esc(st.reason)}` : esc(st.reason)) + (asks ? ` <span class="gask">${asks} need${asks === 1 ? "s" : ""} you</span>` : "");
   const mate = t.mate ? `<span class="mate">second mate · <a class="open" href="${esc(ctx.o.paseoAgentUrl(t.mate))}">${esc(t.mate.slice(0, 8))}</a></span>` : "";
   return `<div class="gmeta">${meta}</div>` +
     `<div class="gbar" role="img" aria-label="${ro ? ro.done : 0} of ${ro ? ro.total : 0} done"><i style="width:${pct}%"></i></div>` +
     `<div class="gchips">${live.map(chip).join("")}${finished ? `<span class="gmeta">+${finished} finished</span>` : ""}</div>` +
-    `<div class="gx"><button type="button" class="gz" data-g="${esc(t.id)}" data-lavish-action>Zoom into group</button>${mate}</div>`;
+    `<div class="gx"><button type="button" class="gf" data-fold="${esc(t.id)}" aria-expanded="true" data-lavish-action>${svg(ICON.down)}<span>Fold</span></button><button type="button" class="gz" data-g="${esc(t.id)}" data-lavish-action>Zoom into group</button>${mate}</div>`;
 }
 
 function row(t: Task, group: GroupKey, ctx: Ctx, idx = 0): string {
@@ -557,9 +563,10 @@ export function treeNavHtml(tasks: readonly Task[], stages: ReadonlyMap<string, 
   };
   const node = (t: Task): string => {
     const kids = tasks.filter((k) => k.parent === t.id);
-    if (t.kind !== "group") return `<li${t.state === "failed" ? ` class="fail"` : ""}>${a(t)}</li>`;
+    if (t.kind !== "group") return `<li${t.state === "failed" ? ` class="fail"` : stages.get(t.id)?.group === "you" ? ` class="t-you"` : ""}>${a(t)}</li>`;
     const ro = stages.get(t.id)?.rollup;
-    return `<li class="tn-g t-${stages.get(t.id)?.group ?? "next"}">${a(t, ro ? `<span class="tn-gc">${ro.done}/${ro.total}</span>` : "")}<ul>${kids.map(node).join("")}</ul></li>`;
+    const asks = askBelow(t.id, tasks, stages);
+    return `<li class="tn-g" data-s="${stages.get(t.id)?.group ?? "next"}" data-g="${esc(t.id)}"><button class="tn-fold" type="button" data-fold="${esc(t.id)}" aria-expanded="true" aria-label="Fold ${taskName(t)}">${svg(ICON.down)}</button>${a(t, (ro ? `<span class="tn-gc">${ro.done}/${ro.total}</span>` : "") + (asks ? `<span class="tn-ask" title="${asks} open ask${asks === 1 ? "" : "s"} below">${asks}</span>` : ""))}<ul>${kids.map(node).join("")}</ul></li>`;
   };
   const roots = groups.filter((g) => !g.parent || !live.has(g.parent));
   const loose = tasks.filter((t) => t.kind !== "group" && !t.parent).length;
