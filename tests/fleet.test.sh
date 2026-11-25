@@ -563,6 +563,8 @@ refused "tree: a group cannot be its own descendant" $F set g2 parent=g2
 $F set c1 parent= >/dev/null; eq "$($F get c1 | jq -c '.parent')" null; check "tree: parent= removes the parent" $?
 refused "tree: kind= on a group that has children" $F set g1 kind=
 eq "$($F children g1 | jq -r 'map(.id)|join(",")')" "g2"; check "tree: children lists direct children" $?
+$F tree lh >"$T/tree.out" 2>"$T/tree.err"; check "tree: tree exits cleanly" $?
+[[ ! -s "$T/tree.err" ]]; check "tree: ...with nothing on stderr" $?
 $F tree lh | grep -q '^g1'; check "tree: tree prints the roots" $?
 $F tree lh | grep -q '^  g2'; check "tree: ...and indents children" $?
 $F tree lh | grep -q '^    c2'; check "tree: ...two levels down" $?

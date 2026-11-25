@@ -946,7 +946,7 @@ cmd_tree() {
     | def line($t; $d): ("  " * $d) + $t.id + (if ($t.kind // "") == "group" then " [group]" else "" end) + "  " + $t.state
         + (if ($t.title // "") != "" then "  " + $t.title else "" end);
       def walk($t; $d): line($t; $d), ($ts[] | select(.parent == $t.id) | walk(.; $d + 1));
-    $ts[] | select((.parent // "") == "" or (($ids | index(.parent)) == null)) | walk(.; 0)' "$FLEET"
+    $ts[] | . as $n | select(($n.parent // "") == "" or (($ids | index($n.parent)) == null)) | walk(.; 0)' "$FLEET"
 }
 cmd_claim_node() {
   local id="" agent="" replace=0
