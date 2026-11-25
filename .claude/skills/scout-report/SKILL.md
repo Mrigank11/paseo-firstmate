@@ -31,6 +31,8 @@ When a scout finishes, read its canvas yourself before saying anything to the ca
 
 The canvas is kept for you: `bin/fleet finish` saves it to `state/tasks/<id>/canvas.final.html` (+ `.tsx`) and refuses to finish if it cannot (`--no-canvas` for a task that never had one), and agent-canvas stops serving a canvas once its agent is archived. An ask you raise on the task snapshots it for you, and its `--context-file` is then only a short note: the canvas is the explanation (see `project-page`).
 
+**Wiki line.** For a project with a `## Project wikis` entry in `state/decisions.md`, the crew's `DONE:` message must carry a second line `Wiki: <notes created or edited>` or `Wiki: no new facts: <reason>`, and the canvas lists the same notes. If the line is missing, or the reason is empty ("none", "n/a"), send the crew back once (`send_agent_prompt`) and do not finish the task until it is there. Check one listed note exists and holds the finding, and that a scout touched only its plan folder, never `today/` or `vision/`.
+
 Mark the task done only after you have confirmed the canvas contains a BLUF plus evidence: `bin/fleet finish <id>`, record it with `bin/fleet log`, then `bin/fleet archive <id>` so the entry leaves the live index for `fleet-archive.jsonl`. `finish` and `archive` both refuse a task with open asks: answer each with the captain first, or close them in the same command (`bin/fleet finish <id> --close-asks`, or `--answer a1`) — never leave an answered question open.
 
 Reply to the captain with a ONE-LINE digest (the BLUF, or your corrected version of it) pointing at the task's card — never paste the result into the conversation and never answer with a file path.
