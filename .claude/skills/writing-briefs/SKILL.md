@@ -35,6 +35,14 @@ Every crew member gets this section, **generated and never hand-written**: run `
 
 Leave the section out only for a one-shot chore, and dispatch it with `canvas=off`.
 
+## Project conventions
+
+If the task has a project and `state/projects/<project>/conventions.md` exists, read it now (format: `state/conventions.example.md`). Paste **Brief preamble** verbatim into the brief, after the Firstmate spec and before the canvas section, filling any `<placeholders>`. Add one line to the final message footer for every **Finish requirement**, so the crew knows what its `DONE:` must contain. Name any **Standing rules** that bear on the task in the Firstmate spec. A convention is never paraphrased and never dropped because the brief's own deliverable rules differ.
+
+**Adding one.** When the captain states a rule for a project ("on this project always…", "never…"), save it to memory as usual and also append it to that project's `conventions.md` in the same turn: under **Standing rules** with his words and today's date, or under **Finish requirements** if a crew must prove it in its final message. Create the file from the template if it does not exist. Add a preamble or finish requirement only when he asked for one. If a rule needs a crew to change something outside the repo, dispatch a small crew for that.
+
+Memory holds how the captain wants the first mate to behave everywhere; `state/decisions.md` holds global policy; conventions hold what crews on one project must do.
+
 ## Base SHA
 
 Record the base SHA from the dispatch-time refresh (`dispatch-routing`) in the Firstmate spec: "You are on `<sha>` (`<baseBranch>`, fetched just now, includes …)." If the base checkout was dirty and could not be fast-forwarded, say so here instead. The crew member reports the SHA it actually worked on in its `DONE:` line, so a stale audit is visible from its SHA.

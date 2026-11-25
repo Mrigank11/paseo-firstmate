@@ -31,6 +31,10 @@ The first mate may merge ONLY under one of these authorities, never on its own i
 
 A green-only posture NEVER authorizes merging a red PR. When in doubt about which authority applies, escalate.
 
+## 2a. Project conventions
+
+If the task's project has `state/projects/<project>/conventions.md`, check each **Finish requirement** against the crew's final message before merging or closing. If one is missing or its answer is empty, nudge the crew once and do not merge or close the task until it is met. Spot-check one claim it makes.
+
 ## 3. Check green before merging
 
 Verify checks on every PR before merging:
@@ -78,6 +82,10 @@ Teardown is keyed to the work **landing**, not to *you* merging it. Run this sec
 5. If the landed repo is **paseo-firstmate itself** (the checkout you run from), run `git -C /home/mrigank/projects/llm-exp/paseo-firstmate pull --ff-only` so the merged rules are live in your next turn; if the fast-forward fails, tell the captain.
 
 REFUSE teardown while there is unlanded work: unmerged commits, an open PR, or a dirty worktree. Surface the unlanded state to the captain instead of archiving.
+
+## 6a. Plan ship (conventions)
+
+If the project's `conventions.md` has an **On plan ship** section and the PR just landed is the last of its plan, make sure those steps happen before you close the task: send the crew that merged it (or a fresh contributor-lane crew) to do them, dispatch any crew the steps name, and put any question they say to ask the captain through `bin/fleet ask`. Do not `bin/fleet finish` until the crew's final message satisfies the project's Finish requirements for them.
 
 ## 7. Finish
 
