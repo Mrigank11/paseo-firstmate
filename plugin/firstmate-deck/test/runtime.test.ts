@@ -918,7 +918,8 @@ test("canvas: the live page shows the agent's canvas, follows its changes, and r
   await deck.render("demo");
   await until(() => /Wiring the routes/.test(readFileSync(r.live, "utf8")), 3000);
   assert.match(taskCard(readFileSync(r.live, "utf8"), "t2"), /Open canvas ↗/);
-  assert.match(readFileSync(r.page, "utf8"), /\.acv \.blk\{color:red\}/);
+  assert.match(readFileSync(r.live, "utf8"), /\.acv \.blk\{color:red\}/, "the crew stylesheet rides in the live payload");
+  assert.doesNotMatch(readFileSync(r.page, "utf8").replace(/<!--LIVE-START-->[\s\S]*<!--LIVE-END-->/, ""), /\.acv \.blk/, "and never in page.html outside #live (a page.html write reloads the page)");
   assert.equal(readPageJson(join(r.pdir, "page.json")).canvasUrl, fc.url);
   // the canvas moves: the page follows without any agent event
   fc.set(canvasSummary("ag-2", { rev: 2, bluf: "Routes done, tests next" }));
