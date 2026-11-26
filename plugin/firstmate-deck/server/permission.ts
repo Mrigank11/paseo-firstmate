@@ -151,7 +151,7 @@ export class Permission {
     let lastErr = "";
     for (let attempt = 1; attempt <= SEND_ATTEMPTS; attempt++) {
       try {
-        const target = await wakeTarget(this.o.ports, root, ev.agent.parentAgentId ?? info.labels[PARENT_LABEL] ?? null, info.labels["fm.project"], task, ev.agent.id);
+        const target = await wakeTarget(this.o.ports, root, ev.agent.parentAgentId ?? info.labels[PARENT_LABEL] ?? null, info.labels["fm.project"]);
         if (!target) return this.append({ ...base, decision: "escalate", acted: false, result: "no-target", note: "no live parent and no first-mate claim" });
         await this.o.ports.send(target, message);
         return this.append({ ...base, decision: "escalate", acted: true, result: "woke", note: target });

@@ -113,11 +113,10 @@ export function itemStep(item: TimelineItem): [string, string] | null {
   }
 }
 
-/** The last assistant line that starts with DONE: or BLOCKED: in the crew's latest turn. A hand-back before the last user message (a steer, a follow-up) is stale. */
+/** The last assistant line that starts with DONE: or BLOCKED:. */
 export function finalLine(items: readonly TimelineItem[]): string | undefined {
   for (let i = items.length - 1; i >= 0; i--) {
     const it = items[i];
-    if (it.type === "user_message") return undefined;
     if (it.type !== "assistant_message") continue;
     const lines = it.text.split("\n");
     for (let j = lines.length - 1; j >= 0; j--) if (lines[j].startsWith("DONE:") || lines[j].startsWith("BLOCKED:")) return lines[j];

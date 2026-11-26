@@ -56,7 +56,7 @@ test("stages: no canvas, an unreachable canvas, or 'off' leave the rows as befor
     const res = await run(["stages", r.root], { ...base, AGENT_CANVAS_URL: url });
     assert.equal(res.code, 0, url);
     const rows = JSON.parse(res.out);
-    assert.deepEqual(rows.map((x: any) => x.stage), ["Running", "Running"], url);
+    assert.deepEqual(rows.map((x: any) => x.stage), ["Running", "Needs you"], url);
     assert.ok(rows.every((x: any) => !x.canvas));
   }
 });
@@ -116,47 +116,4 @@ test("snapshot: older than fleet.json it waits for the plugin to catch up, then 
   const gave = JSON.parse((await run(["stages", r.root], { ...env, STAGE_SNAPSHOT_WAIT_MS: "400" })).out);
   assert.deepEqual(gave.map((x: any) => x.source), ["local", "local"]);
   assert.ok(Date.now() - t0 < 3000, "the wait is bounded");
-});
-
-test("rollup: a group's stage comes from its leaves (live and archived), bin/fleet stage shows it, the card is rebuilt from them", async () => {
-  const root = mkdtempSync(join(tmpdir(), "deck-tree-"));
-  mkdirSync(join(root, "state"), { recursive: true });
-  const t = (id: string, x: object = {}) => ({ id, intent: `do ${id}`, state: "active", since: "2026-10-24T09:00:00Z", project: "demo", shape: "ship", ...x });
-  writeFileSync(join(root, "state", "fleet.json"), JSON.stringify({ version: 2, tasks: [
-    t("g", { kind: "group", title: "Iter 05", shape: "scout" }),
-    t("c1", { parent: "g", title: "PR one", asks: [{ id: "a1", text: "pick one", since: "2026-10-24T11:00:00Z" }] }),
-    t("c2", { parent: "g", title: "PR two" }),
-    t("solo"),
-  ] }));
-  writeFileSync(join(root, "state", "fleet-archive.jsonl"), JSON.stringify({ id: "old", parent: "g", state: "done", outcome: "done", project: "demo" }) + "\n");
-  const agents = join(root, "agents.json");
-  const rec = (id: string, task: string) => ({ id, task, status: "running", archived: false, createdAt: "2026-10-24T10:00:00Z", lastActivityAt: new Date().toISOString(), pending: 0 });
-  // c1's crew is gone, so its open ask is what the captain owes (a running crew would outrank the ask: see the last check below)
-  writeFileSync(agents, JSON.stringify([rec("ag-2", "c2"), rec("ag-3", "solo")]));
-  const env = { PASEO_HOME: root, STAGE_AGENTS_JSON: agents, AGENT_CANVAS_URL: "off", STAGE_SNAPSHOT_WAIT_MS: "0" };
-  const g = JSON.parse((await run(["rollup", root, "g"], env)).out);
-  assert.equal(g.group, "you");
-  assert.equal(g.stage, "Needs you");
-  assert.equal(g.total, 3);
-  assert.equal(g.done, 1);
-  assert.deepEqual(g.children.map((c: any) => [c.id, c.group]), [["c1", "you"], ["c2", "running"]]);
-  const st = JSON.parse((await run(["stage", root, "g"], env)).out);
-  assert.equal(st.group, "you");
-  assert.equal(st.kind, "group");
-  assert.deepEqual(st.flags, []);
-  const solo = JSON.parse((await run(["stage", root, "solo"], env)).out);
-  assert.equal(solo.group, "running");
-  assert.equal(solo.parent, undefined);
-  const md = (await run(["rollup", root, "g", "--markdown"], env)).out;
-  assert.match(md, /\*\*Iter 05\*\* · Needs you/);
-  assert.match(md, /1 of 3 done/);
-  assert.match(md, /\| PR one \| Needs you \|/);
-  assert.match(md, /\| old \| Done \|/);
-  assert.notEqual((await run(["rollup", root, "solo"], env)).code, 0);
-  // the stage rule that a running crew outranks its open ask applies to the leaf, so the group follows the leaf: Running, with
-  // the ask still noted on the leaf (the roll-up never invents a Needs you the leaf's own stage does not have)
-  writeFileSync(agents, JSON.stringify([rec("ag-1", "c1"), rec("ag-2", "c2"), rec("ag-3", "solo")]));
-  const run1 = JSON.parse((await run(["rollup", root, "g"], env)).out);
-  assert.equal(run1.group, "running");
-  assert.deepEqual(run1.children.map((c: any) => [c.id, c.group]), [["c1", "running"], ["c2", "running"]]);
 });

@@ -58,7 +58,7 @@ export default function contribute(server: PluginServerContext) {
   const num = (v: string | undefined) => (v && Number(v) > 0 ? Number(v) : undefined);
   const enforcer = new Enforcer({
     ports, root: () => deck.root(), snapshot: () => deck.snapshot(), log,
-    settleMs: num(process.env.FM_ENFORCER_SETTLE_MS), gapMs: num(process.env.FM_ENFORCER_GAP_MS), syncMs: num(process.env.FM_ENFORCER_SYNC_MS),
+    settleMs: num(process.env.FM_ENFORCER_SETTLE_MS), gapMs: num(process.env.FM_ENFORCER_GAP_MS),
     onChange: (crews, stalled) => deck.setEnforcement(crews, stalled),
   });
   deck.onStages((snap) => enforcer.onStages(snap));

@@ -46,7 +46,7 @@ test("attention keys: a stage change is news, step churn and agent flicker are n
 
 test("attention keys: a new ask, a reply and an edited card are news; needsYou counts the Needs-you group", () => {
   const base = keysFor([T("active")]);
-  const asked = keysFor([T("active", { asks: [{ id: "a1", text: "which?", options: ["x", "y"], since: "2026-10-25T09:30:00Z" }] })], view(["one"], "idle"));
+  const asked = keysFor([T("active", { asks: [{ id: "a1", text: "which?", options: ["x", "y"], since: "2026-10-25T09:30:00Z" }] })]);
   assert.notEqual(asked.keys["t-a"], base.keys["t-a"], "an open ask");
   assert.equal(asked.needsYou, 1);
   assert.equal(base.needsYou, 0);

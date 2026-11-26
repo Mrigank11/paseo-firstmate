@@ -325,7 +325,7 @@ const SNAP = `<!doctype html><html lang="en"><head><style>
 <div class="cv-snap acv"><div class="acv"><article class="canvas"><div class="sheet"><div class="statusline"><div class="l1">Done</div></div><div class="trow dimmable"><span class="title">T</span></div><div class="sheet dimmable"><p class="lede">CREW CANVAS</p></div></div></article></div></div>
 </body></html>
 `;
-function askCard(files: Record<string, string>, ask: object, lab: any = { t1: [{ ...labeled.t1[0], status: "idle" }] }, canvas?: CanvasData, ags: Record<string, any> = { "ag-1": agent }) {
+function askCard(files: Record<string, string>, ask: object, lab: any = labeled, canvas?: CanvasData, ags: Record<string, any> = { "ag-1": agent }) {
   project([{ ...T, asks: [{ id: "a1", text: "Merge?", since: "2026-10-24T11:00:00Z", options: ["Merge", "Hold"], context: "tasks/t1/asks/1.md", ...ask }] }]);
   const dir = join(lastRoot, "state", "tasks", "t1");
   mkdirSync(join(dir, "asks"), { recursive: true });
@@ -337,9 +337,9 @@ function askCard(files: Record<string, string>, ask: object, lab: any = { t1: [{
 }
 
 test("Needs you with a live canvas: the context folds, a note stays open under 'First mate adds'", () => {
-  const full = askCard({}, {}, undefined, data());
+  const full = askCard({}, {}, labeled, data());
   assert.match(full, /<details class="actx" id="x-t1-a1"><summary>Context<\/summary>/, "folded, not open");
-  const note = askCard({}, { note: true }, undefined, data());
+  const note = askCard({}, { note: true }, labeled, data());
   assert.match(note, /<details class="actx note" id="x-t1-a1" open><summary>First mate adds<\/summary><div><p>CONTEXT BODY/);
 });
 

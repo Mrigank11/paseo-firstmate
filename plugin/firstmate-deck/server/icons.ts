@@ -12,7 +12,6 @@ export const ICON = {
   panelClose: '<rect width="18" height="18" x="3" y="3" rx="2"/><path d="M9 3v18"/><path d="m16 15-3-3 3-3"/>',
   down: '<path d="m6 9 6 6 6-6"/>',
   focus: '<circle cx="12" cy="12" r="3"/><path d="M3 7V5a2 2 0 0 1 2-2h2"/><path d="M17 3h2a2 2 0 0 1 2 2v2"/><path d="M21 17v2a2 2 0 0 1-2 2h-2"/><path d="M7 21H5a2 2 0 0 1-2-2v-2"/>',
-  tree: '<path d="M3 5h6"/><path d="M3 12h6"/><path d="M3 19h6"/><path d="M9 5v14"/><path d="M9 12h12"/><path d="M13 5h8"/><path d="M13 19h8"/>', // tree-like rows
   more: '<path d="m7 6 5 5 5-5"/><path d="m7 13 5 5 5-5"/>', // chevrons-down
 } as const;
 

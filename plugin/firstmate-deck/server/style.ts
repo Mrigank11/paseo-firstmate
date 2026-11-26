@@ -97,40 +97,6 @@ pre{overflow-x:auto;background:#fff;border:1px solid var(--line);border-radius:8
 /* task navigator (nav-script.ts): a sidebar that folds to a 48 px spine of stage icons; a bar and a drop-down sheet on phones */
 .tn,.tn-bar,.tn-fly,.tn-sheet,.tn-back{display:none}
 .tn-ic{width:16px;height:16px;flex:none;display:block;fill:none;stroke:currentColor;stroke-width:1.75;stroke-linecap:round;stroke-linejoin:round}
-/* task tree: breadcrumbs, group cards, the tree section of the navigator, zoom */
-.crumb{font-size:12px;color:var(--mut);margin:0 0 2px}.crumb a{color:var(--mut)}.crumb .sep{color:#b8b2a3}
-/* a group is a one-line strip, never a card of chips and tables: fold, name, bar, done/total, asks, zoom */
-.gcard{background:var(--soft);border:1px solid var(--line);border-radius:10px;padding:6px 10px;margin:0 0 6px}
-.gcard.s-you{border-color:#f4c79d}.gcard .crumb{margin:0 0 1px}
-.gs{display:flex;align-items:center;gap:10px;min-height:30px;flex-wrap:wrap}
-.gsn{font-weight:650;min-width:0;overflow-wrap:anywhere}
-.gbar{flex:0 1 160px;min-width:60px;height:5px;border-radius:3px;background:var(--line);overflow:hidden}.gbar i{display:block;height:100%;background:var(--ok)}
-.gsc{font-size:13px;color:var(--mut);font-variant-numeric:tabular-nums;white-space:nowrap}
-.gask{font-size:12.5px;font-weight:600;color:var(--you);white-space:nowrap}
-.gs .gz{margin-left:auto}.gs .mate{font-size:12.5px;color:var(--mut)}
-.gcard.gfold .gbar i{opacity:.55}
-.gz{font:inherit;font-size:12.5px;border:1px solid var(--line);background:var(--bg);border-radius:6px;padding:2px 9px;cursor:pointer;color:var(--fg)}.gz:hover{background:var(--soft)}
-.gnote{margin-top:6px}
-/* a run of one group's tasks inside a lane: a slim header with the count; Parked and Done start folded */
-.gh{display:flex;align-items:center;gap:10px;margin:14px 0 6px;padding:0 0 4px;border-bottom:1px solid var(--line);font-size:13px;color:var(--mut)}
-.gh .ghb{all:unset;box-sizing:border-box;display:inline-flex;align-items:center;gap:6px;cursor:pointer;font-weight:600;color:var(--fg);min-height:24px;border-radius:6px}
-.gh .ghb:focus-visible{outline:2px solid var(--run);outline-offset:2px}
-.gh .ghb svg{width:14px;height:14px;fill:none;stroke:currentColor;stroke-width:1.75;stroke-linecap:round;stroke-linejoin:round;color:var(--mut);transition:transform .15s cubic-bezier(.2,.8,.2,1)}
-.gh.gfold .ghb svg{transform:rotate(-90deg)}
-.gh .gn{font-variant-numeric:tabular-nums;padding:0 7px;border-radius:999px;background:var(--soft);border:1px solid var(--line);font-size:12px;line-height:18px}
-.gh .gz{margin-left:auto;font-size:12px;padding:1px 8px}
-/* tree: neutral names, one hairline guide per level; stage shows only where it asks for you (orange text + dot) */
-.t-tree{--sc:var(--fg)}.tn-st .tn-g{position:relative}.tn-st .tn-g>ul{margin-left:15px;border-left:1px solid var(--line)}
-.tn-g>.tn-a{padding-right:62px;font-weight:600}.tn-g>.tn-a .tn-gc,.tn-g>.tn-a .tn-ask{position:absolute;top:50%;transform:translateY(-50%);line-height:1}
-.tn-gc{right:8px;font-size:11.5px;font-weight:500;color:var(--mut);font-variant-numeric:tabular-nums}
-.tn-ask{right:38px;min-width:16px;padding:2px 5px;text-align:center;font-size:11px;font-weight:600;border-radius:999px;background:var(--you-bg,#fde6cf);color:var(--you)}
-
-.tn-ug{display:block;padding:0 8px;line-height:var(--rh);font-size:12px;color:var(--mut)}
-.gcard.gfold .gf svg{transform:rotate(-90deg)}
-.gf{display:inline-flex;align-items:center;gap:4px;font:inherit;font-size:12.5px;border:1px solid var(--line);background:var(--bg);border-radius:6px;padding:2px 9px 2px 6px;cursor:pointer;color:var(--fg)}.gf:hover{background:var(--soft)}
-.gf svg{width:13px;height:13px;fill:none;stroke:currentColor;stroke-width:1.75;stroke-linecap:round;stroke-linejoin:round;transition:transform .15s cubic-bezier(.2,.8,.2,1)}
-@media (prefers-reduced-motion:reduce){.gh .ghb svg,.gf svg{transition:none}}
-.tn-zbar{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin:12px 0;padding:8px 12px;border:1px solid var(--line);border-radius:8px;background:var(--soft);font-size:13px}.tn-zbar[hidden]{display:none}
 .tn-st,.tn-bd,.tn-chip{--sc:var(--mut)}
 .t-you{--sc:var(--you)}.t-fm,.t-running{--sc:var(--run)}.t-blocked{--sc:#b91c1c}.t-next,.t-parked{--sc:var(--park)}.t-done{--sc:var(--ok)}
 .tn-st{margin:0 0 8px;--rh:28px;--ind:32px}.tn-st ul{list-style:none;margin:0;padding:0}.tn-st li{margin:0}

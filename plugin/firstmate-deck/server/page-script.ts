@@ -24,21 +24,9 @@ export function pageScript(project: string, liveFile: string, tickSeconds: numbe
   function restore(root){root.querySelectorAll("details[id]").forEach(function(d){if(d.id in S)d.open=!!S[d.id]})}
   document.addEventListener("toggle",function(e){var d=e.target;if(d&&d.id){S[d.id]=d.open?1:0;save()}},true);
   // ---- read marks: a done card is read when R["t-<task>"] equals the card's hash (data-h); editing the card makes it unread again
-  // a Done box also holds the slim group headers (render.ts clusterHead); they are rebuilt around whatever cards a box now has
-  var GH_ICON='<svg class="tn-ic" viewBox="0 0 24 24" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>';
-  function heads(box,list){var cur="";list.forEach(function(t,i){var g=t.getAttribute("data-gp");
-    if(g&&g!==cur){var n=1;while(i+n<list.length&&list[i+n].getAttribute("data-gp")===g)n++;
-      var h=document.createElement("div");h.className="gh";h.setAttribute("data-gh",g);h.setAttribute("data-quiet","1");h.setAttribute("data-lavish-action","");
-      h.setAttribute("data-in",(t.getAttribute("data-in")||"").split(" ").slice(0,-1).join(" "));
-      var b=document.createElement("button");b.type="button";b.className="ghb";b.innerHTML=GH_ICON;var sp=document.createElement("span");sp.className="ghn";sp.textContent=t.getAttribute("data-gl")||g;b.appendChild(sp);h.appendChild(b);
-      var c=document.createElement("span");c.className="gn";c.textContent=n;h.appendChild(c);
-      var z=document.createElement("button");z.type="button";z.className="gz";z.setAttribute("data-g",g);z.textContent="Zoom";h.appendChild(z);box.insertBefore(h,t)}
-    cur=g||""})}
-  function place(box,list){[].slice.call(box.querySelectorAll(":scope>.gh")).forEach(function(h){h.remove()});
-    var kids=[].slice.call(box.children),same=kids.length===list.length;
+  function place(box,list){var kids=[].slice.call(box.children),same=kids.length===list.length;
     for(var i=0;same&&i<list.length;i++)if(kids[i]!==list[i])same=false;
-    if(!same)list.forEach(function(t){box.appendChild(t)});
-    heads(box,list)}
+    if(!same)list.forEach(function(t){box.appendChild(t)})}
   function arrange(root){root=root||document;var g=function(i){return root===document?document.getElementById(i):root.querySelector("#"+i)},u=g("g-doneu"),d=g("g-done");if(!u||!d)return;
     // cards the server already placed in Done are read (it applied the stored marks): adopt that, so an unreachable endpoint does not undo it
     [].slice.call(d.querySelectorAll(".task[data-h]")).forEach(function(t){if(!(t.id in R))R[t.id]=t.getAttribute("data-h")});

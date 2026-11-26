@@ -21,19 +21,3 @@ export function projectClaimedId(root: string, project: string): string | null {
   if (!/^[A-Za-z0-9][\w.-]*$/.test(project)) return null;
   return agentIdIn(join(root, "state", "projects", project, "claim.json"));
 }
-
-/** The second mate `bin/fleet claim-node` recorded in state/tasks/<node>/claim.json: the agent that owns that group's subtree. */
-export function nodeClaimedId(root: string, node: string): string | null {
-  if (!/^[A-Za-z0-9][\w.-]*$/.test(node)) return null;
-  return agentIdIn(join(root, "state", "tasks", node, "claim.json"));
-}
-
-/** Every live task as {id, parent, kind}: the tree the wake routing walks. Missing or unreadable registry = no tree (everything routes as before). */
-export function liveNodes(root: string): { id: string; parent?: string | null; kind?: string | null }[] {
-  try {
-    const tasks = JSON.parse(readFileSync(join(root, "state", "fleet.json"), "utf8"))?.tasks;
-    return Array.isArray(tasks) ? tasks.filter((t) => t && typeof t.id === "string").map((t) => ({ id: t.id, parent: t.parent ?? null, kind: t.kind ?? null })) : [];
-  } catch {
-    return [];
-  }
-}
