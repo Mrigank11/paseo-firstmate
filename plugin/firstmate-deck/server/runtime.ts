@@ -620,7 +620,7 @@ export class Deck {
         id: t.id, project: t.project ?? null, ...(t.parent ? { parent: t.parent } : {}), ...(t.kind ? { kind: t.kind } : {}),
         state: t.state, stage: st.stage, group: st.group, agentId: st.agentId, flags: st.flags,
         owner: st.owner, reason: st.reason, clears: st.clears, fp: st.fp, owedSince,
-        ...(sum ? { canvas: { verdict: sum.verdict.label, bluf: sum.bluf.replace(/\s+/g, " ").slice(0, 80), asks: sum.openAsks.length } } : {}),
+        ...(sum ? { canvas: { verdict: sum.verdict.label, bluf: sum.bluf.replace(/\s+/g, " ").slice(0, 80), asks: sum.openAsks.length }, ...(sum.updatedAt ? { canvasAt: sum.updatedAt } : {}) } : {}),
       };
     });
     for (const id of [...this.owed.keys()]) if (!live.tasks.some((t) => t.id === id)) this.owed.delete(id);

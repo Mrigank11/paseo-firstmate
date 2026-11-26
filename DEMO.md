@@ -17,6 +17,8 @@ Everything here runs on a separate Paseo daemon (home `.isolated/fm-task-tree-bu
 
 7. **Fold.** The chevron beside a group in the tree, or Fold/Unfold on its card, hides its children (tree) or its bar, chips and tables (card). The group keeps its counts and an orange "N need you" marker; the asks stay in Needs you. Reload: the fold holds.
 
+8. **Canvas-stale nudge.** After the roll-up of Iter 05 changed (PR 3 parked) and the second mate's canvas did not follow, it received `## Group changed · iter-05` (its Paseo timeline). One reminder per change, never an escalation.
+
 ## Commands (demo state only)
 
 ```

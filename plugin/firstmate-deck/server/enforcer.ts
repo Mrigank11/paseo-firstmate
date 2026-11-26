@@ -25,6 +25,8 @@ import { writeAtomic } from "./store.ts";
 export const SETTLE_MS = 60_000;
 export const GAP_MS = 30 * 60_000;
 export const MAX_NUDGES = 2;
+/** How long a group may change before its second mate's canvas is called stale. */
+export const CANVAS_SYNC_MS = 5 * 60_000;
 
 type Entry = {
   fp: string;
@@ -38,7 +40,9 @@ type Entry = {
   /** How far up the owner chain the item has been escalated (0 = the nearest owner). */
   level?: number;
 };
-type Store = { items: Record<string, Entry>; crews: Record<string, number> };
+/** A group the second mate has not caught up with: the roll-up changed at `since`; `nudged` once it was reminded for that change. */
+type Sync = { fp: string; since: number; nudged: boolean };
+type Store = { items: Record<string, Entry>; crews: Record<string, number>; sync?: Record<string, Sync> };
 
 export type EnforcerOptions = {
   ports: PortSelector;
@@ -51,6 +55,7 @@ export type EnforcerOptions = {
   now?: () => number;
   settleMs?: number;
   gapMs?: number;
+  syncMs?: number;
 };
 
 /** `enforcer: off` in state/decisions.md switches the enforcer off. Anything else is on. */
@@ -101,6 +106,7 @@ export class Enforcer {
   private now(): number { return (this.o.now ?? Date.now)(); }
   private settle(): number { return this.o.settleMs ?? SETTLE_MS; }
   private gap(): number { return this.o.gapMs ?? GAP_MS; }
+  private sync(): number { return this.o.syncMs ?? CANVAS_SYNC_MS; }
   private file(): string { return join(this.o.root(), "state", "enforcer.json"); }
 
   stop(): void {
@@ -116,7 +122,7 @@ export class Enforcer {
     let s: Store = { items: {}, crews: {} };
     try {
       const j = JSON.parse(readFileSync(this.file(), "utf8"));
-      if (j && typeof j === "object") s = { items: j.items ?? {}, crews: j.crews ?? {} };
+      if (j && typeof j === "object") s = { items: j.items ?? {}, crews: j.crews ?? {}, sync: j.sync ?? {} };
     } catch { /* first run */ }
     return (this.store = s);
   }
@@ -166,7 +172,16 @@ export class Enforcer {
         changed = true;
       }
     }
-    if (changed) { this.save(); this.publish(); }
+    // a group that a second mate owns: remember when its roll-up last changed (the canvas-stale nudge compares the canvas with this)
+    const sy = (s.sync ??= {});
+    let syncChanged = false;
+    for (const id of Object.keys(sy)) if (!snap.nodeOwners?.[id] || !byId.has(id)) { delete sy[id]; syncChanged = true; }
+    for (const g of snap.rows) {
+      if (g.kind !== "group" || !snap.nodeOwners?.[g.id]) continue;
+      if (sy[g.id]?.fp !== g.fp) { sy[g.id] = { fp: g.fp, since: this.now(), nudged: false }; syncChanged = true; }
+    }
+    if (changed || syncChanged) this.save();
+    if (changed) this.publish();
     for (const owner of allOwners(snap)) this.arm(owner);
     for (const r of snap.rows) if (r.owner === "crew" && r.stage.startsWith("Crew stopped") && r.agentId) this.arm(r.agentId);
   }
@@ -256,6 +271,7 @@ export class Enforcer {
     });
     if (changed) { this.save(); this.publish(); }
     if (escalatedTo) this.arm(escalatedTo);
+    await this.checkCanvas(owner, snap, s);
     if (!due.length) return;
     const text = this.digest(due, s);
     try {
@@ -270,6 +286,36 @@ export class Enforcer {
     }
     this.save();
     this.o.log(`enforcer: reminded ${owner.slice(0, 8)} about ${due.map((r) => r.id).join(", ")}`);
+  }
+
+  /**
+   * Canvas-stale nudge. A second mate's canvas is the group's page for the captain; the roll-up is computed by script, but the
+   * prose is the agent's. When a group's roll-up changed and, `syncMs` later, the owner's canvas is still older than the change,
+   * it is reminded once per change. Not an escalation: the page already shows the live roll-up, only the prose lags.
+   */
+  private async checkCanvas(owner: string, snap: Snapshot, s: Store): Promise<void> {
+    const sy = (s.sync ??= {});
+    const stale = snap.rows.filter((g) => {
+      const e = sy[g.id];
+      if (g.kind !== "group" || snap.nodeOwners?.[g.id] !== owner || !e || e.fp !== g.fp || e.nudged) return false;
+      if ((g.canvasAt ?? 0) >= e.since) { e.nudged = true; return false; } // it caught up on its own
+      return this.now() - e.since >= this.sync();
+    });
+    if (!stale.length) return;
+    const text = stale.map((g) => [
+      `## Group changed · ${g.id}`,
+      `The roll-up moved: ${g.stage}: ${g.reason}.`,
+      `Your canvas has not changed since. Update it so the captain reads the current state (BLUF first, then what moved), run \`bin/fleet group-card ${g.id}\`, then end your turn. This reminder is sent once per change.`,
+    ].join("\n")).join("\n\n");
+    try {
+      await this.o.ports.send(owner, text);
+    } catch (e) {
+      this.o.log(`enforcer: canvas reminder to ${owner.slice(0, 8)} failed: ${(e as Error).message}`);
+      return;
+    }
+    for (const g of stale) sy[g.id].nudged = true;
+    this.save();
+    this.o.log(`enforcer: canvas reminder to ${owner.slice(0, 8)} about ${stale.map((g) => g.id).join(", ")}`);
   }
 
   private digest(due: StageRow[], s: Store): string {

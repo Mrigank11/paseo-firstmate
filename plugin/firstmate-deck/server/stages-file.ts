@@ -27,6 +27,8 @@ export type StageRow = {
   kind?: string | null;
   rollup?: { counts: Record<string, number>; total: number; done: number; failed: boolean };
   canvas?: { verdict: string; bluf: string; asks: number };
+  /** When the agent's canvas last changed (ms epoch): a second mate's group canvas is "stale" when the group moved after this. */
+  canvasAt?: number;
   /** Where the row came from: the plugin's snapshot, or a local computation (no plugin, degraded). */
   source?: "plugin" | "local";
 };

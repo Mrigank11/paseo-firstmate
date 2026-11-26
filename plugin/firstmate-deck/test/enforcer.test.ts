@@ -221,7 +221,8 @@ test("tree: a second mate that ignores an item through both reminders escalates 
   s.advance(GAP_MS + 1);
   await s.enf.checkNow("sm");
   await s.enf.checkNow("sm", true); // second reminder ignored: up one level
-  assert.equal(s.world.sent.filter((m) => m.id === "sm").length, MAX_NUDGES);
+  const withYou = () => s.world.sent.filter((m) => m.id === "sm" && m.text.startsWith("## With you")).length; // (the canvas nudge is a separate message)
+  assert.equal(withYou(), MAX_NUDGES);
   assert.deepEqual(s.changes.at(-1)?.stalled ?? {}, {}, "not in front of the captain yet");
   await s.enf.checkNow("fm");
   assert.equal(s.toFm().length, 1, "the first mate now has it, with a fresh count");
@@ -231,7 +232,7 @@ test("tree: a second mate that ignores an item through both reminders escalates 
   await s.enf.checkNow("fm");
   await s.enf.checkNow("fm", true);
   assert.deepEqual(Object.keys(s.changes.at(-1)!.stalled), ["t1"]);
-  assert.equal(s.world.sent.filter((m) => m.id === "sm").length, MAX_NUDGES, "the second mate is not asked again");
+  assert.equal(withYou(), MAX_NUDGES, "the second mate is not asked again");
   s.enf.stop();
 });
 
@@ -240,5 +241,61 @@ test("tree: with the second mate gone the item belongs to the first mate at once
   s.feed([grp("g"), row("t1", { parent: "g" })]);
   await s.enf.checkNow("fm");
   assert.equal(s.toFm().length, 1);
+  s.enf.stop();
+});
+
+// ---- canvas-stale nudge: a second mate whose canvas lags behind its group's roll-up is reminded once per change ----
+function mateSetup(canvasAt?: number) {
+  const g = (fp: string, at = canvasAt): StageRow => ({ ...row("g", { kind: "group", stage: "Running", group: "running", owner: "crew", agentId: "sm", fp, reason: "1 running, 2 done" }), ...(at === undefined ? {} : { canvasAt: at }) });
+  const s = setup({ rows: [g("fp1")], nodeOwners: { g: "sm" } });
+  s.world.add({ id: "sm", status: "idle", labels: { "fm.task": "g", "fm.role": "secondmate" } });
+  return { ...s, g };
+}
+const toSm = (s: { world: FakeWorld }) => s.world.sent.filter((x) => x.id === "sm");
+
+test("canvas nudge: a group that moved and a canvas that did not get one reminder after the sync time, never two", async () => {
+  const s = mateSetup(Date.parse("2026-10-24T11:00:00Z"));
+  s.feed([s.g("fp1")]);
+  s.advance(60_000);
+  await s.enf.checkNow("sm");
+  assert.equal(toSm(s).length, 0, "too early");
+  s.advance(5 * 60_000);
+  await s.enf.checkNow("sm");
+  assert.equal(toSm(s).length, 1);
+  assert.match(toSm(s)[0].text, /^## Group changed · g\nThe roll-up moved: Running: 1 running, 2 done/);
+  assert.ok(toSm(s)[0].text.includes("bin/fleet group-card g"));
+  s.advance(60 * 60_000);
+  await s.enf.checkNow("sm");
+  assert.equal(toSm(s).length, 1, "once per change");
+  // the roll-up moves again: a new change, a new reminder
+  s.feed([s.g("fp2")]);
+  s.advance(6 * 60_000);
+  await s.enf.checkNow("sm");
+  assert.equal(toSm(s).length, 2);
+  s.enf.stop();
+});
+
+test("canvas nudge: no reminder when the canvas was updated after the change, or the mate is busy", async () => {
+  const s = mateSetup();
+  s.feed([s.g("fp1")]);
+  s.advance(6 * 60_000);
+  s.feed([s.g("fp1", Date.parse("2026-10-24T12:03:00Z"))]); // canvas touched after the change was seen
+  await s.enf.checkNow("sm");
+  assert.equal(toSm(s).length, 0);
+  const b = mateSetup();
+  b.world.add({ id: "sm", status: "running", labels: { "fm.task": "g" } });
+  b.feed([b.g("fp1")]);
+  b.advance(6 * 60_000);
+  await b.enf.checkNow("sm");
+  assert.equal(toSm(b).length, 0);
+  s.enf.stop(); b.enf.stop();
+});
+
+test("canvas nudge: a group without a second mate is never nudged, and the reminder is not an escalation", async () => {
+  const s = setup({ rows: [row("g", { kind: "group", group: "running", owner: "crew", fp: "x" })] });
+  s.feed([row("g", { kind: "group", group: "running", owner: "crew", fp: "x" })]);
+  s.advance(10 * 60_000);
+  await s.enf.checkNow("fm");
+  assert.equal(s.world.sent.length, 0);
   s.enf.stop();
 });
