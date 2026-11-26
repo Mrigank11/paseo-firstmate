@@ -1,6 +1,6 @@
 // The deck's daemon-side brain: watches the first mate's state, renders each project page, owns each page's
 // Lavish poll, and relays page comments to the first mate.
-import { existsSync, readdirSync, readFileSync, statSync, watch, type FSWatcher } from "node:fs";
+import { closeSync, existsSync, openSync, readSync, readdirSync, readFileSync, statSync, watch, type FSWatcher } from "node:fs";
 import { basename, join, relative } from "node:path";
 import { createHash } from "node:crypto";
 import { execFile, type ChildProcess } from "node:child_process";
@@ -16,7 +16,7 @@ import { NO_CLAIM_MESSAGE, NoFirstMateError, PortSelector, resolveFirstMate, sen
 import { Relay, newEntries, parseTarget, type AskLookup, type TargetInfo } from "./relay.ts";
 import type { Known } from "./target.ts";
 import { CanvasPort, type FmSummary } from "./canvas-port.ts";
-import { liveJs, liveVersionJs, liveVersionFileOf, renderProject, stageOf, stagesOf, type AgentView, type Banner } from "./render.ts";
+import { liveJs, liveVersionJs, liveVersionFileOf, pageSignature, renderProject, stageOf, stagesOf, type AgentView, type Banner } from "./render.ts";
 import { currentAgent, type LabeledAgent } from "./stage.ts";
 import { inputsMtimeMs, readSnapshot, writeSnapshot, type Snapshot, type StageRow } from "./stages-file.ts";
 import { ownerHops, ownerOf } from "./gate.ts";
@@ -136,8 +136,6 @@ export class Deck {
   private late = new Set<ReturnType<typeof setTimeout>>();
   private rendering = new Map<string, { again: boolean }>();
   private sigs = new Map<string, string>();
-  /** pageStamp of the page.html this deck last wrote, per project. */
-  private stamps = new Map<string, string>();
   private usedViews = new Map<string, string>();
   private agentProjects = new Map<string, Set<string>>();
   private pollers = new Map<string, PollerEntry>();
@@ -797,9 +795,15 @@ export class Deck {
     return [...new Set(ids)];
   }
 
-  /** Cheap identity of the page on disk (mtime + size); "" when it is missing. */
-  private pageStamp(target: string): string {
-    try { const st = statSync(target); return `${st.mtimeMs}:${st.size}`; } catch { return ""; }
+  /** The frame signature the page.html on disk was written with; "" when it is missing or not ours. */
+  private diskSignature(target: string): string {
+    let fd: number | undefined;
+    try {
+      fd = openSync(target, "r");
+      const buf = Buffer.alloc(96);
+      const n = readSync(fd, buf, 0, 96, 0);
+      return pageSignature(buf.toString("utf8", 0, n));
+    } catch { return ""; } finally { if (fd !== undefined) try { closeSync(fd); } catch { /* ignore */ } }
   }
 
   private writePage(project: string, model: ProjectModel): void {
@@ -831,13 +835,15 @@ export class Deck {
     const p2 = (n: number) => String(n).padStart(2, "0");
     const ts = `${p2(now.getHours())}:${p2(now.getMinutes())}:${p2(now.getSeconds())}`;
     let rewrote = false;
-    // also rewrite when the file is not the one we wrote (`bin/page start` re-renders it without the canvas stylesheet)
-    if (r.signature !== this.sigs.get(project) || this.pageStamp(target) !== this.stamps.get(project)) {
+    // Lavish reloads the page whenever page.html is written, so write only when the frame really changed. What is on disk
+    // decides (the signature rides in the file), not what this process remembers: a restarted plugin, which remembers
+    // nothing, must leave an unchanged page alone. A file that is not ours (`bin/page start`, a hand edit) carries no
+    // signature and is corrected.
+    if (r.signature !== this.diskSignature(target)) {
       writeAtomic(target, r.page);
-      this.sigs.set(project, r.signature);
-      this.stamps.set(project, this.pageStamp(target));
       rewrote = true;
     }
+    this.sigs.set(project, r.signature);
     // The page polls the tiny version file each second and fetches the full payload only when its content hash moved, so
     // the payload is rewritten only then (the clock stamp is not part of the hash: it shows the last real change).
     const hash = createHash("sha1").update(r.live).digest("hex").slice(0, 16);

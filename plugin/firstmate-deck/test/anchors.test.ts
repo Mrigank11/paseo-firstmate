@@ -83,7 +83,7 @@ test("the stamp is also what the page script applies to a payload (not only the 
   const liveEl: any = { ...live, children: live.children, set innerHTML(h: string) { /* fallback path */ } };
   const ctx = vm.createContext({
     document: { getElementById: (i: string) => (i === "live" ? liveEl : null), addEventListener() {}, querySelectorAll: () => [], createElement: () => ({ remove() {} }), head: { appendChild() {} }, activeElement: null },
-    window: { name: "", scrollY: 0, scrollTo() {} }, location: { hash: "" }, localStorage: undefined, Date, JSON, Object, Math, Array, setInterval() {},
+    window: { name: "", scrollY: 0, scrollTo() {}, scrollBy() {}, addEventListener() {} }, location: { hash: "" }, localStorage: undefined, Date, JSON, Object, Math, Array, setInterval() {},
   });
   vm.runInContext(pageScript("p", "page.live.js", 1), ctx);
   assert.match(pageScript("p", "x", 1), /anchorIds\(nx\)/, "the morph path stamps the incoming block before the morph");

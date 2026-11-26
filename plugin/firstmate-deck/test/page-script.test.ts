@@ -28,7 +28,7 @@ function boot(opts: { focusIn?: () => string | null } = {}) {
     createElement: () => ({ remove() {} }),
     head: { appendChild() {} },
   };
-  const win: any = { name: "", scrollY: 0, scrollTo() {} };
+  const win: any = { name: "", scrollY: 0, scrollTo() {}, scrollBy() {}, addEventListener() {} };
   const DateShim = { now: () => clock, parse: Date.parse };
   const ctx = vm.createContext({
     document: doc, window: win, location: { hash: "" }, localStorage: undefined, Date: DateShim, JSON, Object, Math, Array,
@@ -151,7 +151,7 @@ test("every live swap asks the task navigator to rebuild", () => {
 
 test("a page preference (the navigator's fold) is kept in the page state and survives a reload without localStorage", () => {
   const run = (name: string) => {
-    const win: any = { name, scrollY: 0, scrollTo() {} };
+    const win: any = { name, scrollY: 0, scrollTo() {}, scrollBy() {}, addEventListener() {} };
     const doc: any = { addEventListener() {}, getElementById: () => null, querySelectorAll: () => [], createElement: () => ({ remove() {} }), head: { appendChild() {} } };
     vm.runInContext(pageScript("p", "page.live.js", 1), vm.createContext({ document: doc, window: win, location: { hash: "" }, localStorage: undefined, Date, JSON, Object, Math, Array, setInterval: () => 0 }));
     return win;
@@ -161,4 +161,13 @@ test("a page preference (the navigator's fold) is kept in the page state and sur
   a.__fdPref("tn-exp", 0);
   const b = run(a.name); // Lavish reloads the iframe: same browsing context, same window.name
   assert.equal(b.__fdPref("tn-exp"), 0);
+});
+
+test("the captain's place: updates hold the card in view, a reload restores it, and the place is never synced to other browsers", () => {
+  const js = pageScript("p", "page.live.js", 1, "http://marks.test/m");
+  assert.match(js, /function hold\(a,y\)\{if\(y<5\)/, "at the top of the page the top stays the top");
+  assert.match(js, /if\(placed\)hold\(an,y\);else place1\(\)/, "both swap paths hold by card, not by raw pixel offset");
+  assert.ok(!/window\.scrollTo\(0,y\)\}?;/.test(js.replace(/function hold[^\n]*\n[^\n]*\n[^\n]*\n/, "")), "no unconditional restore of the old pixel offset");
+  assert.match(js, /k!=="_r"&&k!=="_v"/, "S._v (this tab's place) is left out of what the marks endpoint stores");
+  assert.match(js, /window\.__fdView=/);
 });

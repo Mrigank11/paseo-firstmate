@@ -116,7 +116,7 @@ function boot(lavish: any | null, data: { n: number; keys: object; seen?: object
     createElement: () => ({ remove() {} }),
     head: { appendChild: (e: any) => styles.set(e.id, e) },
   };
-  const win: any = { name: "", scrollY: 0, scrollTo() {}, lavish };
+  const win: any = { name: "", scrollY: 0, scrollTo() {}, scrollBy() {}, addEventListener() {}, lavish };
   const ctx = vm.createContext({
     document: doc, window: win, location: { hash: "" }, localStorage: undefined, JSON, Object, Math, Array, encodeURIComponent, parseInt,
     Date: class extends Date { static now() { return clock; } }, Promise,
