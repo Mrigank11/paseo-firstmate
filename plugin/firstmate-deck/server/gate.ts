@@ -9,7 +9,8 @@
 import { appendFileSync, mkdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { PortSelector } from "./paseo-port.ts";
-import { projectClaimedId, claimedId } from "./claims.ts";
+import { projectClaimedId, claimedId, nodeClaimedId, liveNodes } from "./claims.ts";
+import { ownerChain } from "./tree.ts";
 
 export type Verdict = "DONE" | "BLOCKED" | "ERROR" | "CANCELED" | "CLOSED" | "NARRATION";
 export type GateResult = "woke" | "shadow" | "deferred" | "failed" | "narration" | "near-miss" | "no-target" | "bounced";
@@ -74,20 +75,28 @@ export function messageVerdict(items: readonly GateItem[]): { verdict: "DONE" | 
 }
 
 /** The first mate that owns a project: its own claim, else the checkout-wide claim, and only a live (not archived) agent counts. */
-export async function ownerOf(ports: PortSelector, root: string, project: string | undefined): Promise<string | null> {
+export async function ownerOf(ports: PortSelector, root: string, project: string | undefined, task?: string, from?: string): Promise<string | null> {
+  return (await ownerHops(ports, root, project, task, from))[0]?.id ?? null;
+}
+
+/**
+ * Everyone who may handle a task's wakes, nearest first: the live second mate of the task's own node and of each group above it, then
+ * the project's first mate and the checkout's. `from` (the agent the wake is about) is left out, so a second mate's own finish goes
+ * up to its parent owner instead of back to itself. A task with no groups above it has exactly the project/checkout owners, as before.
+ */
+export async function ownerHops(ports: PortSelector, root: string, project: string | undefined, task?: string, from?: string): Promise<{ id: string; via: string }[]> {
   const live = await ports.current().listAgents();
-  for (const c of [project ? projectClaimedId(root, project) : null, claimedId(root)]) {
-    if (c && live.some((a) => a.id === c && !a.archived)) return c;
-  }
-  return null;
+  const alive = (id: string | null): string | null => (id && id !== from && live.some((a) => a.id === id && !a.archived) ? id : null);
+  const nodes = task ? liveNodes(root) : [];
+  return ownerChain(nodes, task ?? "", (n) => alive(nodeClaimedId(root, n)), [alive(project ? projectClaimedId(root, project) : null), alive(claimedId(root))]);
 }
 
 /**
  * Who a crew's finish is sent to: the project's owner (claim), else the agent's live parent. Paseo's parent label is only a hint:
  * a crew dispatched by a first mate that has since been replaced still reports to the current owner.
  */
-export async function wakeTarget(ports: PortSelector, root: string, parentId: string | null, project: string | undefined): Promise<string | null> {
-  const owner = await ownerOf(ports, root, project);
+export async function wakeTarget(ports: PortSelector, root: string, parentId: string | null, project: string | undefined, task?: string, from?: string): Promise<string | null> {
+  const owner = await ownerOf(ports, root, project, task, from);
   if (owner) return owner;
   const live = await ports.current().listAgents();
   return parentId && live.some((a) => a.id === parentId && !a.archived) ? parentId : null;
@@ -322,7 +331,7 @@ export class Gate {
     let lastErr = "";
     for (let attempt = 1; attempt <= SEND_ATTEMPTS; attempt++) {
       try {
-        const target = await this.target(d.parentId, d.labels["fm.project"]);
+        const target = await this.target(d.parentId, d.labels["fm.project"], d.task, d.agentId);
         if (!target) { this.append({ ...rec, acted: false, result: "no-target", note: "no live parent and no first-mate claim" }); return; }
         await this.o.ports.send(target, message);
         this.append({ ...rec, acted: true, result: "woke", note: target });
@@ -335,8 +344,8 @@ export class Gate {
     this.append({ ...rec, acted: false, result: "failed", note: lastErr.slice(0, 200) });
   }
 
-  private target(parentId: string | null, project: string | undefined): Promise<string | null> {
-    return wakeTarget(this.o.ports, this.root(), parentId, project);
+  private target(parentId: string | null, project: string | undefined, task?: string, from?: string): Promise<string | null> {
+    return wakeTarget(this.o.ports, this.root(), parentId, project, task, from);
   }
 
   // ---------- startup sweep ----------

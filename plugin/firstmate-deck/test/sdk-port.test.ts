@@ -64,6 +64,11 @@ test("viewFromItems: step count, the last 8 humanized, and the final DONE/BLOCKE
   assert.equal(v.final, "DONE: shipped it");
   assert.equal(finalLine([assistant("BLOCKED: no creds"), assistant("DONE: later")]), "DONE: later");
   assert.equal(finalLine([assistant("not DONE: yet")]), undefined);
+  // a canvas answer delivered after the DONE: starts a new turn; until the crew hands back again there is no final
+  assert.equal(finalLine([assistant("DONE: archive built"), { type: "user_message", text: "## Canvas answer · t · ask q1: ship" } as TimelineItem, assistant("uploading, waiting on the monitor")]), undefined);
+  assert.equal(finalLine([assistant("DONE: old"), { type: "user_message", text: "x" } as TimelineItem, assistant("DONE: new")]), "DONE: new");
+  // a DONE: from before the crew's latest turn (a user message came after it) is stale
+  assert.equal(finalLine([assistant("DONE: old"), { type: "user_message", text: "follow-up" } as TimelineItem, assistant("working")]), undefined);
 });
 
 // ---------- SdkPort ----------

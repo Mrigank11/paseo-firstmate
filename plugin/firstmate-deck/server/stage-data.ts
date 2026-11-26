@@ -12,7 +12,8 @@ import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { activeSinceOf, computeStage, currentAgent, type Stage, type StageAgent } from "./stage.ts";
-import { loadAllLive, type Task } from "./state.ts";
+import { archivedChildren, loadAllLive, type Task } from "./state.ts";
+import { cardMarkdown, withRollups } from "./tree.ts";
 import { canvasInput } from "./canvas-view.ts";
 import type { FmSummary } from "./canvas-port.ts";
 import { freshSnapshot, type StageRow } from "./stages-file.ts";
@@ -103,7 +104,7 @@ export function rowOf(t: Task, recs: Rec[], now: Date, canvas: Record<string, Fm
   const sum = cur && !cur.archived ? canvas[cur.id] : undefined;
   const s = computeStage(t, mine, now, { finalKnown: false, canvas: canvasInput(sum, t.id, [], activeSinceOf(cur)) });
   return {
-    id: t.id, project: t.project ?? null, state: t.state, stage: s.stage, group: s.group, agentId: s.agentId, flags: s.flags,
+    id: t.id, project: t.project ?? null, ...(t.parent ? { parent: t.parent } : {}), ...(t.kind ? { kind: t.kind } : {}), state: t.state, stage: s.stage, group: s.group, agentId: s.agentId, flags: s.flags,
     owner: s.owner, reason: s.reason, clears: s.clears, fp: s.fp, source: "local",
     ...(s.stage === "Idle" ? { note: "final line unknown on CLI" } : {}),
     ...(sum ? { canvas: { verdict: sum.verdict.label, bluf: sum.bluf.replace(/\s+/g, " ").slice(0, 80), asks: sum.openAsks.length } } : {}),
@@ -146,7 +147,19 @@ export function stages(root: string, project?: string): Row[] {
   const recs = labelledAgents(tasks.map((t) => t.id));
   const canvas = canvasSummaries(root, recs.filter((r) => !r.archived).map((r) => r.id));
   const now = new Date();
-  return tasks.map((t) => rowOf(t, recs, now, canvas));
+  // a group's stage rolls up from its leaves, so the leaves are read even when only one project was asked for
+  return withRollups(tasks.map((t) => rowOf(t, recs, now, canvas)), archivedChildren(root, new Set(tasks.filter((t) => t.kind === "group").map((t) => t.id))));
+}
+
+/** The rollup of one group (stage-cli `rollup`): its row, each child's row, and the card text rebuilt from them. */
+export function rollupOf(root: string, id: string): { row: Row; children: Row[]; markdown: string } | null {
+  const rows = stages(root);
+  const row = rows.find((r) => r.id === id);
+  if (!row || row.kind !== "group") return null;
+  const tasks = loadAllLive(root);
+  const name = (x: string) => { const t = tasks.find((y) => y.id === x); return (t?.title || t?.intent || x).replace(/\s+/g, " "); };
+  const direct = rows.filter((r) => r.parent === id);
+  return { row, children: direct, markdown: cardMarkdown(row, rows, name, archivedChildren(root, new Set(tasks.filter((t) => t.kind === "group").map((t) => t.id)))) };
 }
 
 /** One live task's row: the snapshot's, else local. Null when the task is not live. */
