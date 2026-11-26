@@ -46,6 +46,8 @@ export type Stage = {
   clears: string;
   /** Identity of (stage, reason, agent): the enforcer counts its nudges per fingerprint, so a changed situation starts a new count. */
   fp: string;
+  /** A group (task tree): its leaves' counts. The stage above is then the roll-up (tree.ts withRollups), not an agent's. */
+  rollup?: { counts: Record<string, number>; total: number; done: number; failed: boolean };
 };
 
 /** The parts of a task the engine reads (state.ts `Task` fits; so does the CLI's). */

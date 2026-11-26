@@ -4,9 +4,10 @@
 //   stage-cli.ts drift <root> [project]                  "<n>" drift flags across live tasks; each flagged task on stderr
 //   stage-cli.ts agents <root> <taskId>                  JSON array of the ids of every agent labelled fm.task=<taskId>, oldest first
 //   stage-cli.ts canvas-off <root> <taskId>              "off" when the task has no crew agent or its newest one has canvas=off; else nothing
+//   stage-cli.ts rollup <root> <groupId> [--markdown]    a group's rolled-up stage, counts and each child's stage (JSON), or its card text
 //   stage-cli.ts task-of <root> <agentId>                the fm.task label of that agent ("" when it has none)
 import { currentAgent } from "./stage.ts";
-import { archiveRow, labelledAgents, stageRow, stages, table } from "./stage-data.ts";
+import { archiveRow, labelledAgents, rollupOf, stageRow, stages, table } from "./stage-data.ts";
 
 function die(msg: string): never {
   console.error(`stage: ${msg}`);
@@ -55,6 +56,16 @@ switch (cmd) {
     const cur = currentAgent(mine.map((r) => ({ ...r, id: r.id })));
     const cv = cur ? mine.find((r) => r.id === cur.id)?.labels?.canvas : undefined;
     if (!cur || cv === "off") console.log("off");
+    break;
+  }
+  case "rollup": {
+    const id = rest[0];
+    if (!id) die("rollup needs a group id");
+    const r = rollupOf(root, id);
+    if (!r) die(`'${id}' is not a live group (kind=group)`);
+    if (rest.includes("--markdown")) { console.log(r.markdown); break; }
+    const { row } = r;
+    console.log(JSON.stringify({ id, stage: row.stage, group: row.group, reason: row.reason, ...row.rollup, owner: row.owner, children: r.children.map((c) => ({ id: c.id, kind: c.kind ?? "task", stage: c.stage, group: c.group, ...(c.rollup ? { total: c.rollup.total, done: c.rollup.done } : {}) })) }));
     break;
   }
   case "task-of": {

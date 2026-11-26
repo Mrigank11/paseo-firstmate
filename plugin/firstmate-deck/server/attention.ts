@@ -29,6 +29,6 @@ export function attentionOf(model: ProjectModel, tasks: readonly Task[], stages:
   const keys: Record<string, string> = {};
   for (const t of tasks) keys[`t-${t.id}`] = taskKey(t, stages.get(t.id), model.comments, canvas);
   keys.page = short([repliesOn(model.comments, "page"), model.sections.map((s) => [s.name, createHash("sha1").update(s.content).digest("hex").slice(0, 8)]), model.comments.filter((c) => c.answered && model.sections.some((s) => s.name === c.target)).length]);
-  const needsYou = model.tasks.filter((t) => stages.get(t.id)?.group === "you").length;
+  const needsYou = model.tasks.filter((t) => t.kind !== "group" && stages.get(t.id)?.group === "you").length; // a group rolls its leaves up: counting it too would double them
   return { needsYou, keys };
 }
