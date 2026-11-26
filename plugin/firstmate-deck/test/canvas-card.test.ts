@@ -74,12 +74,16 @@ test("Needs you: the whole canvas is open and the BLUF is uncut; a running card 
   assert.ok(run.includes("cv-bluf") && !run.includes(long) && !run.includes("cv-whole") && !/id="cvd-ag-1" open/.test(run));
 });
 
-test("a canvas that moved changes live, and the css change moves the page signature", () => {
+test("a canvas that moved changes live, and a css change rides in live, not in page.html", () => {
   const m = project([T]);
   const a = render(m, data()), b = render(m, data({}, summary("ag-1", { rev: 2, bluf: "Tests green" })));
   assert.notEqual(a.live, b.live);
   assert.equal(a.signature, b.signature, "card content rides in live.js, not in page.html");
-  assert.notEqual(a.signature, render(m, data({ css: ".x{}" })).signature);
+  const c = render(m, data({ css: ".x{}" }));
+  assert.equal(a.signature, c.signature, "crew canvas css must not move the page signature");
+  assert.equal(a.page.includes(".x{}"), false);
+  assert.equal(c.page.replace(/<!--LIVE-START-->[\s\S]*<!--LIVE-END-->/, ""), a.page.replace(/<!--LIVE-START-->[\s\S]*<!--LIVE-END-->/, ""), "page.html outside #live is identical");
+  assert.match(c.live, /<style data-cv-css>\n[\s\S]*\.x\{\}/);
 });
 
 test("without a canvas the card is exactly the registry-and-Paseo card (recent steps, no fragment)", () => {
