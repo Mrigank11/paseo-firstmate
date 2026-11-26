@@ -102,31 +102,37 @@ pre{overflow-x:auto;background:#fff;border:1px solid var(--line);border-radius:8
 .tn-ic{width:16px;height:16px;flex:none;display:block;fill:none;stroke:currentColor;stroke-width:1.75;stroke-linecap:round;stroke-linejoin:round}
 /* task tree: breadcrumbs, group cards, the tree section of the navigator, zoom */
 .crumb{font-size:calc(12px*var(--ts,1));color:var(--mut);margin:0 0 2px}.crumb a{color:var(--mut)}.crumb .sep{color:#b8b2a3}
-.gcard{background:var(--soft);border:1px solid var(--line);border-radius:10px;padding:12px 14px;margin:0 0 10px}
-.gcard .gst{margin-left:auto}.gmeta{font-size:calc(13px*var(--ts,1));color:var(--mut);margin-top:4px}
-.gbar{height:5px;border-radius:3px;background:var(--line);margin:6px 0 8px;overflow:hidden}.gbar i{display:block;height:100%;background:var(--ok)}
-.gchips{display:flex;flex-wrap:wrap;gap:6px;margin:6px 0}
-.gchip{font-size:calc(12px*var(--ts,1));padding:1px 9px;border-radius:999px;background:#fff;border:1px solid var(--line);color:var(--fg);text-decoration:none}
-.gchip.s-you{background:#fde6cf;border-color:#f4c79d}.gchip.s-running{background:#dbeafe;border-color:#bfd4fb}.gchip.s-done{color:var(--ok)}.gchip.s-fm{background:#ede9fe;border-color:#d7cffb}
-.gx{display:flex;gap:12px;align-items:center;font-size:calc(12.5px*var(--ts,1));color:var(--mut);margin-top:6px}
-.gz{font:inherit;font-size:calc(12.5px*var(--ts,1));border:1px solid var(--line);background:#fff;border-radius:6px;padding:2px 9px;cursor:pointer;color:var(--fg)}.gz:hover{background:var(--soft)}
-.gcard.s-you{border-color:#f4c79d}
+/* a group is a one-line strip, never a card of chips and tables: fold, name, bar, done/total, asks, zoom */
+.gcard{background:var(--soft);border:1px solid var(--line);border-radius:10px;padding:6px 10px;margin:0 0 6px}
+.gcard.s-you{border-color:#f4c79d}.gcard .crumb{margin:0 0 1px}
+.gs{display:flex;align-items:center;gap:10px;min-height:30px;flex-wrap:wrap}
+.gsn{font-weight:650;min-width:0;overflow-wrap:anywhere}
+.gbar{flex:0 1 160px;min-width:60px;height:5px;border-radius:3px;background:var(--line);overflow:hidden}.gbar i{display:block;height:100%;background:var(--ok)}
+.gsc{font-size:calc(13px*var(--ts,1));color:var(--mut);font-variant-numeric:tabular-nums;white-space:nowrap}
+.gask{font-size:calc(12.5px*var(--ts,1));font-weight:600;color:var(--you);white-space:nowrap}
+.gs .gz{margin-left:auto}.gs .mate{font-size:calc(12.5px*var(--ts,1));color:var(--mut)}
+.gcard.gfold .gbar i{opacity:.55}
+.gz{font:inherit;font-size:calc(12.5px*var(--ts,1));border:1px solid var(--line);background:var(--bg);border-radius:6px;padding:2px 9px;cursor:pointer;color:var(--fg)}.gz:hover{background:var(--soft)}
+.gnote{margin-top:6px}
+/* a run of one group's tasks inside a lane: a slim header with the count; Parked and Done start folded */
+.gh{display:flex;align-items:center;gap:10px;margin:14px 0 6px;padding:0 0 4px;border-bottom:1px solid var(--line);font-size:calc(13px*var(--ts,1));color:var(--mut)}
+.gh .ghb{all:unset;box-sizing:border-box;display:inline-flex;align-items:center;gap:6px;cursor:pointer;font-weight:600;color:var(--fg);min-height:24px;border-radius:6px}
+.gh .ghb:focus-visible{outline:2px solid var(--run);outline-offset:2px}
+.gh .ghb svg{width:14px;height:14px;fill:none;stroke:currentColor;stroke-width:1.75;stroke-linecap:round;stroke-linejoin:round;color:var(--mut);transition:transform .15s cubic-bezier(.2,.8,.2,1)}
+.gh.gfold .ghb svg{transform:rotate(-90deg)}
+.gh .gn{font-variant-numeric:tabular-nums;padding:0 7px;border-radius:999px;background:var(--soft);border:1px solid var(--line);font-size:calc(12px*var(--ts,1));line-height:18px}
+.gh .gz{margin-left:auto;font-size:calc(12px*var(--ts,1));padding:1px 8px}
 /* tree: neutral names, one hairline guide per level; stage shows only where it asks for you (orange text + dot) */
 .t-tree{--sc:var(--fg)}.tn-st .tn-g{position:relative}.tn-st .tn-g>ul{margin-left:15px;border-left:1px solid var(--line)}
-.tn-g>.tn-a{padding-left:30px;padding-right:62px;font-weight:600}.tn-g>.tn-a .tn-gc,.tn-g>.tn-a .tn-ask{position:absolute;top:50%;transform:translateY(-50%);line-height:1}
+.tn-g>.tn-a{padding-right:62px;font-weight:600}.tn-g>.tn-a .tn-gc,.tn-g>.tn-a .tn-ask{position:absolute;top:50%;transform:translateY(-50%);line-height:1}
 .tn-gc{right:8px;font-size:calc(11.5px*var(--ts,1));font-weight:500;color:var(--mut);font-variant-numeric:tabular-nums}
 .tn-ask{right:38px;min-width:16px;padding:2px 5px;text-align:center;font-size:calc(11px*var(--ts,1));font-weight:600;border-radius:999px;background:var(--you-bg,#fde6cf);color:var(--you)}
-.t-tree .tn-g ul .tn-a{padding-left:16px}.t-tree .tn-g ul .tn-g>.tn-a{padding-left:30px}.t-tree .tn-g ul .t-you .tn-a::before{left:4px}
+
 .tn-ug{display:block;padding:0 8px;line-height:var(--rh);font-size:calc(12px*var(--ts,1));color:var(--mut)}
-.tn-fold{all:unset;box-sizing:border-box;position:absolute;left:6px;top:0;z-index:1;width:22px;height:var(--rh);display:flex;align-items:center;justify-content:center;border-radius:6px;cursor:pointer;color:var(--mut)}
-.tn-fold:hover{background:rgba(28,27,25,.06);color:var(--fg)}.tn-fold:focus-visible{outline:2px solid var(--run);outline-offset:-2px}
-.tn-fold svg{width:14px;height:14px;fill:none;stroke:currentColor;stroke-width:1.75;stroke-linecap:round;stroke-linejoin:round;transition:transform .15s cubic-bezier(.2,.8,.2,1)}
-.tn-g.folded>.tn-fold svg,.gcard.gfold .gf svg{transform:rotate(-90deg)}.tn-g.folded>ul{display:none}
-.gask{margin-left:6px;font-weight:600;color:var(--you)}
-.gf{display:inline-flex;align-items:center;gap:4px;font:inherit;font-size:calc(12.5px*var(--ts,1));border:1px solid var(--line);background:#fff;border-radius:6px;padding:2px 9px 2px 6px;cursor:pointer;color:var(--fg)}.gf:hover{background:var(--soft)}
+.gcard.gfold .gf svg{transform:rotate(-90deg)}
+.gf{display:inline-flex;align-items:center;gap:4px;font:inherit;font-size:calc(12.5px*var(--ts,1));border:1px solid var(--line);background:var(--bg);border-radius:6px;padding:2px 9px 2px 6px;cursor:pointer;color:var(--fg)}.gf:hover{background:var(--soft)}
 .gf svg{width:13px;height:13px;fill:none;stroke:currentColor;stroke-width:1.75;stroke-linecap:round;stroke-linejoin:round;transition:transform .15s cubic-bezier(.2,.8,.2,1)}
-.gcard.gfold .gbar,.gcard.gfold .gchips,.gcard.gfold>.gx~*:not([class*="ask"]):not(.opts){display:none}
-@media (prefers-reduced-motion:reduce){.tn-fold svg,.gf svg{transition:none}}
+@media (prefers-reduced-motion:reduce){.gh .ghb svg,.gf svg{transition:none}}
 .tn-zbar{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin:12px 0;padding:8px 12px;border:1px solid var(--line);border-radius:8px;background:var(--soft);font-size:calc(13px*var(--ts,1))}.tn-zbar[hidden]{display:none}
 .tn-st,.tn-bd,.tn-chip{--sc:var(--mut)}
 .t-you{--sc:var(--you)}.t-fm,.t-running{--sc:var(--run)}.t-blocked{--sc:#b91c1c}.t-next,.t-parked{--sc:var(--park)}.t-done{--sc:var(--ok)}
@@ -338,15 +344,30 @@ body.tn-focus .task.tn-sel .cv.has-full .cv-c{display:none}
   function shut(k){return window.__fdPref?window.__fdPref("tn-c-"+k)===1:false}
   function applyShut(root){q(root,".tn-st").forEach(function(s){var on=shut(s.getAttribute("data-k")),h=s.querySelector(".tn-h");
     s.classList.toggle("shut",on);if(h)h.setAttribute("aria-expanded",on?"false":"true")})}
-  // ---- fold a group (task tree): the choice ("tn-f-<group>", 1 = folded) is stored like the stage fold. It hides a group's
-  // children in the tree and the chips and bar on its card; the cards of its children and the Needs-you list are untouched.
-  function folded(g){return window.__fdPref?window.__fdPref("tn-f-"+g)===1:false}
-  function applyFold(){[fl,sl].forEach(function(r){q(r,"li.tn-g[data-g]").forEach(function(li){var on=folded(li.getAttribute("data-g")),b=li.querySelector(":scope>.tn-fold");
-      li.classList.toggle("folded",on);if(b)b.setAttribute("aria-expanded",on?"false":"true")})});
-    q(d,"#live .gcard").forEach(function(c){var b=c.querySelector(".gf"),g=b&&b.getAttribute("data-fold"),on=!!g&&folded(g);
-      c.classList.toggle("gfold",on);if(b){b.setAttribute("aria-expanded",on?"false":"true");var sp=b.querySelector("span");if(sp)sp.textContent=on?"Unfold":"Fold"}})}
-  d.addEventListener("click",function(e){var b=e.target.closest&&e.target.closest("[data-fold]");if(!b||!window.__fdPref)return;e.preventDefault();
-    var g=b.getAttribute("data-fold");window.__fdPref("tn-f-"+g,folded(g)?0:1);applyFold()});
+  // ---- fold a group (task tree). Two folds, both kept in prefs: a group's strip folds ALL of its tasks in the lanes after Needs you
+  // ("tn-f-<group>", 1 = folded); a cluster header folds just that group's run inside one lane ("gho-<lane>-<group>", 1 = flipped
+  // from the lane's default, which is folded in Parked and Done, open elsewhere). Needs you is never folded, so an ask is never
+  // hidden: the headers say how many tasks a fold hides, the strip still counts the asks. One style tag carries the rules, so a
+  // live swap needs no re-application beyond the header classes.
+  var fst=null;
+  function pref1(k){return window.__fdPref?window.__fdPref(k)===1:false}
+  function folded(g){return pref1("tn-f-"+g)}
+  function lane(h){var l=h.closest&&h.closest(".grp");return l?l.id:""}
+  function applyFold(){
+    if(!fst){fst=d.createElement("style");d.head.appendChild(fst)}
+    var rules=[],seenG={};
+    q(d,"#live .gs .gf[data-fold]").forEach(function(b){var g=b.getAttribute("data-fold"),on=folded(g),c=b.closest(".gcard"),sp=b.querySelector("span");
+      if(c)c.classList.toggle("gfold",on);b.setAttribute("aria-expanded",on?"false":"true");if(sp)sp.textContent=on?"Unfold":"Fold";
+      if(on&&!seenG[g]){seenG[g]=1;rules.push('#live .grp:not(#g-you) .task[data-in~="'+g+'"]:not(.gcard){display:none}')}});
+    q(d,"#live .gh[data-gh]").forEach(function(h){var g=h.getAttribute("data-gh"),l=lane(h),quiet=h.getAttribute("data-quiet")==="1",
+        flip=pref1("gho-"+l+"-"+g),byLane=quiet!==flip,byGroup=(h.getAttribute("data-in")||"").split(" ").some(function(x){return x&&folded(x)}),on=byLane||byGroup,b=h.querySelector(".ghb");
+      h.classList.toggle("gfold",on);if(b)b.setAttribute("aria-expanded",on?"false":"true");
+      if(byLane)rules.push('#live #'+l+' .task[data-gp="'+g+'"]{display:none}')});
+    fst.textContent=rules.join("")}
+  d.addEventListener("click",function(e){var t=e.target,b=t.closest&&t.closest("[data-fold]");
+    if(b&&window.__fdPref){e.preventDefault();var g=b.getAttribute("data-fold");window.__fdPref("tn-f-"+g,folded(g)?0:1);applyFold();return}
+    var hb=t.closest&&t.closest(".gh .ghb");
+    if(hb&&window.__fdPref){e.preventDefault();var h=hb.closest(".gh"),k="gho-"+lane(h)+"-"+h.getAttribute("data-gh");window.__fdPref(k,pref1(k)?0:1);applyFold()}});
   // ---- build from the template
   function stages(){return q(fl,".tn-st")}
   function applyMore(root){q(root,".tn-st[data-cap]").forEach(function(s){var on=!!more[s.getAttribute("data-k")],b=s.querySelector(".tn-more");
@@ -443,7 +464,7 @@ body.tn-focus .task.tn-sel .cv.has-full .cv-c{display:none}
     if(!zbar){zbar=d.createElement("div");zbar.className="tn-zbar";zbar.setAttribute("data-lavish-action","");zbar.hidden=true;var lv=$("live");lv.parentNode.insertBefore(zbar,lv)}
     if(!g){zst.textContent="";zbar.hidden=true;zbar.textContent="";return}
     var sel='[data-in~="'+g+'"]';
-    zst.textContent='#live .task:not('+sel+'){display:none}#live .grp:not(:has(.task'+sel+')){display:none}';
+    zst.textContent='#live .task:not('+sel+'){display:none}#live .gh:not('+sel+'){display:none}#live .grp:not(:has(.task'+sel+')){display:none}';
     var a=fl.querySelector('.tn-a[data-t="t-'+g+'"]');
     zbar.innerHTML="";var t=el("span","","Zoomed into ");var b=el("b","",a?a.firstChild.textContent:g);t.appendChild(b);zbar.appendChild(t);
     var x=el("button","gz","Show all tasks");x.type="button";x.setAttribute("data-zoom-off","");zbar.appendChild(x);zbar.hidden=false;
@@ -482,9 +503,21 @@ var Idiomorph=function(){"use strict";const e=()=>{};const n={morphStyle:"outerH
   function restore(root){root.querySelectorAll("details[id]").forEach(function(d){if(d.id in S)d.open=!!S[d.id]})}
   document.addEventListener("toggle",function(e){var d=e.target;if(d&&d.id){S[d.id]=d.open?1:0;save()}},true);
   // ---- read marks: a done card is read when R["t-<task>"] equals the card's hash (data-h); editing the card makes it unread again
-  function place(box,list){var kids=[].slice.call(box.children),same=kids.length===list.length;
+  // a Done box also holds the slim group headers (render.ts clusterHead); they are rebuilt around whatever cards a box now has
+  var GH_ICON='<svg class="tn-ic" viewBox="0 0 24 24" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>';
+  function heads(box,list){var cur="";list.forEach(function(t,i){var g=t.getAttribute("data-gp");
+    if(g&&g!==cur){var n=1;while(i+n<list.length&&list[i+n].getAttribute("data-gp")===g)n++;
+      var h=document.createElement("div");h.className="gh";h.setAttribute("data-gh",g);h.setAttribute("data-quiet","1");h.setAttribute("data-lavish-action","");
+      h.setAttribute("data-in",(t.getAttribute("data-in")||"").split(" ").slice(0,-1).join(" "));
+      var b=document.createElement("button");b.type="button";b.className="ghb";b.innerHTML=GH_ICON;var sp=document.createElement("span");sp.className="ghn";sp.textContent=t.getAttribute("data-gl")||g;b.appendChild(sp);h.appendChild(b);
+      var c=document.createElement("span");c.className="gn";c.textContent=n;h.appendChild(c);
+      var z=document.createElement("button");z.type="button";z.className="gz";z.setAttribute("data-g",g);z.textContent="Zoom";h.appendChild(z);box.insertBefore(h,t)}
+    cur=g||""})}
+  function place(box,list){[].slice.call(box.querySelectorAll(":scope>.gh")).forEach(function(h){h.remove()});
+    var kids=[].slice.call(box.children),same=kids.length===list.length;
     for(var i=0;same&&i<list.length;i++)if(kids[i]!==list[i])same=false;
-    if(!same)list.forEach(function(t){box.appendChild(t)})}
+    if(!same)list.forEach(function(t){box.appendChild(t)});
+    heads(box,list)}
   function arrange(root){root=root||document;var g=function(i){return root===document?document.getElementById(i):root.querySelector("#"+i)},u=g("g-doneu"),d=g("g-done");if(!u||!d)return;
     // cards the server already placed in Done are read (it applied the stored marks): adopt that, so an unreachable endpoint does not undo it
     [].slice.call(d.querySelectorAll(".task[data-h]")).forEach(function(t){if(!(t.id in R))R[t.id]=t.getAttribute("data-h")});

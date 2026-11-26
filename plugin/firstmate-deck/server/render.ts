@@ -376,30 +376,49 @@ function crumbHtml(t: Task, ctx: Ctx): string {
   return up.length ? `<div class="crumb">${esc(ctx.title)}${up.map((id) => `<span class="sep"> › </span><a href="#t-${esc(id)}">${taskName(ctx.byId.get(id)!)}</a>`).join("")}</div>` : "";
 }
 
-/** A group card's header: roll-up line, progress bar, one chip per child, the second mate and the zoom button. */
 /** Leaves under a group (any depth) that are waiting on the captain: a fold must never hide them without a marker. */
 function askBelow(id: string, tasks: readonly Task[], stages: ReadonlyMap<string, Stage>): number {
   return tasks.filter((k) => k.parent === id).reduce((n, k) => n + (k.kind === "group" ? askBelow(k.id, tasks, stages) : stages.get(k.id)?.group === "you" ? 1 : 0), 0);
 }
 
-function groupHead(t: Task, st: Stage, ctx: Ctx): string {
+/**
+ * A group's one-line strip: fold, name, progress bar, done/total, the asks below it, zoom (and the second mate). No chips and no
+ * child table: every child has its own card, once, in its stage lane.
+ */
+function groupStrip(t: Task, st: Stage, ctx: Ctx): string {
   const ro = st.rollup;
-  const kids = [...ctx.byId.values()].filter((k) => k.parent === t.id && ctx.stages.has(k.id));
-  const live = kids.filter((k) => !ctx.archived.has(k.id));
-  const finished = kids.length - live.length;
-  const chip = (k: Task) => {
-    const ks = ctx.stages.get(k.id)!;
-    const n = k.kind === "group" && ks.rollup ? ` <span class="tn-gc">${ks.rollup.done}/${ks.rollup.total}</span>` : "";
-    return `<a class="gchip s-${ks.group}" href="#t-${esc(k.id)}">${taskName(k)}${n}</a>`;
-  };
   const pct = ro && ro.total ? Math.round((ro.done / ro.total) * 100) : 0;
   const asks = askBelow(t.id, [...ctx.byId.values()], ctx.stages);
-  const meta = (ro && ro.total ? `${ro.done} of ${ro.total} done · ${esc(st.reason)}` : esc(st.reason)) + (asks ? ` <span class="gask">${asks} need${asks === 1 ? "s" : ""} you</span>` : "");
   const mate = t.mate ? `<span class="mate">second mate · <a class="open" href="${esc(ctx.o.paseoAgentUrl(t.mate))}">${esc(t.mate.slice(0, 8))}</a></span>` : "";
-  return `<div class="gmeta">${meta}</div>` +
-    `<div class="gbar" role="img" aria-label="${ro ? ro.done : 0} of ${ro ? ro.total : 0} done"><i style="width:${pct}%"></i></div>` +
-    `<div class="gchips">${live.map(chip).join("")}${finished ? `<span class="gmeta">+${finished} finished</span>` : ""}</div>` +
-    `<div class="gx"><button type="button" class="gf" data-fold="${esc(t.id)}" aria-expanded="true" data-lavish-action>${svg(ICON.down)}<span>Fold</span></button><button type="button" class="gz" data-g="${esc(t.id)}" data-lavish-action>Zoom into group</button>${mate}</div>`;
+  const count = ro && ro.total ? `<span class="gsc" title="${ro.done} of ${ro.total} done">${ro.done}/${ro.total}</span>` : `<span class="gsc">${esc(st.reason)}</span>`;
+  return `<div class="gs"><button type="button" class="gf" data-fold="${esc(t.id)}" aria-expanded="true" aria-label="Fold ${taskName(t)}" data-lavish-action>${svg(ICON.down)}<span>Fold</span></button>` +
+    `<span class="gsn">${taskName(t)}</span>` +
+    `<span class="gbar" role="img" aria-label="${ro ? ro.done : 0} of ${ro ? ro.total : 0} done"><i style="width:${pct}%"></i></span>${count}` +
+    (asks ? `<span class="gask">${asks} need${asks === 1 ? "s" : ""} you</span>` : "") +
+    `<button type="button" class="gz" data-g="${esc(t.id)}" data-lavish-action>Zoom</button>${mate}</div>`;
+}
+
+/** The nearest live group above a task: its id, the "Group › Subgroup" label and the group ids on the way down. Null when ungrouped. */
+function clusterOf(t: Task, ctx: Ctx): { id: string; label: string; path: string[] } | null {
+  const up = groupPath(t, ctx.byId).filter((id) => ctx.byId.get(id)?.kind === "group" && !ctx.archived.has(id));
+  return up.length ? { id: up[up.length - 1], label: up.map((id) => taskName(ctx.byId.get(id)!)).join(" › "), path: up } : null;
+}
+
+/** Lanes whose group clusters start folded: finished and parked work stays out of the way until asked for. */
+const QUIET_LANES = new Set(["g-parked", "g-doneu", "g-done"]);
+
+/** A slim header over the run of one group's tasks inside a lane: label, count, zoom. Folded lanes show only the count. */
+function clusterHead(c: { id: string; label: string; path: string[] }, n: number, lane: string): string {
+  const quiet = QUIET_LANES.has(lane);
+  return `<div class="gh${quiet ? " gfold" : ""}" data-gh="${esc(c.id)}" data-in="${c.path.map(esc).join(" ")}" data-quiet="${quiet ? 1 : 0}" data-lavish-action>` +
+    `<button type="button" class="ghb" aria-expanded="${quiet ? "false" : "true"}">${svg(ICON.down)}<span class="ghn">${c.label}</span></button>` +
+    `<span class="gn">${n}</span><button type="button" class="gz" data-g="${esc(c.id)}">Zoom</button></div>`;
+}
+
+/** Ungrouped tasks first, then each group's tasks together (groups in tree order); the order inside either part is kept. */
+function clustered<T extends { t: Task }>(items: T[], ctx: Ctx, order: readonly string[]): T[] {
+  const rank = (x: T) => { const c = clusterOf(x.t, ctx); return c ? order.indexOf(c.id) : -1; };
+  return items.map((x, i) => [x, rank(x), i] as const).sort((p, q) => p[1] - q[1] || p[2] - q[2]).map(([x]) => x);
 }
 
 function row(t: Task, group: GroupKey, ctx: Ctx, idx = 0): string {
@@ -411,7 +430,8 @@ function row(t: Task, group: GroupKey, ctx: Ctx, idx = 0): string {
   const isGroup = t.kind === "group";
   const chip = (failed ? `<span class="chip c-fail">failed</span>` : "") + (isGroup ? `<span class="chip gst c-${group}">${esc(st.stage)}</span>` : "");
   const up = groupPath(t, ctx.byId);
-  const tree = up.length || isGroup ? ` data-in="${[...up, t.id].map(esc).join(" ")}"` : "";
+  const cl = isGroup ? null : clusterOf(t, ctx);
+  const tree = (up.length || isGroup ? ` data-in="${[...up, t.id].map(esc).join(" ")}"` : "") + (cl ? ` data-gp="${esc(cl.id)}" data-gl="${esc(cl.label)}"` : "");
   // Done cards carry their position (data-i) so the page can put a card back in order when it moves it between the
   // unread and read groups, and (when they have a card) the hash the read mark is keyed by (data-h) and a button.
   const done = group === "done";
@@ -427,15 +447,14 @@ function row(t: Task, group: GroupKey, ctx: Ctx, idx = 0): string {
   const rawTargets = new Set((sum?.openAsks ?? []).filter((a) => !t.asks.some((x) => x.ref?.block === a.id)).map((a) => `t-${t.id}#c-${a.id}`));
   const recapSum = group === "done" ? undefined : sum;
   // an open card whose crew is gone (archived, no live canvas) shows the snapshot taken when the ask was made, like a done card does
-  const snapOnly = group !== "done" && !sum && !!t.canvasFinal;
-  const strip = group === "done" || snapOnly ? recapStrip(t, group, t.canvasRecap, t.canvasFinalAt, ctx.comments, ctx.o.now) : recapStrip(t, group, recapSum?.recap, recapSum?.updatedAt, ctx.comments, ctx.o.now);
+  const snapOnly = !isGroup && group !== "done" && !sum && !!t.canvasFinal;
+  const strip = isGroup ? { html: "", consumes: undefined as string | undefined } : group === "done" || snapOnly ? recapStrip(t, group, t.canvasRecap, t.canvasFinalAt, ctx.comments, ctx.o.now) : recapStrip(t, group, recapSum?.recap, recapSum?.updatedAt, ctx.comments, ctx.o.now);
   // one long explanation per card: when a crew canvas is on it, the first mate's context folds (a short note stays open)
   const hasCanvas = !!sum || !!t.canvasFinal;
   const out = [
     `<article class="task${isGroup ? " gcard" : ""} s-${group}${failed ? " s-failed" : ""}" id="t-${esc(t.id)}"${data}${tree}>`,
     crumbHtml(t, ctx),
-    `<div class="tt"><span class="ttl">${title}</span>${chip}${btn}</div>`,
-    isGroup ? groupHead(t, st, ctx) : "",
+    isGroup ? groupStrip(t, st, ctx) : `<div class="tt"><span class="ttl">${title}</span>${chip}${btn}</div>`,
     strip.html,
     // card-level comments, plus comments on asks that are gone (an answered ask takes its own trail with it); the strip already shows a newer one
     trailHtml(ctx.comments.filter((c) => c.id !== strip.consumes), `t-${t.id}`, ctx.o.now, (c) => c.target.startsWith(`t-${t.id}#`) && !t.asks.some((a) => c.target === `t-${t.id}#${a.id}`) && !rawTargets.has(c.target)),
@@ -496,14 +515,15 @@ function row(t: Task, group: GroupKey, ctx: Ctx, idx = 0): string {
   }
   if (sum) {
     out.push(...raw, `<div class="cv-links"><a class="cv-open" href="${esc(sum.url)}">Open canvas ↗</a><a class="open" href="${esc(ctx.o.paseoAgentUrl(sum.agentId))}">Open in Paseo</a></div>`);
-  } else out.push(agentBlock(t, group, aid ? ctx.agents[aid] : undefined, ctx.o, st));
+  } else if (!isGroup) out.push(agentBlock(t, group, aid ? ctx.agents[aid] : undefined, ctx.o, st));
   if (group === "blocked") out.push(`<div class="bo"><b>Blocked on:</b> ${esc(t.blocked_on || "an outside dependency")}</div>`);
   const body = t.card.trim() ? cardHtml(t) : esc(t.notes);
   // a done task with a final canvas shows it expanded; the short card is the fallback when there is none, else it folds away
-  if (group === "done" && t.canvasFinal) {
+  if (group === "done" && t.canvasFinal && !isGroup) {
     out.push(finalCanvas(t, ctx.snapCss));
     if (body) out.push(`<details class="cnotes" id="cd-${esc(t.id)}"><summary>Card</summary><div class="nt">${body}</div></details>`);
-  } else if (body) out.push(`<div class="nt">${body}</div>`);
+  } else if (body && isGroup) out.push(`<details class="cnotes gnote" id="gn-${esc(t.id)}"><summary>Notes</summary><div class="nt">${body}</div></details>`); // the group's own text stays one click away, the strip stays one line
+  else if (body) out.push(`<div class="nt">${body}</div>`);
   // a done card with a card.md keeps its notes in the same place; a report on disk is pointed at, not inlined
   if (group === "done" && t.card.trim() && t.notes.trim() && !t.card.includes(t.notes.trim())) {
     out.push(`<details class="cnotes" id="fn-${esc(t.id)}"><summary>Notes</summary>${markdown(t.notes)}</details>`);
@@ -562,11 +582,10 @@ export function treeNavHtml(tasks: readonly Task[], stages: ReadonlyMap<string, 
     return `<a class="tn-a" href="#t-${esc(t.id)}" data-t="t-${esc(t.id)}" title="${name}">${name}${extra}</a>`;
   };
   const node = (t: Task): string => {
-    const kids = tasks.filter((k) => k.parent === t.id);
-    if (t.kind !== "group") return `<li${t.state === "failed" ? ` class="fail"` : stages.get(t.id)?.group === "you" ? ` class="t-you"` : ""}>${a(t)}</li>`;
+    const subs = tasks.filter((k) => k.parent === t.id && k.kind === "group");
     const ro = stages.get(t.id)?.rollup;
     const asks = askBelow(t.id, tasks, stages);
-    return `<li class="tn-g" data-s="${stages.get(t.id)?.group ?? "next"}" data-g="${esc(t.id)}"><button class="tn-fold" type="button" data-fold="${esc(t.id)}" aria-expanded="true" aria-label="Fold ${taskName(t)}">${svg(ICON.down)}</button>${a(t, (ro ? `<span class="tn-gc">${ro.done}/${ro.total}</span>` : "") + (asks ? `<span class="tn-ask" title="${asks} open ask${asks === 1 ? "" : "s"} below">${asks}</span>` : ""))}<ul>${kids.map(node).join("")}</ul></li>`;
+    return `<li class="tn-g" data-s="${stages.get(t.id)?.group ?? "next"}" data-g="${esc(t.id)}">${a(t, (ro ? `<span class="tn-gc">${ro.done}/${ro.total}</span>` : "") + (asks ? `<span class="tn-ask" title="${asks} open ask${asks === 1 ? "" : "s"} below">${asks}</span>` : ""))}${subs.length ? `<ul>${subs.map(node).join("")}</ul>` : ""}</li>`;
   };
   const roots = groups.filter((g) => !g.parent || !live.has(g.parent));
   const loose = tasks.filter((t) => t.kind !== "group" && !t.parent).length;
@@ -627,6 +646,10 @@ function renderLive(model: ProjectModel, agents: Record<string, AgentView>, o: R
   const archivedIds = new Set(archive.map((t) => t.id));
   for (const k of Object.keys(buckets) as GroupKey[]) buckets[k] = byOrder(buckets[k].map((x) => ({ ...x, order: archivedIds.has(x.t.id) ? undefined : x.t.order }))).map(({ t, g }) => ({ t, g }));
 
+  // task tree: after Needs you (always one flat list, never clustered) each lane keeps a group's tasks together, ungrouped first
+  const gorder = groupOrder(model.tasks).map((g) => g.id);
+  if (gorder.length) for (const k of Object.keys(buckets) as GroupKey[]) if (k !== "you") buckets[k] = clustered(buckets[k], ctx, gorder);
+
   const busy = GROUPS.filter(([k]) => k !== "done").flatMap(([k]) => buckets[k])
     .filter(({ t }) => { const a = stages.get(t.id)?.agentId; return a && ACTIVE.has(agents[a]?.status ?? ""); }).length;
   const failedN = buckets.done.filter(({ t }) => stages.get(t.id)?.failed ?? t.state === "failed").length;
@@ -651,26 +674,47 @@ function renderLive(model: ProjectModel, agents: Record<string, AgentView>, o: R
   if (o.canvas?.status === "down") summary += `<span class="fl cv-down" title="agent-canvas could not be reached from the deck">canvas unavailable</span>`;
   const parts = [`<div class="summary">${summary}<span class="m">live: the page checks ${o.tickSeconds === 1 ? "every second" : `every ${o.tickSeconds} s`}; the plugin refreshes it on every change and at least every ${o.refreshSeconds ?? 20} s (last refresh {TS})</span></div>`];
   const groups = groupOrder(model.tasks);
-  if (groups.length) {
+  let groupsDone = !groups.length;
+  const pushGroups = () => {
+    if (groupsDone) return;
+    groupsDone = true;
     parts.push(`<section class="grp" id="g-groups"><h3>Groups <span class="n">(${groups.length})</span></h3>\n${groups.map((g) => row(g, stages.get(g.id)!.group, ctx)).join("\n")}</section>`);
-  }
+  };
+  // each run of one group's tasks in a lane gets a slim header (count, zoom); Parked and Done start folded
+  const laneRows = (list: { t: Task; g: GroupKey }[], lane: string, all: { t: Task; g: GroupKey }[] = list) => {
+    const out: string[] = [];
+    let cur = "";
+    list.forEach((x, i) => {
+      const c = x.t.kind === "group" ? null : clusterOf(x.t, ctx);
+      if (c && c.id !== cur) {
+        let n = 1;
+        while (i + n < list.length && clusterOf(list[i + n].t, ctx)?.id === c.id) n++;
+        out.push(clusterHead(c, n, lane));
+      }
+      cur = c?.id ?? "";
+      out.push(row(x.t, x.g, ctx, all.indexOf(x)));
+    });
+    return out.join("\n");
+  };
   for (const [k, n] of GROUPS) {
     const items = buckets[k];
+    if (k !== "you") pushGroups();
     if (!items.length) continue;
     if (k === "done" && cands.length) {
-      const rowsOf = (list: typeof items) => list.map((x) => row(x.t, x.g, ctx, items.indexOf(x))).join("\n");
+      const rowsOf = (list: typeof items, lane: string) => laneRows(list, lane, items);
       const rest = items.filter((x) => !unreadIds.has(x.t.id));
       parts.push(
-        `<section class="grp" id="g-doneu"${unread.length ? "" : " hidden"}><h3>Done, unread <span class="n">(<span class="cn">${unread.length}</span>)</span> <button class="mra" type="button">Mark all read</button></h3>\n<div class="rows">${rowsOf(unread)}</div></section>`,
-        `<details class="grp" id="g-done"${rest.length ? "" : " hidden"}><summary><h3>Done <span class="n">(<span class="cn">${rest.length}</span>)</span></h3></summary>\n<div class="rows">${rowsOf(rest)}</div></details>`,
+        `<section class="grp" id="g-doneu"${unread.length ? "" : " hidden"}><h3>Done, unread <span class="n">(<span class="cn">${unread.length}</span>)</span> <button class="mra" type="button">Mark all read</button></h3>\n<div class="rows">${rowsOf(unread, "g-doneu")}</div></section>`,
+        `<details class="grp" id="g-done"${rest.length ? "" : " hidden"}><summary><h3>Done <span class="n">(<span class="cn">${rest.length}</span>)</span></h3></summary>\n<div class="rows">${rowsOf(rest, "g-done")}</div></details>`,
       );
       continue;
     }
-    const rows = items.map(({ t, g }) => row(t, g, ctx, items.findIndex((x) => x.t === t))).join("\n");
+    const rows = k === "you" ? items.map(({ t, g }) => row(t, g, ctx, items.findIndex((x) => x.t === t))).join("\n") : laneRows(items, `g-${k}`);
     const h = `<h3>${n} <span class="n">(${items.length})</span></h3>`;
     if (k === "done" || k === "parked") parts.push(`<details class="grp" id="g-${k}"><summary>${h}</summary>\n${rows}</details>`);
     else parts.push(`<section class="grp" id="g-${k}">${h}\n${rows}</section>`);
   }
+  pushGroups(); // only groups, no lanes
   if (ctx.snapCss.size) parts.push(`<style data-cv-snap>\n${[...ctx.snapCss].map(scaleText).join("\n").replace(/<\/style/gi, "<\\/style")}\n</style>`);
   if (parts.length === 1) parts.push(`<div class="m">No tasks for this project yet.</div>`);
   // Trails for the page and the sections live outside the live block (page.html is not rewritten per comment);
