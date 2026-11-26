@@ -131,7 +131,8 @@ test("rollup: a group's stage comes from its leaves (live and archived), bin/fle
   writeFileSync(join(root, "state", "fleet-archive.jsonl"), JSON.stringify({ id: "old", parent: "g", state: "done", outcome: "done", project: "demo" }) + "\n");
   const agents = join(root, "agents.json");
   const rec = (id: string, task: string) => ({ id, task, status: "running", archived: false, createdAt: "2026-10-24T10:00:00Z", lastActivityAt: new Date().toISOString(), pending: 0 });
-  writeFileSync(agents, JSON.stringify([rec("ag-1", "c1"), rec("ag-2", "c2"), rec("ag-3", "solo")]));
+  // c1's crew is gone, so its open ask is what the captain owes (a running crew would outrank the ask: see the last check below)
+  writeFileSync(agents, JSON.stringify([rec("ag-2", "c2"), rec("ag-3", "solo")]));
   const env = { PASEO_HOME: root, STAGE_AGENTS_JSON: agents, AGENT_CANVAS_URL: "off", STAGE_SNAPSHOT_WAIT_MS: "0" };
   const g = JSON.parse((await run(["rollup", root, "g"], env)).out);
   assert.equal(g.group, "you");
@@ -152,4 +153,10 @@ test("rollup: a group's stage comes from its leaves (live and archived), bin/fle
   assert.match(md, /\| PR one \| Needs you \|/);
   assert.match(md, /\| old \| Done \|/);
   assert.notEqual((await run(["rollup", root, "solo"], env)).code, 0);
+  // the stage rule that a running crew outranks its open ask applies to the leaf, so the group follows the leaf: Running, with
+  // the ask still noted on the leaf (the roll-up never invents a Needs you the leaf's own stage does not have)
+  writeFileSync(agents, JSON.stringify([rec("ag-1", "c1"), rec("ag-2", "c2"), rec("ag-3", "solo")]));
+  const run1 = JSON.parse((await run(["rollup", root, "g"], env)).out);
+  assert.equal(run1.group, "running");
+  assert.deepEqual(run1.children.map((c: any) => [c.id, c.group]), [["c1", "running"], ["c2", "running"]]);
 });
