@@ -531,7 +531,7 @@ J
   eq "$(S que-b '.stage+"|"+(.flags|map(.key)|join(","))')" "Running|queued-but-has-agent"; check "stage: a queued task with a RUNNING agent is Running, with the drift flag (T4)" $?
   eq "$(S que-b '.owner+"|"+.source')" "crew|local"; check "stage: rows carry the owner of the next move, and say they were computed locally when no plugin snapshot exists" $?
   eq "$(S que-b '.flags[0].drift')" true; check "stage: ...marked drift:true" $?
-  eq "$(S ask-c '.group')" you; check "stage: an open ask is Needs you even with a running agent" $?
+  eq "$(S ask-c .group)" running; check "stage: a running agent outranks an open ask (the ask stays a note)" $?
   eq "$(S old-d '.stage+"|"+(.flags|map(.key)|join(","))')" "Lost|no-agent"; check "stage: an old active task with no agent is Lost, not Needs you" $?
   eq "$(S v1-e '.agentId')" null; check "stage: with no fm.task label there is no agent (a v1 agentId is not a hint any more)" $?
   eq "$(S x1 '.stage+"|"+.group')" "Done|done"; check "stage: an archived task is frozen Done" $?
