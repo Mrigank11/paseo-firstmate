@@ -59,7 +59,7 @@ function boot() {
   const srcs: string[] = [];
   const doc: any = { activeElement: null, addEventListener() {}, getElementById: () => null, querySelectorAll: () => [],
     createElement: () => { const s: any = { remove() {} }; return s; }, head: { appendChild(s: any) { srcs.push(s.src); } } };
-  const win: any = { name: "", scrollY: 0, scrollTo() {}, scrollBy() {}, addEventListener() {} };
+  const win: any = { name: "", scrollY: 0, scrollTo() {} };
   const ctx = vm.createContext({ document: doc, window: win, location: { hash: "" }, localStorage: undefined, Date: { now: () => clock, parse: Date.parse },
     JSON, Object, Math, Array, setInterval: (fn: () => void, every: number) => { timers.push({ fn, every, next: clock + every }); return timers.length; } });
   vm.runInContext(pageScript("p", "page.live.js", 1), ctx);

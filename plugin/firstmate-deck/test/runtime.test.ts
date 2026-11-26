@@ -104,25 +104,6 @@ test("page.html is rewritten only when the signature moves; live.js only when it
   r.deck.stop();
 });
 
-test("a plugin restart over an unchanged page writes no page.html at all (Lavish reloads the page on every write)", async () => {
-  const r = rig(FLEET);
-  await r.deck.configure();
-  await r.deck.render("demo");
-  r.deck.stop();
-  const st = statSync(r.page);
-  const bytes = readFileSync(r.page, "utf8");
-  await sleep(20);
-  for (let i = 0; i < 3; i++) { // three restarts: a fresh Deck has empty in-memory signatures each time
-    const d2 = r.mkDeck();
-    await d2.configure();
-    await d2.render("demo");
-    d2.stop();
-    assert.equal(readFileSync(r.page, "utf8"), bytes, "same bytes");
-    assert.equal(statSync(r.page).mtimeMs, st.mtimeMs, `restart ${i + 1}: page.html not rewritten`);
-  }
-});
-
-
 test("a page.html someone else rewrote is corrected on the next tick; an unchanged one is left alone", async () => {
   const r = rig(FLEET);
   await r.deck.configure();
@@ -918,8 +899,7 @@ test("canvas: the live page shows the agent's canvas, follows its changes, and r
   await deck.render("demo");
   await until(() => /Wiring the routes/.test(readFileSync(r.live, "utf8")), 3000);
   assert.match(taskCard(readFileSync(r.live, "utf8"), "t2"), /Open canvas ↗/);
-  assert.match(readFileSync(r.live, "utf8"), /\.acv \.blk\{color:red\}/, "the crew stylesheet rides in the live payload");
-  assert.doesNotMatch(readFileSync(r.page, "utf8").replace(/<!--LIVE-START-->[\s\S]*<!--LIVE-END-->/, ""), /\.acv \.blk/, "and never in page.html outside #live (a page.html write reloads the page)");
+  assert.match(readFileSync(r.page, "utf8"), /\.acv \.blk\{color:red\}/);
   assert.equal(readPageJson(join(r.pdir, "page.json")).canvasUrl, fc.url);
   // the canvas moves: the page follows without any agent event
   fc.set(canvasSummary("ag-2", { rev: 2, bluf: "Routes done, tests next" }));

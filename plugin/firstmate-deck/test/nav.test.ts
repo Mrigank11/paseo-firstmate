@@ -94,15 +94,3 @@ test("collapsible stage headings, a focus toggle in every navigator surface, and
   assert.ok(r.page.indexOf('id="tn-fbar"') < r.page.indexOf('<div id="live">'));
   assert.match(r.page, /id="tn-fbar" role="status" data-lavish-action hidden/);
 });
-
-test("the list scrolls itself to the current card only after the captain scrolls the page, never on an update", () => {
-  const js = navScript();
-  // an update calls __tn()/renderFly(): they mark without following
-  assert.match(js, /mark\(false\);\s*\/\/ the captain's list position/);
-  assert.match(js, /unread\(\);mark\(false\);fly\.hidden=false/);
-  // only the observer's setCur follows, and only within 1.2 s of a wheel/touch/key/pointer input and not while the list is in use
-  assert.match(js, /function setCur\(id\)\{if\(id===cur\)return;cur=id;mark\(Date\.now\(\)-lastIn<1200&&!using\(\)\)\}/);
-  assert.match(js, /\["wheel","touchmove","keydown","pointerdown"\]/);
-  // the scroll itself is conditional on follow
-  assert.match(js, /if\(follow&&r===fl&&exp\)/);
-});

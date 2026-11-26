@@ -67,9 +67,7 @@ test("a live update morphs in place: frames, folds, scroll, focus and selection 
       const sel = getSelection()!; sel.removeAllRanges(); sel.addRange(range);
       w.__sel = sel.toString(); w.__sum = sum; w.__kids = [...document.getElementById("live")!.children]; w.__muts = [];
       new MutationObserver((rs) => { for (const r of rs) w.__muts.push(r); }).observe(document.getElementById("live")!, { subtree: true, childList: true, attributes: true, characterData: true });
-      const an = [...document.querySelectorAll("#live article.task[id]")].map((t) => ({ id: t.id, top: t.getBoundingClientRect().top, bottom: t.getBoundingClientRect().bottom })).find((x) => x.bottom > 70) ?? null;
-      w.__an = an;
-      return { sel: w.__sel as string, scroll: window.scrollY, an };
+      return { sel: w.__sel as string, scroll: window.scrollY };
     });
     await page.waitForTimeout(300); // let the iframe's first load and the toggle settle
     await page.evaluate(() => { (window as any).__loads = 0; (window as any).__muts.length = 0; });
@@ -91,7 +89,7 @@ test("a live update morphs in place: frames, folds, scroll, focus and selection 
       const removedProbe = w.__muts.some((r: MutationRecord) => [...r.removedNodes].some((n) => n === w.__probe || (n as Element).contains?.(w.__probe)));
       return {
         sameFrame: document.getElementById("probe") === w.__probe, loads: w.__loads, open: (document.getElementById("g-done") as HTMLDetailsElement).open,
-        scroll: window.scrollY, an: (() => { const t = w.__an && document.getElementById(w.__an.id); return t ? { id: t.id, top: t.getBoundingClientRect().top } : null; })(), focus: document.activeElement === w.__sum, sel: getSelection()!.toString(), selKept: getSelection()!.toString() === w.__sel,
+        scroll: window.scrollY, focus: document.activeElement === w.__sum, sel: getSelection()!.toString(), selKept: getSelection()!.toString() === w.__sel,
         touchedProbe: touched.length, removedProbe, muts: w.__muts.length, note: document.getElementById("live")!.textContent!.includes("Freshly renamed task"),
         kids: w.__kids.filter((k: Element) => k.isConnected).length >= w.__kids.length - 1,
         stamp: document.querySelector('[data-slot="stamp"]')!.textContent, gone: !document.getElementById("t-write-docs"),
@@ -102,9 +100,7 @@ test("a live update morphs in place: frames, folds, scroll, focus and selection 
     assert.equal(after.removedProbe, false);
     assert.equal(after.touchedProbe, 0, "nothing inside the frame's card subtree around it was rewritten");
     assert.equal(after.open, true, "the fold the captain opened stays open");
-    // the page holds the card the captain is reading where it was; cards that left or grew above it move the raw offset, not the reading position
-    if (handles.an) assert.ok(after.an && Math.abs(after.an.top - handles.an.top) <= 1, `the card in view stayed put (was ${handles.an.top}, now ${after.an?.top})`);
-    else assert.equal(after.scroll, handles.scroll, "scroll did not move");
+    assert.equal(after.scroll, handles.scroll, "scroll did not move");
     assert.equal(after.focus, true, "keyboard focus stayed on the same element");
     assert.equal(after.selKept, true, `text selection intact (was ${JSON.stringify(handles.sel.slice(0, 60))}, now ${JSON.stringify(after.sel.slice(0, 60))})`);
     assert.equal(after.note, true, "the change did arrive");

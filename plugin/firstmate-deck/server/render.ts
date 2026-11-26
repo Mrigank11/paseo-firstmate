@@ -715,9 +715,6 @@ function renderLive(model: ProjectModel, agents: Record<string, AgentView>, o: R
     else parts.push(`<section class="grp" id="g-${k}">${h}\n${rows}</section>`);
   }
   pushGroups(); // only groups, no lanes
-  // The crew canvases' stylesheet rides here and not in the page head: it arrives after the page is first written, and
-  // a page.html write reloads the page in Lavish.
-  if (o.canvas?.css) parts.push(`<style data-cv-css>\n${scaleText(o.canvas.css).replace(/<\/style/gi, "<\\/style")}\n</style>`);
   if (ctx.snapCss.size) parts.push(`<style data-cv-snap>\n${[...ctx.snapCss].map(scaleText).join("\n").replace(/<\/style/gi, "<\\/style")}\n</style>`);
   if (parts.length === 1) parts.push(`<div class="m">No tasks for this project yet.</div>`);
   // Trails for the page and the sections live outside the live block (page.html is not rewritten per comment);
@@ -773,14 +770,6 @@ function bannerHtml(b: RenderOpts["banner"]): string {
   return b ? `<div class="banner ${b.kind === "ended" ? "b-off" : "b-bad"}" role="status">${esc(b.text)}</div>` : "";
 }
 
-/** The comment that carries the frame signature in page.html (see pageSignature). */
-export const PAGE_SIG_PREFIX = "<!--fd-sig:";
-/** The frame signature a page.html on disk was written with ("" when it carries none). Reads only the head of the file. */
-export function pageSignature(head: string): string {
-  const m = /^<!doctype html>\n<!--fd-sig:([0-9a-f]{40})-->/.exec(head);
-  return m ? m[1] : "";
-}
-
 export function renderProject(model: ProjectModel, agents: Record<string, AgentView>, opts: RenderOpts): Rendered {
   const { html: live, attention } = renderLive(model, agents, opts);
   const pageFile = opts.pageFile ?? (model.page ? model.page.slice(model.page.lastIndexOf("/") + 1) : "page.html");
@@ -796,7 +785,7 @@ export function renderProject(model: ProjectModel, agents: Record<string, AgentV
 <title>${esc(model.title)} · status</title>
 <style>
 ${CSS}
-</style>
+</style>${opts.canvas?.css ? `\n<style>\n${scaleText(opts.canvas.css).replace(/<\/style/gi, "<\\/style")}\n</style>` : ""}
 </head><body>
 <!-- the task navigator: data-lavish-action keeps its clicks working in Lavish's annotate mode -->
 <aside class="tn" id="tn" aria-label="Tasks by stage" data-lavish-action hidden><div class="tn-spine"><button class="tn-tg" id="tn-open" type="button" aria-expanded="false" aria-controls="tn-full" aria-label="Show task titles" title="Show task titles">${svg(ICON.panelOpen)}</button><button class="tn-tg tn-fx" type="button" aria-pressed="false" aria-label="Focus view: show only the selected task" title="Focus view: show only the selected task">${svg(ICON.focus)}</button><div class="tn-bds" id="tn-bds"></div></div><div class="tn-full" id="tn-full"><div class="tn-top"><button class="tn-tg" id="tn-close" type="button" aria-expanded="true" aria-controls="tn-full" aria-label="Fold the task list" title="Fold the task list">${svg(ICON.panelClose)}</button><b>Tasks</b><button class="tn-tg tn-fx" type="button" aria-pressed="false" aria-label="Focus view: show only the selected task" title="Focus view: show only the selected task">${svg(ICON.focus)}</button></div><div class="tn-fl" id="tn-fl"></div></div></aside>
@@ -829,8 +818,6 @@ ${pageScript(model.project, liveFile, opts.tickSeconds, opts.marksUrl)}
   // scripts, marks url) moves it and a task, agent or stage change does not: Lavish reloads the page when page.html is
   // rewritten, so that file must stay still while crews work.
   const signature = createHash("sha1").update(shell("", "", "")).digest("hex");
-  // The signature rides in the file itself (a comment after the doctype), so a restarted plugin can tell an unchanged
-  // frame from a changed one by reading the page it wrote last time, and not rewrite (= reload) it.
-  const page = shell(live.replace(/\{TS\}/g, stampShort(opts.now)), esc(stampLong(opts.now)), bannerHtml(opts.banner)).replace("\n", `\n${PAGE_SIG_PREFIX}${signature}-->\n`);
+  const page = shell(live.replace(/\{TS\}/g, stampShort(opts.now)), esc(stampLong(opts.now)), bannerHtml(opts.banner));
   return { page, live, signature, attention };
 }

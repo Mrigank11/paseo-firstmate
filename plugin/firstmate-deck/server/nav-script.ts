@@ -19,7 +19,7 @@ export function navScript(): string {
   var mq=function(q){return window.matchMedia?window.matchMedia(q).matches:false};
   var phone=function(){return mq("(max-width:639px)")},wide=function(){return mq("(min-width:1200px)")};
   var PK="tn-exp",pref=function(){return window.__fdPref?window.__fdPref(PK):undefined},applied=null;
-  var flBack=false,exp=false,tpl="",cur=null,flyKey=null,flyPin=false,hideT=null,more={},io=null,vis={},lastFocus=null;
+  var exp=false,tpl="",cur=null,flyKey=null,flyPin=false,hideT=null,more={},io=null,vis={},lastFocus=null;
   function q(root,sel){return [].slice.call(root.querySelectorAll(sel))}
   function setExp(v,save){exp=v;body.classList.toggle("tn-exp",v);openB.setAttribute("aria-expanded",v?"true":"false");closeFly(true);
     if(save){applied=v?1:0;if(window.__fdPref)window.__fdPref(PK,applied)}}
@@ -95,12 +95,10 @@ export function navScript(): string {
     [fl,sl,fly].forEach(function(r){q(r,".tn-a").forEach(function(a){a.parentNode.classList.toggle("un",!!ids[a.getAttribute("data-t")])})})}
   window.__tn=function(){var live=$("live"),src=live&&live.querySelector("[data-tn]"),html=src?src.innerHTML:"";
     if(html!==tpl){tpl=html;var y=fl.scrollTop;build(html);fl.scrollTop=y}
-    adopt();applyFold();unread();observe();mark(false);
-    // the captain's list position comes back once, after a reload, as soon as the list is on screen
-    if(!flBack&&exp&&fl.scrollHeight>0){flBack=true;var v=window.__fdView&&window.__fdView("fl");if(v>0)fl.scrollTop=v}};
+    adopt();applyFold();unread();observe();mark()};
   // ---- flyout beside the spine
   function renderFly(){var s=fl.querySelector('.tn-st[data-k="'+flyKey+'"]');if(!s)return;
-    fly.innerHTML="";var c=s.cloneNode(true);c.classList.remove("shut");var ch=c.querySelector(".tn-h");if(ch){ch.removeAttribute("aria-expanded");ch.tabIndex=-1}fly.appendChild(c);applyMore(fly);unread();mark(false);fly.hidden=false;
+    fly.innerHTML="";var c=s.cloneNode(true);c.classList.remove("shut");var ch=c.querySelector(".tn-h");if(ch){ch.removeAttribute("aria-expanded");ch.tabIndex=-1}fly.appendChild(c);applyMore(fly);unread();mark();fly.hidden=false;
     var b=bds.querySelector('.tn-bd[data-k="'+flyKey+'"]');
     if(b){var r=b.getBoundingClientRect();fly.style.top=Math.max(8,Math.min(r.top,window.innerHeight-fly.offsetHeight-8))+"px"}
     q(bds,".tn-bd").forEach(function(x){x.setAttribute("aria-expanded",x.getAttribute("data-k")===flyKey?"true":"false")})}
@@ -150,18 +148,13 @@ export function navScript(): string {
     else if(exp&&!wide()&&!phone()){setExp(false,false);openB.focus()}});
   // ---- the card in view: its title and its stage badge are marked
   function stageOf(id){var a=fl.querySelector('.tn-a[data-t="'+id+'"]'),s=a&&a.closest(".tn-st");return s?s.getAttribute("data-k"):null}
-  function mark(follow){q(d,".tn-a[aria-current]").forEach(function(a){a.removeAttribute("aria-current")});
+  function mark(){q(d,".tn-a[aria-current]").forEach(function(a){a.removeAttribute("aria-current")});
     q(bds,".tn-bd[aria-current]").forEach(function(b){b.removeAttribute("aria-current")});if(!cur)return;
     [fl,sl,fly].forEach(function(r){var a=r.querySelector('.tn-a[data-t="'+cur+'"]');if(!a)return;a.setAttribute("aria-current","true");
-      if(follow&&r===fl&&exp){var ar=a.getBoundingClientRect(),fr=fl.getBoundingClientRect();
+      if(r===fl&&exp){var ar=a.getBoundingClientRect(),fr=fl.getBoundingClientRect();
         if(ar.top<fr.top||ar.bottom>fr.bottom)fl.scrollTop+=ar.top-fr.top-fr.height/3}});
     var b=bds.querySelector('.tn-bd[data-k="'+stageOf(cur)+'"]');if(b)b.setAttribute("aria-current","true")}
-  // The list follows the page only when the captain is scrolling the page (a wheel, touch, key or scrollbar drag in the last
-  // 1.2 s) and is not using the list: never because an update moved a card under the observer.
-  var lastIn=0,tick=function(){lastIn=Date.now()};["wheel","touchmove","keydown","pointerdown"].forEach(function(ev){d.addEventListener(ev,tick,{passive:true,capture:true})});
-  function using(){return aside.matches(":hover")||aside.contains(d.activeElement)}
-  var flT=null;fl.addEventListener("scroll",function(){if(!flBack||!window.__fdView)return;clearTimeout(flT);flT=setTimeout(function(){window.__fdView("fl",fl.scrollTop)},300)},{passive:true});
-  function setCur(id){if(id===cur)return;cur=id;mark(Date.now()-lastIn<1200&&!using())}
+  function setCur(id){if(id===cur)return;cur=id;mark()}
   function observe(){if(!window.IntersectionObserver)return;if(io)io.disconnect();vis={};
     io=new IntersectionObserver(function(es){es.forEach(function(e){vis[e.target.id]=e.isIntersecting});
       var best=null,bt=1e9;Object.keys(vis).forEach(function(id){var t=vis[id]&&$(id);if(!t)return;var top=t.getBoundingClientRect().top;if(top<bt){bt=top;best=id}});

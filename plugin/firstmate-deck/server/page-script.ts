@@ -54,7 +54,7 @@ export function pageScript(project: string, liveFile: string, tickSeconds: numbe
   // the task navigator (nav-script.ts) rebuilds from the live block's data-tn template and re-reads the unread marks
   function tn(){if(window.__tn)try{window.__tn()}catch(e){}}
   var pt=null;
-  function push(){if(!MU)return;clearTimeout(pt);pt=setTimeout(function(){try{var o={};Object.keys(S).forEach(function(k){if(k!=="_r"&&k!=="_v")o[k]=S[k]});
+  function push(){if(!MU)return;clearTimeout(pt);pt=setTimeout(function(){try{var o={};Object.keys(S).forEach(function(k){if(k!=="_r")o[k]=S[k]});
     fetch(MU,{method:"POST",headers:{"Content-Type":"text/plain"},body:JSON.stringify({o:o,r:R})}).catch(function(){})}catch(e){}},400)}
   function pull(){if(!MU)return;try{fetch(MU).then(function(r){return r.json()}).then(function(j){var ch=false,rr=(j&&j.r)||{},oo=(j&&j.o)||{};
     Object.keys(rr).forEach(function(k){if(R[k]!==rr[k]){R[k]=rr[k];ch=true}});
@@ -75,24 +75,6 @@ export function pageScript(project: string, liveFile: string, tickSeconds: numbe
     document.querySelectorAll("[data-slot]").forEach(function(s){var k=s.getAttribute("data-slot"),src=null;
       el.querySelectorAll("[data-slot-for]").forEach(function(x){if(x.getAttribute("data-slot-for")===k)src=x});
       if(src&&s.innerHTML!==src.innerHTML)s.innerHTML=src.innerHTML});tn();attn()}
-  // ---- the captain's place. Kept in this tab's own state (S._v, never synced to other browsers): the card at the top of the
-  // screen and how far below the top edge it sits, plus the navigator list's scroll. A live update holds that card in place
-  // (browser scroll anchoring does not survive the morph), and a reload puts the captain back on it.
-  var V0=(S._v&&typeof S._v==="object")?S._v:{};S._v=V0;
-  window.__fdView=function(k,v){if(arguments.length<2)return V0[k];V0[k]=v;save()};
-  function anchorOf(){var ts=document.querySelectorAll("#live article.task[id]");
-    for(var i=0;i<ts.length;i++){var r=ts[i].getBoundingClientRect();if(r.bottom>70)return{id:ts[i].id,top:r.top}}return null}
-  function hold(a,y){if(y<5){if(window.scrollY!==0)window.scrollTo(0,0);return}
-    var t=a&&document.getElementById(a.id);if(t){var dy=t.getBoundingClientRect().top-a.top;if(Math.abs(dy)>1)window.scrollBy(0,dy);return}
-    if(window.scrollY!==y)window.scrollTo(0,y)}
-  var vt=null,placed=false;
-  function keepView(){clearTimeout(vt);vt=setTimeout(function(){var a=anchorOf();V0.a=a?a.id:null;V0.o=a?Math.round(a.top):0;V0.y=Math.round(window.scrollY);save()},250)}
-  window.addEventListener("scroll",function(){if(placed)keepView()},{passive:true});
-  window.addEventListener("pagehide",function(){if(!placed)return;var a=anchorOf();V0.a=a?a.id:null;V0.o=a?Math.round(a.top):0;V0.y=Math.round(window.scrollY);save()});
-  function place1(){if(placed)return;placed=true;
-    if(location.hash&&document.getElementById(location.hash.slice(1)))return;
-    var t=V0.a&&document.getElementById(V0.a);if(t){var dy=t.getBoundingClientRect().top-V0.o;if(Math.abs(dy)>1)window.scrollBy(0,dy)}
-    else if(V0.y>0&&window.scrollY===0)window.scrollTo(0,V0.y)}
   // ---- the browser tab and the "new" dots. The live block carries (data-attn) the Needs-you count, one attention key per
   // task and the keys the captain last saw. Unseen = keys that differ from the seen ones (nothing is unseen until
   // something has been stored). Looking at the page for 3 s while its tab is visible marks what it showed as seen, and
@@ -166,7 +148,7 @@ export function pageScript(project: string, liveFile: string, tickSeconds: numbe
   window.__fdVer=function(hash,seq,iso){seen(seq,iso);if(hash&&hash!==have&&!loading)full()};
   window.__fdLive=function(html,iso,seq,hash){seen(seq,iso);loading=false;if(hash)have=hash;
     var el=live();if(!el||html===last)return;last=html;
-    var fk=fkey();snapshot();var y=window.scrollY,an=placed?anchorOf():null,M="<!--LIVE-",I=window.Idiomorph;
+    var fk=fkey();snapshot();var y=window.scrollY,M="<!--LIVE-",I=window.Idiomorph;
     if(I&&I.morph&&window.Element&&el instanceof window.Element){
       // Morph, do not replace: build the new block off-screen, bring it in line with what this browser has done to the
       // page (open folds, read marks, picked options), then let the morph touch only the nodes that differ. Nothing
@@ -175,8 +157,8 @@ export function pageScript(project: string, liveFile: string, tickSeconds: numbe
       I.morph(el,nx,{morphStyle:"innerHTML",restoreFocus:true,callbacks:{
         beforeAttributeUpdated:function(a,n){if(a==="open"&&n.id&&n.id in S)return false},
         beforeNodeMorphed:function(n,m){if(n.nodeName==="IFRAME"&&m.nodeName==="IFRAME"&&n.getAttribute("srcdoc")===m.getAttribute("srcdoc"))return false}}});
-      arrange();fill();refocus(fk);if(placed)hold(an,y);else place1();return}
-    el.innerHTML=M+"START-->"+html+M+"END-->";restore(el);arrange();reapply(el);anchorIds(el);fill();refocus(fk);if(placed)hold(an,y);else place1()};
+      arrange();fill();refocus(fk);if(window.scrollY!==y)window.scrollTo(0,y);return}
+    el.innerHTML=M+"START-->"+html+M+"END-->";restore(el);arrange();reapply(el);anchorIds(el);fill();refocus(fk);window.scrollTo(0,y)};
   function load(file,done){var s=document.createElement("script");s.src=file+"?t="+Date.now();s.onload=s.onerror=function(){s.remove();if(done)done()};document.head.appendChild(s)}
   // a full fetch that never answers must not block the next one for good
   function full(){loading=true;load(F,function(){setTimeout(function(){loading=false},4000)})}

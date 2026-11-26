@@ -111,7 +111,7 @@ test("page script in a fake DOM: click marks optimistically, queues, sends, surv
     querySelectorAll: () => [], createElement: () => ({}), head: { appendChild() {} },
   };
   const queued: any[] = []; let sent = 0;
-  const win: any = { name: "", scrollY: 0, scrollTo() {}, scrollBy() {}, addEventListener() {}, lavish: { queuePrompt: (p: string, o: any) => queued.push([p, o]), sendQueuedPrompts: () => { sent++; } } };
+  const win: any = { name: "", scrollY: 0, scrollTo() {}, lavish: { queuePrompt: (p: string, o: any) => queued.push([p, o]), sendQueuedPrompts: () => { sent++; } } };
   const js = pageScript("p", "page.live.js", 1);
   new Function("document", "window", "location", "localStorage", "setInterval", js)(doc, win, { hash: "" }, undefined, () => 0);
   click!({ target: { closest: (s: string) => (s === "button.opt" ? btns[1] : null) } });

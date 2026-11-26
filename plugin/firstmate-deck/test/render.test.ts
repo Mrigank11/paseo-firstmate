@@ -124,7 +124,7 @@ test("signature covers the page's frame only: tasks, agents and stages never mov
   const m4 = structuredClone(model);
   m4.sections[0].content += "\nmore";
   assert.notEqual(renderProject(m4, agents, opts).signature, r.signature, "section content");
-  assert.equal(renderProject(model, agents, { ...opts, canvas: { status: "ok", css: ".x{}", summaries: {}, cards: {} } }).signature, r.signature, "canvas css rides in live, not the frame");
+  assert.notEqual(renderProject(model, agents, { ...opts, canvas: { status: "ok", css: ".x{}", summaries: {}, cards: {} } }).signature, r.signature, "canvas css");
 });
 
 test("agent step text is escaped; banner renders", () => {

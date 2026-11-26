@@ -44,16 +44,15 @@ test("the card pulls in the canvas: verdict, BLUF, steps strip with the Now row,
   assert.ok(!html.includes("stp") && !html.includes("<iframe"));
 });
 
-test("the full embed card sits in a collapsed fold (the focus view opens it), and its stylesheet rides once in the live payload (not the page head)", () => {
+test("the full embed card sits in a collapsed fold (the focus view opens it), and its stylesheet is inlined once in the page head", () => {
   const r = render(project([T]), data());
   const html = card(r.live);
   assert.match(html, /<details class="cnotes cv-d" id="cvd-ag-1"><summary>Full canvas<\/summary><div class="cv-f acv"><div class="blk">FULL<\/div><\/div><\/details>/);
-  assert.equal(r.live.split(".acv .blk{color:red}").length - 1, 1, "once, in one <style data-cv-css>");
-  assert.ok(r.live.includes("<style data-cv-css>"));
-  assert.ok(!r.page.slice(0, r.page.indexOf("<body>")).includes(".acv .blk"), "not in the page head: a page.html write reloads the page");
+  assert.equal(r.page.split(".acv .blk{color:red}").length - 1, 1);
+  assert.ok(r.page.indexOf(".acv .blk") < r.page.indexOf("<body>"));
   assert.match(r.page, /body\.tn-focus \.task\.tn-sel \.cv\.has-full \.cv-c\{display:none\}/);
   assert.match(r.page, /q\(t,"details\.cv-d"\)\.forEach\(function\(x\)\{x\.open=true\}\)/, "the focus view opens the fold");
-  assert.ok(!html.includes(".acv .blk{color:red}"), "css is hoisted out of the card");
+  assert.ok(!r.live.includes(".acv .blk{color:red}"), "css is page-level, not per card");
 });
 
 test("Needs you: the whole canvas is open and the BLUF is uncut; a running card keeps the compact strip", () => {
@@ -75,16 +74,12 @@ test("Needs you: the whole canvas is open and the BLUF is uncut; a running card 
   assert.ok(run.includes("cv-bluf") && !run.includes(long) && !run.includes("cv-whole") && !/id="cvd-ag-1" open/.test(run));
 });
 
-test("a canvas that moved changes live, and a css change rides in live, not in page.html", () => {
+test("a canvas that moved changes live, and the css change moves the page signature", () => {
   const m = project([T]);
   const a = render(m, data()), b = render(m, data({}, summary("ag-1", { rev: 2, bluf: "Tests green" })));
   assert.notEqual(a.live, b.live);
   assert.equal(a.signature, b.signature, "card content rides in live.js, not in page.html");
-  const c = render(m, data({ css: ".x{}" }));
-  assert.equal(a.signature, c.signature, "crew canvas css must not move the page signature");
-  assert.equal(a.page.includes(".x{}"), false);
-  assert.equal(c.page.replace(/<!--LIVE-START-->[\s\S]*<!--LIVE-END-->/, ""), a.page.replace(/<!--LIVE-START-->[\s\S]*<!--LIVE-END-->/, ""), "page.html outside #live is identical");
-  assert.match(c.live, /<style data-cv-css>\n[\s\S]*\.x\{\}/);
+  assert.notEqual(a.signature, render(m, data({ css: ".x{}" })).signature);
 });
 
 test("without a canvas the card is exactly the registry-and-Paseo card (recent steps, no fragment)", () => {
