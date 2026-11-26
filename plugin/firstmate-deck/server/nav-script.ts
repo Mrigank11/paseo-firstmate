@@ -48,15 +48,30 @@ export function navScript(): string {
   function shut(k){return window.__fdPref?window.__fdPref("tn-c-"+k)===1:false}
   function applyShut(root){q(root,".tn-st").forEach(function(s){var on=shut(s.getAttribute("data-k")),h=s.querySelector(".tn-h");
     s.classList.toggle("shut",on);if(h)h.setAttribute("aria-expanded",on?"false":"true")})}
-  // ---- fold a group (task tree): the choice ("tn-f-<group>", 1 = folded) is stored like the stage fold. It hides a group's
-  // children in the tree and the chips and bar on its card; the cards of its children and the Needs-you list are untouched.
-  function folded(g){return window.__fdPref?window.__fdPref("tn-f-"+g)===1:false}
-  function applyFold(){[fl,sl].forEach(function(r){q(r,"li.tn-g[data-g]").forEach(function(li){var on=folded(li.getAttribute("data-g")),b=li.querySelector(":scope>.tn-fold");
-      li.classList.toggle("folded",on);if(b)b.setAttribute("aria-expanded",on?"false":"true")})});
-    q(d,"#live .gcard").forEach(function(c){var b=c.querySelector(".gf"),g=b&&b.getAttribute("data-fold"),on=!!g&&folded(g);
-      c.classList.toggle("gfold",on);if(b){b.setAttribute("aria-expanded",on?"false":"true");var sp=b.querySelector("span");if(sp)sp.textContent=on?"Unfold":"Fold"}})}
-  d.addEventListener("click",function(e){var b=e.target.closest&&e.target.closest("[data-fold]");if(!b||!window.__fdPref)return;e.preventDefault();
-    var g=b.getAttribute("data-fold");window.__fdPref("tn-f-"+g,folded(g)?0:1);applyFold()});
+  // ---- fold a group (task tree). Two folds, both kept in prefs: a group's strip folds ALL of its tasks in the lanes after Needs you
+  // ("tn-f-<group>", 1 = folded); a cluster header folds just that group's run inside one lane ("gho-<lane>-<group>", 1 = flipped
+  // from the lane's default, which is folded in Parked and Done, open elsewhere). Needs you is never folded, so an ask is never
+  // hidden: the headers say how many tasks a fold hides, the strip still counts the asks. One style tag carries the rules, so a
+  // live swap needs no re-application beyond the header classes.
+  var fst=null;
+  function pref1(k){return window.__fdPref?window.__fdPref(k)===1:false}
+  function folded(g){return pref1("tn-f-"+g)}
+  function lane(h){var l=h.closest&&h.closest(".grp");return l?l.id:""}
+  function applyFold(){
+    if(!fst){fst=d.createElement("style");d.head.appendChild(fst)}
+    var rules=[],seenG={};
+    q(d,"#live .gs .gf[data-fold]").forEach(function(b){var g=b.getAttribute("data-fold"),on=folded(g),c=b.closest(".gcard"),sp=b.querySelector("span");
+      if(c)c.classList.toggle("gfold",on);b.setAttribute("aria-expanded",on?"false":"true");if(sp)sp.textContent=on?"Unfold":"Fold";
+      if(on&&!seenG[g]){seenG[g]=1;rules.push('#live .grp:not(#g-you) .task[data-in~="'+g+'"]:not(.gcard){display:none}')}});
+    q(d,"#live .gh[data-gh]").forEach(function(h){var g=h.getAttribute("data-gh"),l=lane(h),quiet=h.getAttribute("data-quiet")==="1",
+        flip=pref1("gho-"+l+"-"+g),byLane=quiet!==flip,byGroup=(h.getAttribute("data-in")||"").split(" ").some(function(x){return x&&folded(x)}),on=byLane||byGroup,b=h.querySelector(".ghb");
+      h.classList.toggle("gfold",on);if(b)b.setAttribute("aria-expanded",on?"false":"true");
+      if(byLane)rules.push('#live #'+l+' .task[data-gp="'+g+'"]{display:none}')});
+    fst.textContent=rules.join("")}
+  d.addEventListener("click",function(e){var t=e.target,b=t.closest&&t.closest("[data-fold]");
+    if(b&&window.__fdPref){e.preventDefault();var g=b.getAttribute("data-fold");window.__fdPref("tn-f-"+g,folded(g)?0:1);applyFold();return}
+    var hb=t.closest&&t.closest(".gh .ghb");
+    if(hb&&window.__fdPref){e.preventDefault();var h=hb.closest(".gh"),k="gho-"+lane(h)+"-"+h.getAttribute("data-gh");window.__fdPref(k,pref1(k)?0:1);applyFold()}});
   // ---- build from the template
   function stages(){return q(fl,".tn-st")}
   function applyMore(root){q(root,".tn-st[data-cap]").forEach(function(s){var on=!!more[s.getAttribute("data-k")],b=s.querySelector(".tn-more");
@@ -153,7 +168,7 @@ export function navScript(): string {
     if(!zbar){zbar=d.createElement("div");zbar.className="tn-zbar";zbar.setAttribute("data-lavish-action","");zbar.hidden=true;var lv=$("live");lv.parentNode.insertBefore(zbar,lv)}
     if(!g){zst.textContent="";zbar.hidden=true;zbar.textContent="";return}
     var sel='[data-in~="'+g+'"]';
-    zst.textContent='#live .task:not('+sel+'){display:none}#live .grp:not(:has(.task'+sel+')){display:none}';
+    zst.textContent='#live .task:not('+sel+'){display:none}#live .gh:not('+sel+'){display:none}#live .grp:not(:has(.task'+sel+')){display:none}';
     var a=fl.querySelector('.tn-a[data-t="t-'+g+'"]');
     zbar.innerHTML="";var t=el("span","","Zoomed into ");var b=el("b","",a?a.firstChild.textContent:g);t.appendChild(b);zbar.appendChild(t);
     var x=el("button","gz","Show all tasks");x.type="button";x.setAttribute("data-zoom-off","");zbar.appendChild(x);zbar.hidden=false;
