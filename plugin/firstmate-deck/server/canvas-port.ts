@@ -79,8 +79,6 @@ export class CanvasPort {
   constructor(o: CanvasPortOpts) { this.o = o; }
 
   get status(): CanvasStatus { return this.st; }
-  /** A canvas URL is set (whether or not it answered yet). */
-  get configured(): boolean { return !!this.o.url().trim(); }
   summary(agentId: string): FmSummary | undefined { return this.sums.get(agentId); }
 
   /** Everything a render needs, for the agents `ids` (all wanted agents when omitted). */

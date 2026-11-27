@@ -27,7 +27,7 @@ test("the template lists every non-empty stage in page order, with its count and
 
 test("each task appears in the navigator once, linking to its own card", () => {
   const links = [...tpl.matchAll(/<a class="tn-a" href="#(t-[^"]+)" data-t="\1"/g)].map((m) => m[1]);
-  const cards = [...r.live.matchAll(/<article [^>]*class="task[^"]*" id="(t-[^"]+)"/g)].map((m) => m[1]);
+  const cards = [...r.live.matchAll(/<article class="task[^"]*" id="(t-[^"]+)"/g)].map((m) => m[1]);
   assert.deepEqual([...links].sort(), [...cards].sort());
   assert.equal(new Set(links).size, links.length);
   assert.equal(stages.reduce((n, s) => n + (s[1] as number), 0), links.length);
