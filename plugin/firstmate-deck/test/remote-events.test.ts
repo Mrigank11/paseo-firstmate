@@ -320,16 +320,57 @@ test("a crew that stopped working before it closed says nothing, even while that
   r.stop();
 });
 
-test("a host that goes offline during the grace says nothing, even if it is back before the grace ends", async () => {
-  for (const back of [false, true]) {
+test("a host that goes offline during the grace says nothing while away; a crew still closed after it is back says so once", async () => {
+  const { s, r } = await closes();
+  s.src.set(s.host, false);
+  await r.flush();
+  await grace(s, r);
+  assert.deepEqual(names(s.emitted), []);
+  s.src.set(s.host, true);
+  await r.flush();
+  assert.deepEqual(names(s.emitted), [], "not before a fresh grace");
+  await grace(s, r);
+  await grace(s, r);
+  assert.deepEqual(names(s.emitted), ["agent.closed"]);
+  s.src.set(s.host, false);
+  await r.flush();
+  s.src.set(s.host, true);
+  await r.flush();
+  await grace(s, r);
+  assert.deepEqual(names(s.emitted), ["agent.closed"], "another trip away says nothing more");
+  r.stop();
+});
+
+test("a crew that is working or idle again when its host is back says nothing about the close", async () => {
+  for (const now of [RUN("t2"), { status: "idle" as const }]) {
     const { s, r } = await closes();
     s.src.set(s.host, false);
     await r.flush();
-    if (back) { s.src.set(s.host, true); await r.flush(); }
+    s.host.upsert(agent("crew", now), false);
+    s.src.set(s.host, true);
+    await r.flush();
     await grace(s, r);
-    assert.deepEqual(names(s.emitted), [], `back: ${back}`);
+    assert.ok(!names(s.emitted).includes("agent.closed"), now.status);
     r.stop();
   }
+});
+
+test("a close still in its grace when the plugin stops is reported after the restart", async () => {
+  const root = mkdtempSync(join(tmp(), "remote-close-"));
+  const store = fileStore(() => root);
+  const s = setup();
+  s.host.upsert(agent("crew", RUN("t1")));
+  s.src.set(s.host, true);
+  const a = s.start({ store });
+  await a.flush();
+  s.host.upsert(agent("crew", { status: "closed" }));
+  await a.flush();
+  a.stop();
+  const b = s.start({ store });
+  await b.flush();
+  await grace(s, b);
+  assert.deepEqual(names(s.emitted), ["agent.closed"]);
+  b.stop();
 });
 
 test("a host no longer online when the grace ends says nothing, though no change was announced", async () => {
@@ -337,6 +378,13 @@ test("a host no longer online when the grace ends says nothing, though no change
   s.src.online.clear();
   await grace(s, r);
   assert.deepEqual(names(s.emitted), []);
+  // looked at again once it is back
+  s.src.set(s.host, true);
+  await r.flush();
+  s.runTimers((ms) => ms === 600_000);
+  await r.flush();
+  await grace(s, r);
+  assert.deepEqual(names(s.emitted), ["agent.closed"]);
   r.stop();
 });
 

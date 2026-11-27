@@ -211,6 +211,13 @@ export function startRemoteEvents(o: RemoteEventsOptions): { stop(): void; flush
   /** "serverId/agentId" -> cancel: crews that closed while working, waiting out their grace. */
   const closing = new Map<string, () => void>();
   const forgetClose = (key: string): void => { closing.get(key)?.(); closing.delete(key); };
+  /** A close that cannot be confirmed now (host away, plugin stopping) is judged again when the crew is next seen. */
+  const unsettle = (key: string): void => {
+    forgetClose(key);
+    const slash = key.indexOf("/");
+    const k = known.get(key.slice(0, slash))?.get(key.slice(slash + 1));
+    if (k) { k.closed = false; k.seen = "running"; }
+  };
 
   const enqueue = (serverId: string, fn: () => Promise<void>): void => {
     const run = (chains.get(serverId) ?? Promise.resolve()).then(fn).catch((e) => o.log(`remote events (${serverId}): ${(e as Error)?.stack ?? e}`)).then(save);
@@ -266,8 +273,9 @@ export function startRemoteEvents(o: RemoteEventsOptions): { stop(): void; flush
       const clients = await o.hosts.clients().catch((e) => { o.log(`remote events: host list failed: ${e}`); return null; });
       if (!clients || stopped) return;
       const online = new Map(clients.map((c) => [c.serverId, c]));
-      // a host that went offline: what closed on it just before says nothing (quitting Paseo closes every agent first)
-      for (const key of [...closing.keys()]) if (!online.has(key.slice(0, key.indexOf("/")))) forgetClose(key);
+      // a host that went offline: what closed on it just before says nothing yet (quitting Paseo closes every agent first)
+      for (const key of [...closing.keys()]) if (!online.has(key.slice(0, key.indexOf("/")))) unsettle(key);
+      save();
       for (const [id, c] of conns) if (!online.has(id)) { o.log(`remote events: host ${c.label} offline, subscription dropped`); disconnect(c); }
       for (const c of clients) {
         const cur = conns.get(c.serverId);
@@ -462,10 +470,10 @@ export function startRemoteEvents(o: RemoteEventsOptions): { stop(): void; flush
     closing.set(key, schedule(() => enqueue(serverId, async () => {
       if (!closing.delete(key)) return;
       const h = (await o.hosts.clients()).find((x) => x.serverId === serverId);
-      if (!h) return;
-      const r = await timed(h.api.agents.ref(id).refresh(), "agent refresh").catch(() => undefined);
+      const r = h && (await timed(h.api.agents.ref(id).refresh(), "agent refresh").catch(() => undefined));
       const c = conns.get(serverId);
-      if (c && r?.agent?.status === "closed") emit(c, "agent.closed", { agent: hookAgent(c, r.agent) });
+      if (!c || r === undefined) return unsettle(key);
+      if (r?.agent?.status === "closed") emit(c, "agent.closed", { agent: hookAgent(c, r.agent) });
     }), closeGraceMs));
   };
 
@@ -583,7 +591,7 @@ export function startRemoteEvents(o: RemoteEventsOptions): { stop(): void; flush
       offChange();
       cancelSync?.();
       cancelWait?.();
-      for (const key of [...closing.keys()]) forgetClose(key);
+      for (const key of [...closing.keys()]) unsettle(key);
       for (const c of [...conns.values()]) disconnect(c);
       save();
       stopped = true;
