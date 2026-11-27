@@ -11,6 +11,7 @@
 //
 // It cannot loop: reminders only go to an idle owner, one per item per gap, at most 2 per item, 1 per crew, all remembered in
 // state/enforcer.json across restarts. The state it writes is the plugin's own; it never touches fleet.json.
+// Crews on other Paseo hosts: an item keeps its count while its host is offline, and each host's checks queue on their own.
 import { mkdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { PortSelector } from "./paseo-port.ts";
@@ -64,7 +65,7 @@ export class Enforcer {
   private pending = new Set<string>();
   private stopped = false;
   private published = false;
-  private chain: Promise<unknown> = Promise.resolve();
+  private chains = new Map<string, Promise<unknown>>(); // one per host ("" = this one): a hung host holds up only its own
 
   constructor(o: EnforcerOptions) {
     this.o = o;
@@ -124,7 +125,9 @@ export class Enforcer {
     const byId = new Map(snap.rows.map((r) => [r.id, r]));
     for (const [task, e] of Object.entries(s.items)) {
       const row = byId.get(task);
-      // the item is over when the task is gone or its situation moved on; a stalled item stays while its situation does
+      // the item is over when the task is gone or its situation moved on; a stalled item stays while its situation does.
+      // A row that is only unknown because its host is offline says nothing about the situation.
+      if (row?.flags.some((f) => f.key === "host-offline")) continue;
       if (!row || row.fp !== e.fp || (row.group !== "fm" && !isStalledRow(row))) { delete s.items[task]; changed = true; }
     }
     const liveCrews = new Set(snap.rows.map((r) => r.agentId).filter(Boolean));
@@ -167,7 +170,8 @@ export class Enforcer {
       this.timers.delete(t);
       this.pending.delete(key);
       if (this.stopped) return;
-      this.chain = this.chain.then(() => this.check(agentId, afterTurn)).catch((e) => this.o.log(`enforcer failed: ${(e as Error)?.stack ?? e}`));
+      const host = this.o.snapshot()?.rows.find((r) => r.agentId === agentId && r.owner === "crew")?.host ?? "";
+      this.chains.set(host, (this.chains.get(host) ?? Promise.resolve()).then(() => this.check(agentId, afterTurn)).catch((e) => this.o.log(`enforcer failed: ${(e as Error)?.stack ?? e}`)));
     }, this.settle());
     t.unref?.();
     this.timers.add(t);
