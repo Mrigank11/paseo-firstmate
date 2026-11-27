@@ -12,7 +12,7 @@ Named lanes map a task's role to an exact launch config. The first mate infers e
 - `contributor` — `profile:fm-contributor`  (the default)
 - `fallback`    — `profile:fm-fallback`, used for a `contributor` task when `fm-contributor` cannot start
 
-The first mate reads the profile with `list_profiles` and copies its fields into `create_agent`. A raw `provider/model · mode · features` spec is legal only as a per-task override.
+The first mate reads the profile with `list_profiles` and copies its fields into `create_agent`. The deck plugin refuses a crew launch that matches no `fm-*` profile, so a model override needs its own `fm-<name>` profile in Paseo (`docs/PROFILES.md`, "Launch check"); add the line `profile-check: off` to switch that check off.
 
 **Lane assignment** (role → lane):
 
