@@ -12,7 +12,8 @@
 #
 #   bin/fleet get <id>                print one task entry (compact JSON)
 #   bin/fleet by-agent <agentId>      the entry of the task an agent works on: its fm.task label first, then the archive
-#                                     (agents/agentId lists). Prints nothing for an agent that is not crew
+#                                     (agents/agentId lists). Prints nothing for an agent that is not crew. Agents of every
+#                                     Paseo host count, here and below (docs/STATE.md, "Crews on other Paseo hosts")
 #   bin/fleet stage <id>              the task's COMPUTED stage (JSON): {stage, group, owner, reason, clears, agentId, flags,
 #                                     source}. The deck plugin's snapshot (state/stages.json, the page's own evaluation) when
 #                                     fresh, else computed locally and marked source:"local" (degraded: no comments, no last

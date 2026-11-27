@@ -193,9 +193,9 @@ If the write is refused, the error names what is missing or out of order: fix ex
 // ---------- agents ----------
 
 /** The task's current agent (newest live one, else the newest archived), or --agent. */
-function agentOf(root: string, task: string, override?: string): string {
+async function agentOf(root: string, task: string, override?: string): Promise<string> {
   if (override) return override;
-  const mine = labelledAgents([task]).filter((r) => r.task === task);
+  const mine = (await labelledAgents(root, [task])).filter((r) => r.task === task);
   const cur = currentAgent(mine.map((r) => ({ ...r, id: r.id })));
   if (!cur) die(`no agent carries fm.task=${task}`);
   return cur.id;
@@ -225,7 +225,7 @@ async function answer(root: string, args: string[]): Promise<void> {
   const [task, rawAsk, value] = args;
   if (!task || !rawAsk || (decline === undefined && value === undefined)) die("usage: bin/page canvas-answer <task> <askId> <value> | --decline \"<why>\" [--agent <id>]");
   const askId = rawAsk.replace(/^c-/, ""); // the page's option target is t-<task>#c-<askId>
-  const agentId = agentOf(root, task, override);
+  const agentId = await agentOf(root, task, override);
   let key = "";
   try { key = readFileSync(keyFile(), "utf8").trim(); } catch { die(`cannot read the relay key ${keyFile()}: is agent-canvas running on this daemon? (AGENT_CANVAS_KEY_FILE overrides)`); }
   const r = await fetch(`${baseUrl(root)}/api/fm/deliver`, {
@@ -243,7 +243,7 @@ async function snapshot(root: string, args: string[]): Promise<void> {
   const override = takeFlag(args, "--agent");
   const task = args[0];
   if (!task) die("usage: bin/page canvas-snapshot <task> [--agent <id>]");
-  const agentId = agentOf(root, task, override);
+  const agentId = await agentOf(root, task, override);
   const base = baseUrl(root);
   const enc = encodeURIComponent(agentId);
   let card = await getText(`${base}/api/fm/card/${enc}`).catch(() => null);
@@ -265,11 +265,11 @@ async function snapshot(root: string, args: string[]): Promise<void> {
 }
 
 /** Live crew agents (of `project`'s open tasks, or all) whose `canvas.relay` label names some other agent. */
-function relabel(root: string, newId: string, project?: string): void {
+async function relabel(root: string, newId: string, project?: string): Promise<void> {
   // the checkout-wide first mate (no project) re-points only the crews of pages that have no claim of their own
   const tasks = loadAllLive(root).filter((t) => (project ? t.project === project : !t.project || !projectClaimedId(root, t.project)) && t.state !== "done" && t.state !== "failed");
   if (!tasks.length) return;
-  const recs = labelledAgents(tasks.map((t) => t.id));
+  const recs = await labelledAgents(root, tasks.map((t) => t.id));
   const ids = new Set<string>();
   for (const t of tasks) {
     const mine: Rec[] = recs.filter((r) => r.task === t.id && !r.archived);
@@ -287,6 +287,6 @@ switch (cmd) {
   case "snippet": { const kind = takeFlag(rest, "--kind"); process.stdout.write(snippet(root, rest[0] ?? "", kind ?? "issue")); break; }
   case "answer": await answer(root, rest); break;
   case "snapshot": await snapshot(root, rest); break;
-  case "relabel": if (!rest[0]) die("relabel needs the new first mate's agent id"); relabel(root, rest[0], rest[1]); break;
+  case "relabel": if (!rest[0]) die("relabel needs the new first mate's agent id"); await relabel(root, rest[0], rest[1]); break;
   default: die(`unknown command '${cmd}'`);
 }

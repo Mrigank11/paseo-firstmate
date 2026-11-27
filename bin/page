@@ -151,21 +151,51 @@ claimed_agent() { # [project]
   printf '%s' "$id"
 }
 
-# Is $1 an agent that lives on this daemon and is not archived?
+# ---------- agents on other Paseo hosts ----------
+# A call to another host is bounded (PASEO_HOST_TIMEOUT seconds, where timeout(1) exists) so a sleeping one cannot hang us.
+bounded() { if command -v timeout >/dev/null 2>&1; then timeout "${PASEO_HOST_TIMEOUT:-10}" "$@"; else "$@"; fi; }
+
+# What `--host` accepts for each other host that is enabled and online (none on a Paseo without `host`).
+host_targets() {
+  local home=() out; mapfile -t home < <(paseo_home_args)
+  out="$(bounded paseo host ls --json "${home[@]}" 2>/dev/null)" || return 0
+  jq -r '.[]? | select(.enabled != false and .status == "online") | .targetDescription // empty' <<<"$out" 2>/dev/null || true
+}
+
+# `paseo inspect <id> --json` from this daemon, else from the online host that has the agent.
+agent_inspect() { # agent-id
+  local meta t home=(); mapfile -t home < <(paseo_home_args)
+  if meta="$(paseo inspect "$1" --json "${home[@]}" 2>/dev/null)" && [[ -n "$meta" ]]; then printf '%s' "$meta"; return 0; fi
+  for t in $(host_targets); do
+    if meta="$(bounded paseo inspect "$1" --json --host "$t" 2>/dev/null)" && [[ -n "$meta" ]]; then printf '%s' "$meta"; return 0; fi
+  done
+  return 1
+}
+
+# Set a label on an agent, on this daemon or else on the online host that has it.
+agent_label() { # agent-id key=value
+  local t home=(); mapfile -t home < <(paseo_home_args)
+  paseo agent update "$1" --label "$2" "${home[@]}" >/dev/null 2>&1 && return 0
+  for t in $(host_targets); do
+    bounded paseo agent update "$1" --label "$2" --host "$t" >/dev/null 2>&1 && return 0
+  done
+  return 1
+}
+
+# Is $1 an agent that lives on this daemon or an online host and is not archived?
 agent_live() {
   command -v paseo >/dev/null 2>&1 || return 1
-  local meta home=(); mapfile -t home < <(paseo_home_args)
-  meta="$(paseo inspect "$1" --json "${home[@]}" 2>/dev/null)" && [[ -n "$meta" ]] || return 1
+  local meta; meta="$(agent_inspect "$1")" || return 1
   ! jq -e '(.Archived // .archived // false) == true or ((.ArchivedAt // .archivedAt // "") != "")' <<<"$meta" >/dev/null 2>&1
 }
 
 # Open tasks' live crews were dispatched with canvas.relay=<the old first mate>; point them at the new one so a canvas pick reaches it.
 relabel_relay() { # new-agent-id [project]
   command -v paseo >/dev/null 2>&1 || return 0
-  local crew home=() a; mapfile -t home < <(paseo_home_args)
+  local crew a
   crew="$(NODE_NO_WARNINGS=1 node "$REPO/plugin/firstmate-deck/server/canvas-cmd.ts" relabel "$ROOT" "$@" 2>/dev/null || true)"
   for a in $crew; do
-    paseo agent update "$a" --label "canvas.relay=$1" "${home[@]}" >/dev/null 2>&1 \
+    agent_label "$a" "canvas.relay=$1" \
       && echo "claim: crew $a now relays canvas picks to $1" || echo "claim: could not re-point crew $a (best effort)"
   done
 }

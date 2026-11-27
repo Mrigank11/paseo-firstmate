@@ -6,7 +6,7 @@
 //   stage-cli.ts canvas-off <root> <taskId>              "off" when the task has no crew agent or its newest one has canvas=off; else nothing
 //   stage-cli.ts task-of <root> <agentId>                the fm.task label of that agent ("" when it has none)
 import { currentAgent } from "./stage.ts";
-import { archiveRow, labelledAgents, stageRow, stages, table } from "./stage-data.ts";
+import { archiveRow, labelledAgents, stageRow, stages, table, taskOf } from "./stage-data.ts";
 
 function die(msg: string): never {
   console.error(`stage: ${msg}`);
@@ -21,7 +21,7 @@ switch (cmd) {
   case "stage": {
     const id = rest[0];
     if (!id) die("stage needs a task id");
-    const row = stageRow(root, id) ?? archiveRow(root, id);
+    const row = (await stageRow(root, id)) ?? archiveRow(root, id);
     if (!row) die(`no such task '${id}'`);
     console.log(JSON.stringify(row));
     break;
@@ -30,12 +30,12 @@ switch (cmd) {
     const i = rest.indexOf("--project");
     const project = i >= 0 ? rest[i + 1] : undefined;
     if (i >= 0 && !project) die("--project needs a value");
-    const rows = stages(root, project);
+    const rows = await stages(root, project);
     console.log(rest.includes("--table") ? (rows.length ? table(rows) : "no live tasks") : JSON.stringify(rows));
     break;
   }
   case "drift": {
-    const rows = stages(root, rest[0]);
+    const rows = await stages(root, rest[0]);
     const bad = rows.filter((r) => r.flags.some((f) => f.drift));
     for (const r of bad) console.error(`drift: ${r.id} (${r.stage}): ${r.flags.filter((f) => f.drift).map((f) => f.text).join("; ")}`);
     console.log(String(bad.reduce((n, r) => n + r.flags.filter((f) => f.drift).length, 0)));
@@ -44,14 +44,14 @@ switch (cmd) {
   case "agents": {
     const id = rest[0];
     if (!id) die("agents needs a task id");
-    const mine = labelledAgents([id]).filter((r) => r.task === id).sort((a, b) => (Date.parse(a.createdAt ?? "") || 0) - (Date.parse(b.createdAt ?? "") || 0));
+    const mine = (await labelledAgents(root, [id])).filter((r) => r.task === id).sort((a, b) => (Date.parse(a.createdAt ?? "") || 0) - (Date.parse(b.createdAt ?? "") || 0));
     console.log(JSON.stringify(mine.map((r) => r.id)));
     break;
   }
   case "canvas-off": {
     const id = rest[0];
     if (!id) die("canvas-off needs a task id");
-    const mine = labelledAgents([id]).filter((r) => r.task === id);
+    const mine = (await labelledAgents(root, [id])).filter((r) => r.task === id);
     const cur = currentAgent(mine.map((r) => ({ ...r, id: r.id })));
     const cv = cur ? mine.find((r) => r.id === cur.id)?.labels?.canvas : undefined;
     if (!cur || cv === "off") console.log("off");
@@ -60,7 +60,7 @@ switch (cmd) {
   case "task-of": {
     const id = rest[0];
     if (!id) die("task-of needs an agent id");
-    console.log(labelledAgents([]).find((r) => r.id === id)?.task ?? "");
+    console.log(await taskOf(root, id));
     break;
   }
   default:

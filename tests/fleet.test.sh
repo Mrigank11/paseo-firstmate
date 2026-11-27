@@ -5,6 +5,7 @@ HERE="$(cd "$(dirname "$0")/.." && pwd)"
 F="$HERE/bin/fleet"
 T="$(mktemp -d)"; trap 'rm -rf "$T"' EXIT
 export FLEET_FILE="$T/fleet.json"
+export PASEO_HOME="$T/paseo-home"  # never ask the live daemon
 pass=0; fail=0
 ok()  { echo "PASS $1"; pass=$((pass+1)); }
 bad() { echo "FAIL $1 ${2:-}"; fail=$((fail+1)); }
@@ -542,6 +543,35 @@ J
   before="$(cat "$FLEET_FILE")"; "$F" stages >/dev/null; eq "$(cat "$FLEET_FILE")" "$before"; check "stages never writes fleet.json" $?
 }
 export FLEET_FILE="$FLEET_FILE_MAIN"; unset STAGE_AGENTS_JSON FLEET_STAGE_TOOL
+
+# ---- crews on other Paseo hosts (the real stage tool, a fake paseo) ----
+RD="$T/remote"; mkdir -p "$RD/state" "$RD/home/agents/s"
+FLEET_FILE_MAIN="$FLEET_FILE"
+cat >"$RD/paseo" <<'P'
+#!/usr/bin/env bash
+status="${FAKE_MAC:-online}"
+case "$1 $2" in
+  "host ls") echo "[{\"serverId\":\"srv_mac\",\"label\":\"mac\",\"enabled\":true,\"status\":\"$status\",\"targetDescription\":\"tcp://mac:6767\"}]" ;;
+  *) case "$1" in
+       ls) if [[ " $* " == *" --host "* ]]; then echo '[{"id":"mac-crew-1","status":"running","labels":{"fm.task":"far"}}]'; else echo '[]'; fi ;;
+       inspect) echo '{"CreatedAt":"2026-11-27T12:00:00Z","PendingPermissions":[]}' ;;
+     esac ;;
+esac
+P
+chmod +x "$RD/paseo"
+{
+  export FLEET_FILE="$RD/state/fleet.json" PASEO_BIN="$RD/paseo" PASEO_HOME="$RD/home" FLEET_NO_SNAPSHOT=1 AGENT_CANVAS_URL=off STAGE_SNAPSHOT_WAIT_MS=0
+  echo '{"version":2,"tasks":[{"id":"far","intent":"x","shape":"ship","state":"active","since":"2026-11-27T07:00:00Z","asks":[]}]}' >"$FLEET_FILE"
+  eq "$("$F" by-agent mac-crew-1 | jq -r .id)" far; check "by-agent: an agent on another host maps to its task" $?
+  eq "$("$F" stage far | jq -r '.agentId+"@"+.host+"|"+.stage')" "mac-crew-1@mac|Running"; check "stage: a crew on another host is reported with its host" $?
+  "$F" stages --table | grep -q 'mac-crew@mac'; check "stages --table shows the host" $?
+  eq "$(FAKE_MAC=offline "$F" by-agent mac-crew-1 | jq -r .id)" far; check "by-agent: still known while the host is offline" $?
+  eq "$(FAKE_MAC=offline "$F" stage far | jq -r .stage)" "Unknown · mac offline"; check "stage: an offline host's crew is unknown, not lost" $?
+  FAKE_MAC=offline "$F" set far state=done >/dev/null; "$F" archive far >/dev/null
+  eq "$(jq -c .agents "$RD/state/fleet-archive.jsonl")" '["mac-crew-1"]'; check "archive: records the agents of other hosts" $?
+  unset PASEO_BIN FLEET_NO_SNAPSHOT AGENT_CANVAS_URL STAGE_SNAPSHOT_WAIT_MS; export PASEO_HOME="$T/paseo-home"
+}
+export FLEET_FILE="$FLEET_FILE_MAIN"
 
 # ---- task tree: parent, kind=group, node claims, scope ----
 export FLEET_FILE="$T/tree/fleet.json"; mkdir -p "$T/tree"; echo '{"version":2,"tasks":[]}' >"$FLEET_FILE"

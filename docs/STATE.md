@@ -14,6 +14,7 @@ state/
   firstmate.json        # {"agentId","claimedAt"}: the checkout-wide first mate (fallback for pages with no claim.json), written by plain bin/page claim
   # projects/<project>/claim.json  {"agentId","claimedAt"}: that page's own first mate, written by bin/page claim <project> / start
   decisions.md          # captain prefs, routing lanes, permission + merge policy; `notify: off` / `enforcer: off` switch the plugin's wake / enforcer off
+  remote-agents.json    # DERIVED: last-known crews of other Paseo hosts (see "Crews on other Paseo hosts"); never edited
   stages.json           # DERIVED, plugin-written: every live task's owner, reason, stage (what bin/fleet stage(s) print); never edited
   enforcer.json         # plugin-owned: reminder counts per item, stalled items, reminded crews; safe to delete
   tasks/
@@ -192,6 +193,14 @@ A task's stage is never stored. `computeStage()` (`plugin/firstmate-deck/server/
 **First mate stalled.** The enforcer (below) can turn a With-the-first-mate task into **Needs you · first mate stalled** (owner captain; `reason` says why). It applies only while the task is still in the situation (`fp`) it was judged in.
 
 "The crew worked since" (rules 4 and the canvas pick) is measured from the crew's last **turn start** (the `agent.turn_started` hook, in the plugin's memory), not Paseo's `updatedAt`, which also moves on a label change or a steer; without a turn start it falls back to the last activity.
+
+### Crews on other Paseo hosts
+
+A task's agents are looked for on this daemon and on every host in `paseo host ls`, by the same `fm.task` label. A row whose current agent lives elsewhere carries `host` (the host's label) and the table shows it as `c0c0c0c0@mac`.
+
+- **The CLI** (`bin/fleet stage(s)`, `by-agent`, `finish`/`archive`; `bin/page status`, `canvas-*`, and the crew re-labelling of `claim`) reads each enabled online host with `paseo ls --host <targetDescription>` (twice: archived is what `-a` lists and the default listing lacks) plus `inspect` for what `ls` does not show: the creation date (once, then cached) and, for running or idle crews of the tasks asked about, open permissions. A server id is not a `--host` target, and `--host` excludes `--home`. Each call is bounded by `PASEO_HOST_TIMEOUT_MS` (default 8000; one host gets at most twice that for its calls).
+- **`state/remote-agents.json`** (derived, safe to delete) keeps the last-known crews per host. A host that is offline, disabled or cannot be listed has them read as status `unknown` with the stage `Unknown · <label> offline`: never closed, lost or silent. If `host ls` itself fails the file is left alone and every stored crew reads that way. A host removed from `host ls` is forgotten.
+- `bin/page` runs `inspect` and `agent update` on this daemon first, then on the online hosts (bound: `PASEO_HOST_TIMEOUT` seconds, default 10, where `timeout` exists). **The first mate is always local:** `claim` accepts only an agent of this daemon.
 
 ### One evaluation: `state/stages.json`
 
