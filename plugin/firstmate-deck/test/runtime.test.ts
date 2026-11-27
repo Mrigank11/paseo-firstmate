@@ -436,7 +436,7 @@ test("C3: with no last good view (plugin just started) a broken fleet.json rende
 test("M4: every version file carries a growing sequence number", async () => {
   const r = rig(FLEET);
   await r.deck.configure();
-  const seq = () => Number(/,(\d+),"[^"]*"\);\n$/.exec(readFileSync(r.live.replace(".live.js", ".live.v.js"), "utf8"))?.[1]);
+  const seq = () => Number(/__fdVer\("[^"]*",(\d+),/.exec(readFileSync(r.live.replace(".live.js", ".live.v.js"), "utf8"))?.[1]);
   await r.deck.render("demo");
   const a = seq();
   await r.deck.render("demo");

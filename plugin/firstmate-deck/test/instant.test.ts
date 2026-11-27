@@ -20,8 +20,9 @@ test("trail: sending (fresh), sending (late, amber), first mate has it, answered
   const fresh = trailHtml([c({ at: "2026-10-21T10:15:25Z" })], "t-x", NOW);
   assert.match(fresh, /💬 You · 10:15<\/span>/);
   assert.match(fresh, /“hello”/);
-  assert.match(fresh, /class="st st-send">sending…/);
-  assert.match(trailHtml([c({ at: "2026-10-21T10:15:00Z" })], "t-x", NOW), /class="st st-late">sending…/);
+  assert.match(fresh, /class="st st-send" data-late="10000">sending…/);
+  // "late" is the browser's call (after 10 s on screen): the payload is the same however old the comment is
+  assert.equal(trailHtml([c({ at: "2026-10-21T10:15:00Z" })], "t-x", NOW), fresh.replace("10:15<", "10:15<"));
   assert.match(trailHtml([c({ delivered: true })], "t-x", NOW), /class="st st-has">first mate has it/);
   assert.match(trailHtml([c({ delivered: true, answered: true })], "t-x", NOW), /class="st st-answered">answered/);
 });
@@ -51,7 +52,7 @@ test("trail renders on the card, and sections/page via slots filled by the scrip
   assert.match(r.live, /<div data-trail-for="page">.*page note/);
   assert.match(r.page, /<section id="endpoints"[^>]*><h2>[^<]*<\/h2>\n<div class="trail-slot" data-trail-slot="endpoints">/);
   assert.match(r.page, /<div class="trail-slot" data-trail-slot="page">/);
-  assert.match(r.live, /the page checks every second; the plugin refreshes it on every change and at least every 20 s \(last refresh /);
+  assert.match(r.live, /the page checks every second; the plugin refreshes it on every change \(last change /);
 });
 
 test("comments do not move the page signature (no page reload per comment)", () => {

@@ -1,4 +1,5 @@
 <!doctype html>
+<!--fd-sig:15000f06f0f572b33500d2c8b1ab509f8a15df3b-->
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Deck demo project · status</title>
 <style>
@@ -79,6 +80,7 @@ button.opt[aria-pressed=true]{opacity:1;cursor:default;background:var(--you);bor
 .askbox .trail{margin:6px 0 2px}
 .askbox.answered{opacity:.85}.ask-tag{font-size:calc(11px*var(--ts,1));text-transform:uppercase;letter-spacing:.04em;color:#8a7a6a;margin-top:6px}
 /* read marks */
+.fd-cold{display:contents}.lz{margin:4px 0 0}.lz>summary{cursor:pointer;font-size:calc(12px*var(--ts,1));opacity:.7}.lzb:empty{display:none}
 .cnotes{margin:6px 0 2px;font-size:calc(13px*var(--ts,1))}.cnotes>summary{display:inline-block;color:var(--mut);font-size:calc(12.5px*var(--ts,1))}.cnotes>summary::before{width:5px;height:5px}
 .mr,.mra{font:inherit;font-size:calc(12px*var(--ts,1));font-weight:600;color:var(--mut);background:#fff;border:1px solid var(--line);border-radius:999px;padding:2px 10px;cursor:pointer;margin-left:auto;flex:none}
 .mra{margin-left:10px}.mr:hover,.mra:hover{color:var(--fg);border-color:#b8b2a3}
@@ -212,7 +214,7 @@ body.tn-focus .task.tn-sel .cv.has-full .cv-c{display:none}
 <div class="tn-sheet" id="tn-sheet" role="dialog" aria-modal="true" aria-label="Tasks by stage" data-lavish-action hidden><div class="tn-sb" id="tn-sl"></div><div class="tn-sf"><button class="tn-fx tn-fxl" type="button" aria-pressed="false"><svg class="tn-ic" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><circle cx="12" cy="12" r="3"/><path d="M3 7V5a2 2 0 0 1 2-2h2"/><path d="M17 3h2a2 2 0 0 1 2 2v2"/><path d="M21 17v2a2 2 0 0 1-2 2h-2"/><path d="M7 21H5a2 2 0 0 1-2-2v-2"/></svg><span>Focus view</span></button><button class="tn-sx" id="tn-sx" type="button">Close</button></div></div>
 <main>
 <h1>Deck demo project</h1>
-<div class="sub">Kept current by the firstmate-deck plugin · last update <b data-slot="stamp">2026-10-21 10:15 UTC</b></div>
+<div class="sub">Kept current by the firstmate-deck plugin · last update <b data-slot="stamp"></b></div>
 <p class="chan"><b>This page is our channel.</b> Comment on any card or block, then Send; the first mate answers here.</p>
 <div class="trail-slot" data-trail-slot="page"></div>
 <div class="banner b-bad" id="fd-stale" role="status" hidden>This page stopped updating. Your comments may not reach the first mate until it&#x27;s fixed (the first mate can run bin/page heal).</div>
@@ -223,34 +225,7 @@ body.tn-focus .task.tn-sel .cv.has-full .cv-c{display:none}
 <h2 id="tasks">Tasks</h2>
 <div class="m">Each task once: its state, its crew agent live, and what it depends on. Titles and “Open in Paseo” go to the agent in the Paseo web UI.</div>
 <div class="tn-fbar" id="tn-fbar" role="status" data-lavish-action hidden></div>
-<div id="live"><!--LIVE-START--><div class="summary"><a href="#g-you" class="sum c-you">1 needs you</a><a href="#g-fm" class="sum c-fm">1 with the first mate</a><a href="#g-running" class="sum c-running">1 running</a><a href="#g-blocked" class="sum c-blocked">1 blocked</a><a href="#g-next" class="sum c-next">1 next up</a><a href="#g-parked" class="sum c-parked">1 parked</a><a href="#g-doneu" class="sum c-done" data-k="u">1 done, unread</a><a href="#g-done" class="sum c-done" data-k="d">2 done</a><a href="#g-done" class="sum c-fail">1 failed</a><span class="sum c-running">1 agent working</span><span class="m">live: the page checks every 20 s; the plugin refreshes it on every change and at least every 20 s (last refresh 10:15:30)</span></div>
-<section class="grp" id="g-you"><h3>Needs you <span class="n">(1)</span></h3>
-<article class="task s-you" id="t-pick-db"><div class="tt"><span class="ttl"><a href="http://paseo.test/agent/ag-pick">Choose the &lt;b&gt;database&lt;/b&gt; for the demo</a></span></div><div class="askbox" id="a-pick-db-a1"><div class="ask"><b>Your call:</b> Postgres or SQLite for the demo? &lt;b&gt;BLUF: SQLite&lt;/b&gt; unless you need concurrent writers.</div><details class="actx" id="x-pick-db-a1" open><summary>Context</summary><div><h4>Why this matters</h4>
-<p>The demo has <b>one writer</b>. Options:</p>
-<div class="tw"><table><thead><tr><th>Option</th><th>Pros</th><th>Cons</th></tr></thead><tbody><tr><td>SQLite</td><td>zero setup, one file</td><td>single writer</td></tr><tr><td>Postgres</td><td>concurrent writers</td><td>needs a container</td></tr></tbody></table></div>
-<ol><li>Pick SQLite for the demo.</li><li>Revisit if we add a worker.</li></ol></div></details></div><div class="askbox" id="a-pick-db-a2"><div class="ask"><b>Your call:</b> OK to add the &lt;code&gt;DATABASE_URL&lt;/code&gt; flag to the staging env?</div></div><div class="ag"><span class="pill p-you"><span class="dot"></span>waiting on you</span><span class="stg">Needs you</span><span class="facts">23 steps · took 21 min · claude-opus-5-5 medium</span><a class="open" href="http://paseo.test/agent/ag-pick">Open in Paseo</a></div><details class="stp" id="s-pick-db"><summary class="cur">DONE: need two answers</summary><ol start="21"><li>Reading schema.sql</li><li>Thinking: Two options, SQLite or Postgres.</li><li>Ran npm run check</li></ol></details><div class="nt">Waiting on two answers.</div><div class="dp">after <a href="#t-arch-schema">Draft the schema</a> · then <a href="#t-ship-api">Ship the demo API</a></div></article></section>
-<section class="grp" id="g-fm"><h3>With the first mate <span class="n">(1)</span></h3>
-<article class="task s-fm" id="t-ask-fm"><div class="tt"><span class="ttl">Pick a layout</span></div><div class="askbox" id="a-ask-fm-a1"><div class="ask asked">Layout A or B?</div><div class="ask replied">You replied 09:10: “show me both in detail” · the first mate is on it <span class="st st-late">sending…</span></div></div><div class="ag"><span class="pill p-idle"><span class="dot"></span>With the first mate</span></div><div class="nt">Waiting.</div></article></section>
-<section class="grp" id="g-running"><h3>Running <span class="n">(1)</span></h3>
-<article class="task s-running" id="t-ship-api"><div class="tt"><span class="ttl"><a href="http://paseo.test/agent/ag-api">Ship the demo API</a></span></div><div class="ag"><span class="pill p-running"><span class="dot"></span>running</span><span class="stg">Running</span><span class="facts">41 steps · 2 h 15 min so far · claude-sonnet-5-5 medium</span><a class="open" href="http://paseo.test/agent/ag-api">Open in Paseo</a></div><details class="stp" id="s-ship-api"><summary class="cur">Writing items.test.ts</summary><ol start="34"><li>Reading routes.ts</li><li>Editing routes.ts</li><li>Ran npm run check</li><li>Searched handler routes</li><li>Called localhost:4000/health</li><li>Editing routes.ts</li><li>Ran npm run check</li><li>Writing items.test.ts</li></ol></details><div class="nt"><p>Building the API on branch <code>feat/api</code>.</p>
-<ul><li><code>GET /health</code> returns <code>ok</code></li><li><code>GET /items</code> lists items<ul><li>paginated, 50 per page</li></ul></li><li>See <a href="https://example.com/spec" target="_blank" rel="noopener noreferrer">the spec</a> for <i>details</i>.</li></ul></div><div class="dp">after <a href="#t-pick-db">Choose the &lt;b&gt;database&lt;/b&gt; for the demo</a> · then <a href="#t-write-docs">Write the docs</a></div></article></section>
-<section class="grp" id="g-blocked"><h3>Blocked <span class="n">(1)</span></h3>
-<article class="task s-blocked" id="t-await-key"><div class="tt"><span class="ttl">Wire the prod key</span></div><div class="bo"><b>Blocked on:</b> Nemath: Trigger Prod API key</div></article></section>
-<section class="grp" id="g-next"><h3>Next up <span class="n">(1)</span></h3>
-<article class="task s-next" id="t-write-docs"><div class="tt"><span class="ttl">Write the docs</span></div><div class="trail"><span class="tr-who">💬 You · 09:20</span><span class="tr-txt">“other task”</span><span class="st st-late">sending…</span></div><div class="nt">Starts once the API lands.</div><div class="dp">after <a href="#t-ship-api">Ship the demo API</a>, <a href="#t-done-live">Wire the schema into the API</a></div></article></section>
-<details class="grp" id="g-parked"><summary><h3>Parked <span class="n">(1)</span></h3></summary>
-<article class="task s-parked" id="t-polish-ui"><div class="tt"><span class="ttl">Polish the UI</span></div><div class="nt">Parked on your call.</div></article></details>
-<section class="grp" id="g-doneu"><h3>Done, unread <span class="n">(<span class="cn">1</span>)</span> <button class="mra" type="button">Mark all read</button></h3>
-<div class="rows"><article class="task s-done" id="t-done-live" data-i="2" data-h="79fa4b3b"><div class="tt"><span class="ttl"><a href="http://paseo.test/agent/ag-done">Wire the schema into the API</a></span><button class="mr" type="button">Mark read</button></div><div class="ag"><span class="pill p-done"><span class="dot"></span>done</span><a class="open" href="http://paseo.test/agent/ag-done">Open in Paseo</a></div><div class="nt"><p>Schema is wired. Verified with:</p>
-<pre><code>npm run check</code></pre></div><div class="dp">after <a href="#t-arch-schema">Draft the schema</a> · then <a href="#t-write-docs">Write the docs</a></div></article></div></section>
-<details class="grp" id="g-done"><summary><h3>Done <span class="n">(<span class="cn">3</span>)</span></h3></summary>
-<div class="rows"><article class="task s-done" id="t-arch-recon" data-i="0"><div class="tt"><span class="ttl"><a href="http://paseo.test/agent/ag-recon">Recon the repo</a></span></div><div class="ag"><span class="pill p-done"><span class="dot"></span>done</span><a class="open" href="http://paseo.test/agent/ag-recon">Open in Paseo</a></div><div class="nt">Report in tasks/arch-recon/report.md.</div><div class="dp">then <a href="#t-arch-schema">Draft the schema</a></div></article>
-<article class="task s-done" id="t-arch-schema" data-i="1"><div class="tt"><span class="ttl"><a href="http://paseo.test/agent/ag-schema">Draft the schema</a></span></div><div class="askbox answered" id="a-arch-schema-a1"><div class="ask-tag">Answered</div><div class="ask asked">Postgres or SQLite?</div><details class="actx" id="x-arch-schema-a1"><summary>Context</summary><div><p>Postgres <b>wins</b> on concurrent writes; SQLite is simpler.</p></div></details></div><div class="ag"><span class="pill p-done"><span class="dot"></span>done</span><a class="open" href="http://paseo.test/agent/ag-schema">Open in Paseo</a></div><div class="dp">after <a href="#t-arch-recon">Recon the repo</a> · then <a href="#t-pick-db">Choose the &lt;b&gt;database&lt;/b&gt; for the demo</a>, <a href="#t-done-live">Wire the schema into the API</a></div></article>
-<article class="task s-done s-failed" id="t-broke-build" data-i="3"><div class="tt"><span class="ttl"><a href="http://paseo.test/agent/ag-broke">Fix the build (gave up)</a></span><span class="chip c-fail">failed</span></div><div class="ag"><span class="pill p-error"><span class="dot"></span>failed</span><a class="open" href="http://paseo.test/agent/ag-broke">Open in Paseo</a></div><div class="nt">The toolchain pin is gone upstream.</div></article></div></details>
-<div hidden data-trails></div>
-<div hidden data-slots><div data-slot-for="stamp">2026-10-21 10:15 UTC</div><div data-slot-for="banner"></div></div>
-<div hidden data-tn><div class="tn-st t-you" data-k="you" data-n="1" data-label="Needs you"><button class="tn-h" type="button" aria-expanded="true"><svg class="tn-ic" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><circle cx="12" cy="12" r="10"/><path d="M12 8v4"/><path d="M12 16h.01"/></svg><span class="tn-l">Needs you</span><span class="tn-c">1</span><svg class="tn-ic" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="m6 9 6 6 6-6"/></svg></button><ul><li><a class="tn-a" href="#t-pick-db" data-t="t-pick-db" title="Choose the &lt;b&gt;database&lt;/b&gt; for the demo">Choose the &lt;b&gt;database&lt;/b&gt; for the demo</a></li></ul></div><div class="tn-st t-fm" data-k="fm" data-n="1" data-label="With the first mate"><button class="tn-h" type="button" aria-expanded="true"><svg class="tn-ic" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M7.9 20A9 9 0 1 0 4 16.1L2 22Z"/></svg><span class="tn-l">With the first mate</span><span class="tn-c">1</span><svg class="tn-ic" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="m6 9 6 6 6-6"/></svg></button><ul><li><a class="tn-a" href="#t-ask-fm" data-t="t-ask-fm" title="Pick a layout">Pick a layout</a></li></ul></div><div class="tn-st t-running" data-k="running" data-n="1" data-label="Running"><button class="tn-h" type="button" aria-expanded="true"><svg class="tn-ic" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><circle cx="12" cy="12" r="10"/><path d="m10 8 6 4-6 4Z"/></svg><span class="tn-l">Running</span><span class="tn-c">1</span><svg class="tn-ic" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="m6 9 6 6 6-6"/></svg></button><ul><li><a class="tn-a" href="#t-ship-api" data-t="t-ship-api" title="Ship the demo API">Ship the demo API</a></li></ul></div><div class="tn-st t-blocked" data-k="blocked" data-n="1" data-label="Blocked"><button class="tn-h" type="button" aria-expanded="true"><svg class="tn-ic" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><circle cx="12" cy="12" r="10"/><path d="m4.9 4.9 14.2 14.2"/></svg><span class="tn-l">Blocked</span><span class="tn-c">1</span><svg class="tn-ic" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="m6 9 6 6 6-6"/></svg></button><ul><li><a class="tn-a" href="#t-await-key" data-t="t-await-key" title="Wire the prod key">Wire the prod key</a></li></ul></div><div class="tn-st t-next" data-k="next" data-n="1" data-label="Next up"><button class="tn-h" type="button" aria-expanded="true"><svg class="tn-ic" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M10.1 2.182a10 10 0 0 1 3.8 0"/><path d="M13.9 21.818a10 10 0 0 1-3.8 0"/><path d="M17.609 3.721a10 10 0 0 1 2.69 2.7"/><path d="M2.182 13.9a10 10 0 0 1 0-3.8"/><path d="M20.279 17.609a10 10 0 0 1-2.7 2.69"/><path d="M21.818 10.1a10 10 0 0 1 0 3.8"/><path d="M3.721 6.391a10 10 0 0 1 2.7-2.69"/><path d="M6.391 20.279a10 10 0 0 1-2.69-2.7"/></svg><span class="tn-l">Next up</span><span class="tn-c">1</span><svg class="tn-ic" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="m6 9 6 6 6-6"/></svg></button><ul><li><a class="tn-a" href="#t-write-docs" data-t="t-write-docs" title="Write the docs">Write the docs</a></li></ul></div><div class="tn-st t-parked" data-k="parked" data-n="1" data-label="Parked"><button class="tn-h" type="button" aria-expanded="true"><svg class="tn-ic" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><circle cx="12" cy="12" r="10"/><path d="M10 15V9"/><path d="M14 15V9"/></svg><span class="tn-l">Parked</span><span class="tn-c">1</span><svg class="tn-ic" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="m6 9 6 6 6-6"/></svg></button><ul><li><a class="tn-a" href="#t-polish-ui" data-t="t-polish-ui" title="Polish the UI">Polish the UI</a></li></ul></div><div class="tn-st t-done" data-k="done" data-n="4" data-label="Done"><button class="tn-h" type="button" aria-expanded="true"><svg class="tn-ic" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><circle cx="12" cy="12" r="10"/><path d="m9 12 2 2 4-4"/></svg><span class="tn-l">Done</span><span class="tn-c">4</span><svg class="tn-ic" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="m6 9 6 6 6-6"/></svg></button><ul><li><a class="tn-a" href="#t-arch-recon" data-t="t-arch-recon" title="Recon the repo">Recon the repo</a></li><li><a class="tn-a" href="#t-arch-schema" data-t="t-arch-schema" title="Draft the schema">Draft the schema</a></li><li><a class="tn-a" href="#t-done-live" data-t="t-done-live" title="Wire the schema into the API">Wire the schema into the API</a></li><li class="fail"><a class="tn-a" href="#t-broke-build" data-t="t-broke-build" title="Fix the build (gave up)">Fix the build (gave up)</a></li></ul></div></div>
-<div hidden data-attn data-n="1" data-title="Deck demo project" data-keys="{&quot;t-ask-fm&quot;:&quot;63b73986&quot;,&quot;t-pick-db&quot;:&quot;7cff6c23&quot;,&quot;t-ship-api&quot;:&quot;0b9c7552&quot;,&quot;t-write-docs&quot;:&quot;2002219c&quot;,&quot;t-await-key&quot;:&quot;19a6da7e&quot;,&quot;t-polish-ui&quot;:&quot;20147f95&quot;,&quot;t-done-live&quot;:&quot;68b1d118&quot;,&quot;t-broke-build&quot;:&quot;d22db309&quot;,&quot;t-arch-schema&quot;:&quot;44093940&quot;,&quot;t-arch-recon&quot;:&quot;44093940&quot;,&quot;page&quot;:&quot;c962a88b&quot;}"></div><!--LIVE-END--></div>
+<div id="live"><!--LIVE-START--><div class="m" id="fd-loading">Loading the page…</div><!--LIVE-END--></div>
 <section id="endpoints" data-section="endpoints"><h2>Endpoints &amp; creds</h2>
 <div class="trail-slot" data-trail-slot="endpoints"></div>
 <div class="tw"><table><thead><tr><th>Name</th><th>URL</th><th>Notes</th></tr></thead><tbody><tr><td>API</td><td><code>http://localhost:4000</code></td><td>demo, no auth</td></tr><tr><td>Admin</td><td><code>http://localhost:4001/admin</code></td><td>uses the <code>ADMIN_TOKEN</code> env var from the long-named secrets file</td></tr></tbody></table></div>
@@ -461,7 +436,8 @@ var Idiomorph=function(){"use strict";const e=()=>{};const n={morphStyle:"outerH
     else [].slice.call(document.querySelectorAll("#g-doneu .task")).forEach(function(t){var h=t.getAttribute("data-h");if(h)R[t.id]=h});
     save();arrange();push()});
   if(MU)setInterval(pull,30000);
-  function reveal(id){var t=id&&document.getElementById(id);for(var p=t&&t.parentElement;p;p=p.parentElement)if(p.tagName==="DETAILS")p.open=true}
+  function reveal(id){var t=id&&document.getElementById(id);for(var p=t&&t.parentElement;p;p=p.parentElement)if(p.tagName==="DETAILS")p.open=true;
+    var z=t&&t.querySelector&&t.querySelector(":scope > details.lz");if(z&&!z.open)z.open=true}
   document.addEventListener("click",function(e){var a=e.target.closest&&e.target.closest('a[href^="#"]');if(a)reveal(a.getAttribute("href").slice(1))});
   function fill(){var el=live();if(!el)return;document.querySelectorAll("[data-trail-slot]").forEach(function(s){
     var k=s.getAttribute("data-trail-slot"),src=null;el.querySelectorAll("[data-trail-for]").forEach(function(x){if(x.getAttribute("data-trail-for")===k)src=x});
@@ -469,7 +445,7 @@ var Idiomorph=function(){"use strict";const e=()=>{};const n={morphStyle:"outerH
     // the "last update" stamp and the session banner live in the shell and arrive with every payload
     document.querySelectorAll("[data-slot]").forEach(function(s){var k=s.getAttribute("data-slot"),src=null;
       el.querySelectorAll("[data-slot-for]").forEach(function(x){if(x.getAttribute("data-slot-for")===k)src=x});
-      if(src&&s.innerHTML!==src.innerHTML)s.innerHTML=src.innerHTML});tn();attn()}
+      if(src&&s.innerHTML!==src.innerHTML)s.innerHTML=src.innerHTML});clocks();tn();attn()}
   // ---- the browser tab and the "new" dots. The live block carries (data-attn) the Needs-you count, one attention key per
   // task and the keys the captain last saw. Unseen = keys that differ from the seen ones (nothing is unseen until
   // something has been stored). Looking at the page for 3 s while its tab is visible marks what it showed as seen, and
@@ -521,7 +497,38 @@ var Idiomorph=function(){"use strict";const e=()=>{};const n={morphStyle:"outerH
       data:{kind:"ask-choice",task:b.getAttribute("data-task"),ask:b.getAttribute("data-ask"),option:opt}});
       if(lv.sendQueuedPrompts)lv.sendQueuedPrompts()}
     catch(err){delete Q[k];box.querySelectorAll("button.opt").forEach(function(x){x.disabled=false;x.classList.remove("on");x.setAttribute("aria-pressed","false")});if(l){l.hidden=false;l.textContent="could not send, comment on the card instead"}}});
-  restore(document);arrange();pull();reveal(location.hash.slice(1));fill();
+  // ---- clocks. The payload never changes as time passes (that would re-send the whole list every minute): it carries only
+  // timestamps, and the browser writes the words. data-so = when a running agent started ("N min so far"), data-ago = since when a flag has held ("silent N min"), data-chg = the time of the last real change (the "last update" stamp); data-late = how long a
+  // comment may sit as "sending" on this screen before it shows as late (this browser's clock only, never compared with the daemon's).
+  function dur(sec){var m=Math.floor(sec/60);return m<60?m+" min":m<1440?Math.floor(m/60)+" h "+(m%60<10?"0":"")+m%60+" min":Math.floor(m/1440)+" d"}
+  var CHG=0;
+  function p2(n){return n<10?"0"+n:""+n}
+  function chgText(kind){if(!CHG)return "";var d=new Date(CHG);if(kind==="time")return p2(d.getHours())+":"+p2(d.getMinutes())+":"+p2(d.getSeconds());
+    try{var q={};new Intl.DateTimeFormat("en-GB",{year:"numeric",month:"2-digit",day:"2-digit",hour:"2-digit",minute:"2-digit",hourCycle:"h23",timeZoneName:"short"}).formatToParts(d).forEach(function(x){q[x.type]=x.value});
+      return q.year+"-"+q.month+"-"+q.day+" "+q.hour+":"+q.minute+" "+q.timeZoneName}catch(e){return d.toISOString()}}
+  function clocks(root){root=root||document;var now=Date.now();
+    [].slice.call(root.querySelectorAll("[data-chg]")).forEach(function(e){var t=chgText(e.getAttribute("data-chg"));if(t&&e.textContent!==t)e.textContent=t});
+    [].slice.call(root.querySelectorAll("[data-so]")).forEach(function(e){var t=dur(Math.max(0,(now-Number(e.getAttribute("data-so")))/1000))+" so far";if(e.textContent!==t)e.textContent=t});
+    [].slice.call(root.querySelectorAll("[data-ago]")).forEach(function(e){var t=dur(Math.max(0,(now-Number(e.getAttribute("data-ago")))/1000));if(e.textContent!==t)e.textContent=t});
+    if(root!==document)return;
+    [].slice.call(root.querySelectorAll(".st-send[data-late]")).forEach(function(e){if(!e.__t)e.__t=now;if(now-e.__t>Number(e.getAttribute("data-late")))e.classList.add("st-late")})}
+  setInterval(function(){clocks()},15000);
+  // ---- cards that are one line until opened (data-bh): the body is a content-named file next to the page, loaded when the card is
+  // opened (or when it is open already). BODY keeps what was loaded, by task id, so a swap re-fills an open card with no flash.
+  var D="page.d"+"/",BODY={},CSSK={},BL={};
+  function hs(t){var h=5381;for(var i=0;i<t.length;i++)h=((h<<5)+h+t.charCodeAt(i))|0;return h+":"+t.length}
+  function fillBody(card,any){var id=card.id.slice(2),h=card.getAttribute("data-bh"),b=BODY[id],z=card.querySelector(".lzb");
+    if(!z||!b||(!any&&b.h!==h))return;if(z.firstChild&&z.__h===b.h)return;z.innerHTML=b.html;z.__h=b.h;restore(z);anchorIds(z);clocks(z)}
+  function want(d){var card=d.closest&&d.closest("article.task[data-bh]");if(!card)return;var id=card.id.slice(2),h=card.getAttribute("data-bh"),b=BODY[id];
+    if(b&&b.h===h){fillBody(card);return}
+    var k=id+" "+h;if(BL[k])return;BL[k]=1;var sc=document.createElement("script");sc.src=D+"b."+id+"."+h+".js";
+    sc.onload=sc.onerror=function(){sc.remove();setTimeout(function(){delete BL[k]},4000)};document.head.appendChild(sc)}
+  function bodies(){[].slice.call(document.querySelectorAll("details.lz[open]")).forEach(want)}
+  document.addEventListener("toggle",function(e){var d=e.target;if(d&&d.classList&&d.classList.contains("lz")&&d.open)want(d)},true);
+  window.__fdBody=function(id,h,html,css){
+    if(css){var k=hs(css);if(!CSSK[k]){CSSK[k]=1;var st=document.createElement("style");st.setAttribute("data-cv-snap","");st.textContent=css;document.head.appendChild(st)}}
+    BODY[id]={h:h,html:html};var c=document.getElementById("t-"+id);if(c&&c.getAttribute("data-bh")===h){var d=c.querySelector("details.lz");if(d&&d.open)fillBody(c)}};
+  restore(document);arrange();clocks();pull();reveal(location.hash.slice(1));fill();
   // Keyboard focus survives a live swap: remember the focused element's id (or its <details> id, for a summary) and put focus back.
   function fkey(){var a=document.activeElement,el=live();if(!a||!el||!el.contains||!el.contains(a))return null;
     if(a.id)return a.id;var p=a.parentElement;return a.tagName==="SUMMARY"&&p&&p.id?"sum:"+p.id:null}
@@ -534,26 +541,69 @@ var Idiomorph=function(){"use strict";const e=()=>{};const n={morphStyle:"outerH
   // with the browser's, so a skewed phone clock cannot raise a false alarm or hide a real stall.
   function stale(){var b=document.getElementById("fd-stale");staleNow=(Date.now()-changedAt)>STALE;if(b)b.hidden=!staleNow;meta()}
   setInterval(stale,5000);
-  // The page polls a tiny version file (V) every second and loads the full payload (F) only when its content hash moved:
-  // an idle tab costs bytes, not the whole page. have is the hash of the payload on screen; loading stops a second fetch
-  // while one is in flight.
-  var have=null,loading=false;
+  // The page polls a tiny version file (V) every second. It names the content of the page in pieces (see render.ts renderLive): the
+  // skeleton (sk), the parked and done block (cd) and the manifest of the active cards (mf), each a content-named file in D. A
+  // change fetches only the pieces whose name moved, then only the cards whose hash differs from the one on screen, and swaps just
+  // those cards (or, when the skeleton or the cold block moved, morphs the page with an empty stub for every unchanged card, which
+  // the morph skips). The whole payload (F) is the first load and the fallback for anything that does not add up.
+  var have=null,loading=false,HV={sk:null,cd:null,mf:null},SKL={},COL={},MAN={},CAR={},noSync=0;
+  var CB={beforeAttributeUpdated:function(a,n){if(a==="open"&&n.id&&n.id in S)return false},
+    beforeNodeMorphed:function(n,m){if(n.nodeName==="IFRAME"&&m.nodeName==="IFRAME"&&n.getAttribute("srcdoc")===m.getAttribute("srcdoc"))return false;
+      if(n.getAttribute&&m.getAttribute){var a=n.getAttribute("data-ch");if(a&&a===m.getAttribute("data-ch"))return false}}};
+  function safe(id){return id.replace(/[^\w.-]/g,"_")}
   function seen(seq,iso){var tk=seq!==undefined&&seq!==null?"s"+seq:(iso?"i"+iso:null);
     if(tk!==null&&tk!==token){token=tk;changedAt=Date.now();stale()}}
-  window.__fdVer=function(hash,seq,iso){seen(seq,iso);if(hash&&hash!==have&&!loading)full()};
-  window.__fdLive=function(html,iso,seq,hash){seen(seq,iso);loading=false;if(hash)have=hash;
+  window.__fdVer=function(hash,seq,iso,chg,sk,cd,mf){seen(seq,iso);
+    if(chg){var c=Date.parse(chg);if(c&&c!==CHG){CHG=c;clocks()}}
+    if(!hash||hash===have||loading)return;
+    if(sk&&have!==null&&Date.now()>noSync)sync(hash,sk,cd,mf);else full()};
+  window.__fdSkel=function(h,html){SKL[h]=html};window.__fdCold=function(h,html){COL[h]=html};window.__fdMan=function(h,m){MAN[h]=m};
+  window.__fdCard=function(id,h,html){CAR[id+" "+h]=html;var ks=Object.keys(CAR);if(ks.length>400)delete CAR[ks[0]]};
+  function getAll(jobs,cb){var n=jobs.length,bad=false;if(!n)return cb(true);
+    jobs.forEach(function(j){var sc=document.createElement("script");sc.src=D+j.f;
+      sc.onload=sc.onerror=function(){sc.remove();if(!j.ok())bad=true;if(--n===0)cb(!bad)};document.head.appendChild(sc)})}
+  function sync(hash,sk,cd,mf){loading=true;var jobs=[];
+    if(sk!==HV.sk&&!SKL[sk])jobs.push({f:"s."+sk+".js",ok:function(){return SKL[sk]!==undefined}});
+    if(cd!==HV.cd&&!COL[cd])jobs.push({f:"k."+cd+".js",ok:function(){return COL[cd]!==undefined}});
+    if(mf!==HV.mf&&!MAN[mf])jobs.push({f:"m."+mf+".js",ok:function(){return !!MAN[mf]}});
+    getAll(jobs,function(ok){if(!ok)return bad();
+      var man=MAN[mf]||{},cards=[];
+      Object.keys(man).forEach(function(id){var e=document.getElementById("t-"+id),h=man[id];
+        if((e&&e.getAttribute("data-ch"))!==h&&CAR[id+" "+h]===undefined)cards.push({f:"c."+safe(id)+"."+h+".js",ok:function(){return CAR[id+" "+h]!==undefined}})});
+      getAll(cards,function(ok2){if(!ok2)return bad();finish(hash,sk,cd,mf)})})}
+  function bad(){noSync=Date.now()+30000;full()}
+  function finish(hash,sk,cd,mf){var t0=performance.now(),skC=sk!==HV.sk,cdC=cd!==HV.cd,man=MAN[mf]||{},ok=true,fk=fkey(),y=window.scrollY;
+    if(!skC&&!cdC){
+      Object.keys(man).forEach(function(id){var e=document.getElementById("t-"+id),h=man[id];if(!e){ok=false;return}if(e.getAttribute("data-ch")===h)return;
+        var c=CAR[id+" "+h];if(c===undefined){ok=false;return}swapCard(e,c)});
+      if(!ok)return bad()}
+    else{
+      var html=(SKL[sk]||"").replace("<!--cold-->",function(){return cdC?(COL[cd]||""):'<div class="fd-cold" id="fd-cold" data-ch="'+cd+'"></div>'})
+        .replace(/<!--c:([^>]+?)-->/g,function(m,id){var h=man[id],e=document.getElementById("t-"+id);if(!h){ok=false;return ""}
+          if(e&&e.getAttribute("data-ch")===h)return '<article class="task" id="t-'+id+'" data-ch="'+h+'"></article>';
+          var c=CAR[id+" "+h];if(c===undefined){ok=false;return ""}return c});
+      if(!ok)return bad();
+      applyHtml(html)}
+    HV={sk:sk,cd:cd,mf:mf};have=hash;loading=false;clocks();refocus(fk);if(window.scrollY!==y)window.scrollTo(0,y);if(window.__fdUpd)window.__fdUpd(performance.now()-t0)}
+  function swapCard(e,html){var I=window.Idiomorph,tmp=document.createElement("div");tmp.innerHTML=html;restore(tmp);reapply(tmp);clocks(tmp);anchorIds(tmp);
+    var n=tmp.firstElementChild;if(!n)return;
+    if(I&&I.morph)I.morph(e,n,{morphStyle:"outerHTML",restoreFocus:true,callbacks:CB});else e.replaceWith(n)}
+  window.__fdLive=function(html,iso,seq,hash,pc){seen(seq,iso);loading=false;if(hash)have=hash;
+    if(pc)HV={sk:pc[0],cd:pc[1],mf:pc[2]};
+    if(iso){var c=Date.parse(iso);if(c)CHG=c}
+    applyHtml(html)};
+  function applyHtml(html){
     var el=live();if(!el||html===last)return;last=html;
     var fk=fkey();snapshot();var y=window.scrollY,M="<!--LIVE-",I=window.Idiomorph;
     if(I&&I.morph&&window.Element&&el instanceof window.Element){
       // Morph, do not replace: build the new block off-screen, bring it in line with what this browser has done to the
       // page (open folds, read marks, picked options), then let the morph touch only the nodes that differ. Nothing
       // unchanged is re-created or moved, so embedded canvas frames do not reload and scroll, hover and selection stay.
-      var nx=document.createElement("div");nx.innerHTML=html;restore(nx);arrange(nx);reapply(nx);anchorIds(nx);
-      I.morph(el,nx,{morphStyle:"innerHTML",restoreFocus:true,callbacks:{
-        beforeAttributeUpdated:function(a,n){if(a==="open"&&n.id&&n.id in S)return false},
-        beforeNodeMorphed:function(n,m){if(n.nodeName==="IFRAME"&&m.nodeName==="IFRAME"&&n.getAttribute("srcdoc")===m.getAttribute("srcdoc"))return false}}});
-      arrange();fill();refocus(fk);if(window.scrollY!==y)window.scrollTo(0,y);return}
-    el.innerHTML=M+"START-->"+html+M+"END-->";restore(el);arrange();reapply(el);anchorIds(el);fill();refocus(fk);window.scrollTo(0,y)};
+      var nx=document.createElement("div");nx.innerHTML=html;restore(nx);arrange(nx);reapply(nx);clocks(nx);
+      [].slice.call(nx.querySelectorAll("article.task[data-bh]")).forEach(function(c){var d=c.querySelector("details.lz");if(d&&d.open)fillBody(c,true)});anchorIds(nx);
+      I.morph(el,nx,{morphStyle:"innerHTML",restoreFocus:true,callbacks:CB});
+      arrange();clocks();bodies();fill();refocus(fk);if(window.scrollY!==y)window.scrollTo(0,y);return}
+    el.innerHTML=M+"START-->"+html+M+"END-->";restore(el);arrange();reapply(el);clocks();anchorIds(el);bodies();fill();refocus(fk);window.scrollTo(0,y)}
   function load(file,done){var s=document.createElement("script");s.src=file+"?t="+Date.now();s.onload=s.onerror=function(){s.remove();if(done)done()};document.head.appendChild(s)}
   // a full fetch that never answers must not block the next one for good
   function full(){loading=true;load(F,function(){setTimeout(function(){loading=false},4000)})}
