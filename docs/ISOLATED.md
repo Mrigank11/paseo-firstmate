@@ -24,6 +24,10 @@ bin/isolated paseo ...  # paseo CLI with --home added;  bin/isolated fleet|page 
 
 `up` seeds a `demo-app` project page with three sample tasks (done scout, queued ship, scout with an ask) and a stand-in first-mate agent that claims the page. Dispatch demo crew with `bin/isolated paseo run --no-wait --provider claude --model claude-sonnet-5-5 --label fm.task=… --label fm.project=… --label fm.shape=… …` (the MCP `create_agent` tool talks to the live daemon, so use the CLI here) and record it with `bin/isolated fleet add …`.
 
+## Remote crews without a Mac
+
+`bin/isolated fake-mac up` starts a second throwaway daemon (`$ISO_BASE/fake-mac-home`, tailnet port 6783, no plugins) and registers it as host `mac` of the isolated daemon. `bin/isolated fake-mac paseo run … --label fm.task=<id>` starts a crew on it; `bin/isolated fake-mac down` makes the host go offline. Its crews run on this same machine, so their canvas writes take the local path: the keyed tailnet path is only covered by agent-canvas tests.
+
 ## Rules
 
 - Every `paseo` call carries `--home` (the script does it); never run bare `bin/page` / `bin/fleet` against this state without `bin/isolated`.
