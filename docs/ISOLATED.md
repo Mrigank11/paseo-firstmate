@@ -22,7 +22,7 @@ bin/isolated reset      # wipe home + state, up again
 bin/isolated paseo ...  # paseo CLI with --home added;  bin/isolated fleet|page ...  # bin/fleet|bin/page on the isolated state
 ```
 
-`up` seeds a `demo-app` project page with three sample tasks (done scout, queued ship, scout with an ask) and a stand-in first-mate agent that claims the page. Dispatch demo crew with `bin/isolated paseo run --no-wait --provider claude --model claude-sonnet-5-5 --label fm.task=… --label fm.project=… --label fm.shape=… …` (the MCP `create_agent` tool talks to the live daemon, so use the CLI here) and record it with `bin/isolated fleet add …`.
+`up` seeds a `demo-app` project page with three sample tasks (done scout, queued ship, scout with an ask) and a stand-in first-mate agent that claims the page. Dispatch demo crew with `bin/isolated paseo run --no-wait --provider claude --model claude-sonnet-5-5 --thinking medium --mode bypassPermissions --label fm.task=… --label fm.project=… --label fm.shape=… …` (the MCP `create_agent` tool talks to the live daemon, so use the CLI here) and record it with `bin/isolated fleet add …`. Those are the contributor profile's settings: once the isolated daemon has the profiles (`bin/isolated page profiles --apply`), the deck refuses crew launches that match none (`docs/PROFILES.md`, "Launch check").
 
 ## Rules
 

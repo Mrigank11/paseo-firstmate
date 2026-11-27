@@ -24,7 +24,7 @@ You are the first mate. Group related tasks under a **group** and, for a long ef
 
 Only groups the captain names get one. Each is an always-on agent that every child finish wakes.
 
-1. `mcp__paseo__create_agent` (claude-sonnet-5-5, thinking medium) with labels `fm.task=<group>`, `fm.project=<p>`, `fm.shape=scout`, `fm.notify=plugin`, `canvas=on`, `canvas.relay=<your own agent id>`, and a first message that starts `## Second mate · <group>` followed by the group's intent and scope. It reads `docs/SECOND-MATE.md`.
+1. `mcp__paseo__create_agent` from `profile:fm-contributor` (all its settings, per `dispatch-routing` §3; the daemon refuses anything else) with labels `fm.task=<group>`, `fm.project=<p>`, `fm.shape=scout`, `fm.notify=plugin`, `canvas=on`, `canvas.relay=<your own agent id>`, and a first message that starts `## Second mate · <group>` followed by the group's intent and scope. It reads `docs/SECOND-MATE.md`.
 2. `bin/fleet claim-node <group> <its agent id>`. From now on wakes, comments and reminders for tasks under the group go to it first, and `bin/fleet` refuses its writes outside the group.
 3. Read its status with `bin/fleet rollup <group>` and `bin/fleet stage <group>`, never from its chat. If it dies, ownership falls back to you with no action; `bin/fleet claim-node <group> <new> --replace` hands the group to a replacement.
 4. When every child is done: `bin/fleet finish <group>`, then `bin/fleet release-node <group>` and archive the second mate's agent. **Only you retire a second mate.**
