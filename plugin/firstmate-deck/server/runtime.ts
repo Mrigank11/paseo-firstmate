@@ -837,6 +837,8 @@ export class Deck {
     try { const st = statSync(target); return `${st.mtimeMs}:${st.size}`; } catch { return ""; }
   }
 
+  private readonly startedAt = Date.now();
+
   private writePage(project: string, model: ProjectModel): void {
     // a project exists only while its project.json does; never resurrect a deleted project's dir
     if (!existsSync(join(projectDir(this.cfg.root, project), "project.json"))) return;
@@ -867,7 +869,11 @@ export class Deck {
     // also rewrite when the file is not the one we wrote (`bin/page start` re-renders it without the canvas stylesheet)
     // Lavish reloads the page frame whenever this file changes, so it is written only when its shell really changed: a plugin
     // restart finds the signature it would write already on disk and leaves the file (and every open tab) alone.
-    if (r.signature !== this.sigs.get(project) || this.pageStamp(target) !== this.stamps.get(project)) {
+    // Just after a restart the canvas stylesheet has not arrived yet, so the shell would differ from the one on disk (no canvas css)
+    // and be rewritten twice (without it, then with it): two reloads of every open tab. A page already on disk waits for it.
+    const cv = this.canvas.data(ids);
+    const waitCss = this.canvas.configured && !cv.css && Date.now() - this.startedAt < 90_000 && this.pageSignature(target) !== "";
+    if (!waitCss && (r.signature !== this.sigs.get(project) || this.pageStamp(target) !== this.stamps.get(project))) {
       if (this.pageSignature(target) !== r.signature) {
         writeAtomic(target, r.page);
         rewrote = true;

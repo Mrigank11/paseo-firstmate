@@ -616,7 +616,7 @@ function renderLive(model: ProjectModel, agents: Record<string, AgentView>, o: R
   const coldHtml = cold.length ? `<div class="fd-cold" id="fd-cold" data-ch="${hashOf(cold.join("\n"))}">${cold.join("\n")}</div>` : "";
   const html = skel.replace("<!--cold-->", () => coldHtml).replace(/<!--c:([^>]+?)-->/g, (_m, id: string) => cards.get(id)!.html);
   const manifest = Object.fromEntries([...cards].map(([id, c]) => [id, c.hash]));
-  const piece = { skel, cold: coldHtml, cards: Object.fromEntries(cards), manifest, sk: hashOf(skel), cd: hashOf(coldHtml), mf: hashOf(JSON.stringify(manifest)) };
+  const piece = { skel, cold: coldHtml, cards: Object.fromEntries(cards), manifest, sk: hashOf(skel), cd: hashOf(cold.join("\n")), mf: hashOf(JSON.stringify(manifest)) };
   return { html, attention, bodies: ctx.bodies, piece };
 }
 

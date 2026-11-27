@@ -55,7 +55,7 @@ try {
     try { new PerformanceObserver((l) => { for (const e of l.getEntries()) w.__pg.lt.push(Math.round(e.duration)); }).observe({ type: "longtask", buffered: true }); } catch {}
     document.addEventListener("DOMContentLoaded", () => { if (document.getElementById("live")) console.log("PGDOC " + location.pathname.slice(-40)); });
     const wrap = () => { for (const k of ["__fdLive", "__fdApply"]) { const f = w[k]; if (!f || f.__w) continue; const g = function (this: any, ...a: any[]) { const t = performance.now(); const r = f.apply(this, a); w.__pg.upd.push(Math.round(performance.now() - t)); return r; }; (g as any).__w = 1; w[k] = g; } };
-    setInterval(wrap, 25);
+    setInterval(wrap, 25); w.__fdUpd = (ms: number) => w.__pg.upd.push(Math.round(ms));
     const step = () => { const tn = document.getElementById("tn"); if (tn && document.getElementById("live")) { const r = tn.getBoundingClientRect(), vis = !(tn as any).hidden && r.width > 10;
       if (vis) w.__pg.shown = true; if (w.__pg.shown) { w.__pg.tnFrames++; if (!vis) w.__pg.tnBad++; } } requestAnimationFrame(step); };
     requestAnimationFrame(step);
@@ -89,7 +89,7 @@ try {
     const g = await fr.evaluate(() => (window as any).__pg);
     const by = (k: string) => mine.filter((r) => r.kind === k);
     const w = { name, seconds: Math.round(min * 60), bytes: mine.reduce((s, r) => s + r.bytes, 0), mbPerMin: +(mine.reduce((s, r) => s + r.bytes, 0) / 1048576 / min).toFixed(3),
-      lists: by("list").length, listBytes: by("list").reduce((s, r) => s + r.bytes, 0), polls: by("poll").length, other: by("other").length,
+      parts: mine.reduce((o: any, r) => { const m = /\.d\/([a-z])\.[^/]*$/.exec(r.path); const k = m ? m[1] : r.kind; o[k] = (o[k] ?? 0) + r.bytes; return o; }, {}), lists: by("list").length, listBytes: by("list").reduce((s, r) => s + r.bytes, 0), polls: by("poll").length, other: by("other").length,
       updates: g.upd.length, updP50: pct(g.upd, 0.5), updP95: pct(g.upd, 0.95), updMax: Math.max(0, ...g.upd), blockedPct: +(g.lt.reduce((s: number, x: number) => s + x, 0) / ((Date.now() - from) * 10)).toFixed(1), longest: Math.max(0, ...g.lt), tnBad: g.tnBad, tnFrames: g.tnFrames };
     result[name] = w; log(name, w); return w;
   };
@@ -146,11 +146,11 @@ try {
       c.scrollIntoView({ block: "center" }); return { id: c.id, before: c.innerHTML.length }; });
     if (!lite) verdict("open", false, "no one-line done card on the page");
     else {
-      const sum = await fr.$(`#${lite.id} > details.lz > summary`); const t = Date.now(); await sum!.click();
+      const d1 = docs.length; const t = Date.now(); await fr.evaluate((id: string) => (document.querySelector(`#${id} > details.lz > summary`) as HTMLElement).click(), lite.id); // a click on the summary (it may sit in a fold the page keeps shut)
       let n = 0; for (let i = 0; i < 100 && !n; i++) { n = await fr.evaluate((id: string) => document.querySelector(`#${id} .lzb`)?.innerHTML.length ?? 0, lite.id); if (!n) await sleep(100); }
       const loadMs = Date.now() - t; await sleep(20000); fr = await frame();
       const after = await fr.evaluate((id: string) => ({ len: document.querySelector(`#${id} .lzb`)?.innerHTML.length ?? 0, open: !!(document.querySelector(`#${id} > details.lz`) as HTMLDetailsElement | null)?.open }), lite.id);
-      verdict("open", n > 1000 && after.len === n && after.open, `${lite.id}: body ${n} chars after ${loadMs} ms, ${after.len} chars and ${after.open ? "still open" : "closed"} after 20 s of updates (was ${lite.before} chars as one line)`);
+      verdict("open", n > 1000 && after.len === n && after.open, `${lite.id}: body ${n} chars after ${loadMs} ms, ${after.len} chars and ${after.open ? "still open" : "closed"} after 20 s of updates (was ${lite.before} chars as one line; ${docs.length - d1} page reloads)`);
     }
   }
 } catch (e: any) { log("GATE ERROR", String(e?.stack ?? e).slice(0, 600)); result.error = String(e); process.exitCode = 2; }

@@ -168,7 +168,7 @@ export function pageScript(project: string, liveFile: string, tickSeconds: numbe
   var CB={beforeAttributeUpdated:function(a,n){if(a==="open"&&n.id&&n.id in S)return false},
     beforeNodeMorphed:function(n,m){if(n.nodeName==="IFRAME"&&m.nodeName==="IFRAME"&&n.getAttribute("srcdoc")===m.getAttribute("srcdoc"))return false;
       if(n.getAttribute&&m.getAttribute){var a=n.getAttribute("data-ch");if(a&&a===m.getAttribute("data-ch"))return false}}};
-  function safe(id){return id.replace(/[^\w.-]/g,"_")}
+  function safe(id){return id.replace(/[^\\w.-]/g,"_")}
   function seen(seq,iso){var tk=seq!==undefined&&seq!==null?"s"+seq:(iso?"i"+iso:null);
     if(tk!==null&&tk!==token){token=tk;changedAt=Date.now();stale()}}
   window.__fdVer=function(hash,seq,iso,chg,sk,cd,mf){seen(seq,iso);
@@ -190,7 +190,7 @@ export function pageScript(project: string, liveFile: string, tickSeconds: numbe
         if((e&&e.getAttribute("data-ch"))!==h&&CAR[id+" "+h]===undefined)cards.push({f:"c."+safe(id)+"."+h+".js",ok:function(){return CAR[id+" "+h]!==undefined}})});
       getAll(cards,function(ok2){if(!ok2)return bad();finish(hash,sk,cd,mf)})})}
   function bad(){noSync=Date.now()+30000;full()}
-  function finish(hash,sk,cd,mf){var skC=sk!==HV.sk,cdC=cd!==HV.cd,man=MAN[mf]||{},ok=true,fk=fkey(),y=window.scrollY;
+  function finish(hash,sk,cd,mf){var t0=performance.now(),skC=sk!==HV.sk,cdC=cd!==HV.cd,man=MAN[mf]||{},ok=true,fk=fkey(),y=window.scrollY;
     if(!skC&&!cdC){
       Object.keys(man).forEach(function(id){var e=document.getElementById("t-"+id),h=man[id];if(!e){ok=false;return}if(e.getAttribute("data-ch")===h)return;
         var c=CAR[id+" "+h];if(c===undefined){ok=false;return}swapCard(e,c)});
@@ -202,7 +202,7 @@ export function pageScript(project: string, liveFile: string, tickSeconds: numbe
           var c=CAR[id+" "+h];if(c===undefined){ok=false;return ""}return c});
       if(!ok)return bad();
       applyHtml(html)}
-    HV={sk:sk,cd:cd,mf:mf};have=hash;loading=false;clocks();refocus(fk);if(window.scrollY!==y)window.scrollTo(0,y)}
+    HV={sk:sk,cd:cd,mf:mf};have=hash;loading=false;clocks();refocus(fk);if(window.scrollY!==y)window.scrollTo(0,y);if(window.__fdUpd)window.__fdUpd(performance.now()-t0)}
   function swapCard(e,html){var I=window.Idiomorph,tmp=document.createElement("div");tmp.innerHTML=html;restore(tmp);reapply(tmp);clocks(tmp);anchorIds(tmp);
     var n=tmp.firstElementChild;if(!n)return;
     if(I&&I.morph)I.morph(e,n,{morphStyle:"outerHTML",restoreFocus:true,callbacks:CB});else e.replaceWith(n)}

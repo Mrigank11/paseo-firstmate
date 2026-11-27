@@ -267,3 +267,9 @@ test("done and parked cards are one line with their body kept aside; a card with
   // the body's hash is its content: same data, same hash; a changed card, a new hash
   assert.equal(renderProject(model, agents, opts).bodies[Object.keys(r.bodies)[0]].hash, r.bodies[Object.keys(r.bodies)[0]].hash);
 });
+
+test("the cold block's piece name is the hash its wrapper carries, so a skeleton-only update leaves Parked and Done alone", () => {
+  const w = /<div class="fd-cold" id="fd-cold" data-ch="([0-9a-f]+)"/.exec(r.live);
+  assert.ok(w, "the fixture has parked and done cards");
+  assert.equal(r.piece.cd, w![1], "the loader's stub for an unchanged cold block must carry the same hash as the block on screen");
+});
