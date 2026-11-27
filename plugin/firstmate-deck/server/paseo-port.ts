@@ -13,6 +13,7 @@ import { COMMENT_ROW_KIND, COMMENT_ROW_VERSION } from "../shared/contract.ts";
 import { claimedId, projectClaimedId } from "./claims.ts";
 import { human } from "./humanize.ts";
 import type { AgentView } from "./render.ts";
+import type { HostOffline } from "./stage.ts";
 
 export type PortAgent = {
   id: string;
@@ -27,6 +28,11 @@ export type PortAgent = {
   lastActivityAt?: string | null;
   /** Open permission requests (0 when unknown, as on the CLI). */
   pendingPermissions?: number;
+  /** Set for an agent on another Paseo host: its label and server id. */
+  host?: string;
+  serverId?: string;
+  /** That host is offline: this is the last known record, with status "unknown". */
+  hostOffline?: HostOffline;
 };
 
 export type CommentRowData = { project: string; pageUrl: string | null; at: string; comments: { target: string; text: string }[]; replied: boolean };
