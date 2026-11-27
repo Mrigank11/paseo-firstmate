@@ -123,6 +123,8 @@ export type RemoteHookAgent = {
   background: boolean;
   metadata: unknown;
   labels: Record<string, string>;
+  /** The status it had in the snapshot the event came from. */
+  status: string;
   serverId: string;
   hostLabel: string;
 };
@@ -425,6 +427,7 @@ export function startRemoteEvents(o: RemoteEventsOptions): { stop(): void; flush
     background: !!a.background,
     metadata: a.metadata ?? {},
     labels: a.labels ?? {},
+    status: a.status,
     serverId: c.serverId,
     hostLabel: c.label,
   });
