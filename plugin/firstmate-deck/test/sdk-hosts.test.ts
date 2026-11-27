@@ -108,12 +108,14 @@ test("an offline host's crews stay, unknown, with since when; never gone or clos
   const s = setup();
   await s.port.listAgents();
   s.mac.status = "offline";
-  s.mac.lastOnlineAt = "2026-11-27T11:00:00.000Z";
+  s.mac.lastOnlineAt = "2026-01-01T11:00:00.000Z"; // when it last connected, which says nothing about when it went
+  const before = Date.now() - 1000;
   const l = await s.again().listAgents({ label: "fm.task" });
   assert.deepEqual(ids(l), ["local-old", "mac-new", "mac-old"]);
   const m = l.find((a) => a.id === "mac-new")!;
   assert.deepEqual([m.status, m.pendingPermissions, m.host, m.serverId, m.createdAt, m.labels["fm.task"]], ["unknown", 0, "mac", "srv_mac", NEW, "demo-ux-task"]);
-  assert.deepEqual(m.hostOffline, { label: "mac", since: "2026-11-27T11:00:00.000Z" });
+  assert.equal(m.hostOffline!.label, "mac");
+  assert.ok(Date.parse(m.hostOffline!.since) >= before);
   await assert.rejects(s.again().send("mac-new", "x"), /mac is unavailable/);
   assert.equal(s.local.sent.length, 0);
 });

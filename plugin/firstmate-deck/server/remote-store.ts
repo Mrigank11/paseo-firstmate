@@ -52,7 +52,8 @@ export function mergeHosts(prev: RemoteStore, seen: readonly HostSeen[], now: Da
     hosts[h.serverId] = {
       label: h.label,
       ...(h.target ?? was?.target ? { target: h.target ?? was?.target } : {}),
-      offlineSince: listed ? null : h.lastOnlineAt ?? was?.offlineSince ?? now.toISOString(),
+      // lastOnlineAt is when the host last connected, so it only stands in for a host never recorded here
+      offlineSince: listed ? null : was ? was.offlineSince ?? now.toISOString() : h.lastOnlineAt ?? now.toISOString(),
       agents: listed ? h.agents! : was?.agents ?? [],
     };
   }

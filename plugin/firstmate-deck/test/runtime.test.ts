@@ -1097,14 +1097,16 @@ test("while the Mac is offline its crew is unknown since then: never the old loc
   r.deck.onAgentEvent("mac-new", "srv_mac");
   await sleep(600); // past the shared label read
   const live = await r.show();
-  assert.match(live, /unknown · mac offline since (22 Oct )?14:03/);
+  // since it was first seen gone, not since it last connected (the fixture's lastOnlineAt, 14:03 on 22 Oct)
+  assert.match(live, /unknown · mac offline since \d/);
+  assert.doesNotMatch(live, /mac offline since (22 Oct )?14:03/);
   assert.match(live, /\/h\/srv_mac\/agent\/mac-new/);
   assert.doesNotMatch(live, /agent\/old-local|so far|mac offline since 2026|1 agent working/);
   assert.deepEqual([r.row()?.agentId, r.row()?.host, r.row()?.stage], ["mac-new", "mac", "Unknown · mac offline"]);
   assert.deepEqual(r.mac.world.calls, []);
   const run = (await r.deck.summary()).projects[0].running[0];
   assert.deepEqual([run.agentStatus, run.host], ["unknown", "mac"]);
-  assert.match(run.current, /^mac offline since (22 Oct )?14:03$/);
+  assert.match(run.current, /^mac offline since .*\d{1,2}:\d{2}/);
   r.deck.stop();
 });
 

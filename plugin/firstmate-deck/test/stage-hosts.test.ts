@@ -109,12 +109,14 @@ test("offline host: its crews stay, as unknown, and nothing is asked of it", asy
   const w: World = { local: [OLD], hosts: [mac([MAC_NEW])] };
   const r = rig(w);
   await r.stage();
-  r.fake.world({ local: [OLD], hosts: [mac([], { status: "offline", lastOnlineAt: NOW })] });
+  // lastOnlineAt is when the host last connected, not when it went: "since" is when it was first seen gone
+  r.fake.world({ local: [OLD], hosts: [mac([], { status: "offline", lastOnlineAt: "2026-01-01T00:00:00.000Z" })] });
   r.reset();
+  const before = Date.now() - 1000;
   const row = await r.stage();
   assert.deepEqual([row.agentId, row.host, row.stage], [MAC_NEW.id, "mac", "Unknown · mac offline"]);
   assert.ok(!r.calls().some((c) => c.includes("--host")));
-  assert.equal(r.store().hosts.srv_mac.offlineSince, NOW);
+  assert.ok(Date.parse(r.store().hosts.srv_mac.offlineSince) >= before);
 });
 
 test("a disabled host keeps its crews as unknown", async () => {

@@ -37,9 +37,17 @@ test("an offline (or unlisted) host keeps its last-known agents and remembers wh
   recordHosts(r, [host({ online: false, agents: null })], T2);
   const h = readRemoteStore(r).hosts.srv_mac;
   assert.deepEqual([h.agents.map((a) => a.id), h.offlineSince], [["a1"], T1.toISOString()]);
-  // the directory's own last-online time wins when it has one
+  // lastOnlineAt is when the host last CONNECTED: for a host seen online here, "since" is when it was first seen gone
   recordHosts(r, [host()], T2);
   recordHosts(r, [host({ online: false, agents: null, lastOnlineAt: T0.toISOString() })], T2);
+  assert.equal(readRemoteStore(r).hosts.srv_mac.offlineSince, T2.toISOString());
+  rmSync(r, { recursive: true, force: true });
+});
+
+test("a host never seen online here is offline since its lastOnlineAt", () => {
+  const r = root();
+  recordHosts(r, [host({ online: false, agents: null, lastOnlineAt: T0.toISOString() })], T2);
+  recordHosts(r, [host({ online: false, agents: null, lastOnlineAt: T1.toISOString() })], T2);
   assert.equal(readRemoteStore(r).hosts.srv_mac.offlineSince, T0.toISOString());
   rmSync(r, { recursive: true, force: true });
 });
