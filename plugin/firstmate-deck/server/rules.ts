@@ -6,6 +6,7 @@
 import { existsSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, dirname, isAbsolute, join, resolve, sep } from "node:path";
+import { redact } from "./redact.ts";
 
 export type PermissionMode = "shadow" | "enforce";
 
@@ -375,5 +376,5 @@ export function summarize(req: PermissionRequestLike): string {
   const d = req.detail as Record<string, unknown> | undefined;
   const pick = d ? (typeof d.command === "string" ? d.command : typeof d.filePath === "string" ? d.filePath : typeof d.url === "string" ? d.url : typeof d.query === "string" ? d.query : "") : "";
   const text = pick || req.title || req.name;
-  return `${d?.type ?? req.kind}: ${text}`.replace(/\s+/g, " ").slice(0, 240);
+  return redact(`${d?.type ?? req.kind}: ${text}`).replace(/\s+/g, " ").slice(0, 240);
 }

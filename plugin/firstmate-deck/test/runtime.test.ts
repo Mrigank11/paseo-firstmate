@@ -1141,7 +1141,7 @@ test("before the first SDK handle, remembered Mac crews are not replaced by an o
   mkdirSync(join(agentsDir, "a"));
   writeFileSync(join(agentsDir, "a", "old-local.json"), JSON.stringify({ id: "old-local", labels: macLabels, createdAt: "2026-10-20T09:00:00Z", lastStatus: "idle" }));
   const r = rig(MACTASK, { sdk: false, deck: { agentsDir } });
-  writeFileSync(join(r.root, "state", "remote-agents.json"), JSON.stringify({ version: 1, hosts: { srv_mac: { label: "mac", offlineSince: null, agents: [{ id: "mac-new", task: "demo-ux-task", status: "running", archived: false, createdAt: "2026-10-22T09:00:00Z", lastActivityAt: "2026-10-22T09:00:00Z", pending: 0, labels: macLabels }] } } }));
+  writeFileSync(join(r.root, "state", "remote-agents.json"), JSON.stringify({ version: 1, hosts: { srv_mac: { label: "mac", offlineSince: null, agents: [{ id: "mac-new", task: "demo-ux-task", status: "running", archived: false, createdAt: "2026-10-22T09:00:00Z", lastActivityAt: "2026-10-22T09:00:00Z", pending: 0, labels: macLabels, owner: "srv_local" }] } } }));
   await r.deck.configure();
   await r.deck.publishStages();
   const row = r.deck.snapshot()!.rows[0];

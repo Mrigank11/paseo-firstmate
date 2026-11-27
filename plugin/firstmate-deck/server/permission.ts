@@ -9,6 +9,7 @@ import { appendFileSync, mkdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { AgentInfo, PortSelector } from "./paseo-port.ts";
 import { notifySwitchOn, wakeTarget, type HookAgent } from "./gate.ts";
+import { redact } from "./redact.ts";
 import { classify, RulesFile, summarize, type PermissionRequestLike, type RulesState } from "./rules.ts";
 
 export type PermissionDecision = "would-allow" | "allow" | "escalate";
@@ -52,7 +53,7 @@ const BULKY = new Set(["content", "output", "oldString", "newString", "unifiedDi
 /** The request as compact JSON for the wake message: bulky tool payloads dropped, the rest capped. */
 export function requestJson(req: Record<string, unknown>): string {
   const slim = JSON.parse(JSON.stringify(req, (k, v) => (BULKY.has(k) ? undefined : v)));
-  const s = JSON.stringify(slim);
+  const s = redact(JSON.stringify(slim));
   return s.length > 1500 ? s.slice(0, 1500) + "…" : s;
 }
 
@@ -90,7 +91,7 @@ export class Permission {
   }
 
   private append(e: Omit<PermissionEntry, "at">): void {
-    const entry: PermissionEntry = { at: new Date((this.o.now ?? Date.now)()).toISOString(), ...e };
+    const entry: PermissionEntry = { at: new Date((this.o.now ?? Date.now)()).toISOString(), ...e, rule: redact(e.rule), ...(e.note ? { note: redact(e.note) } : {}) };
     this.load().add(`${e.agentId}|${e.requestId}`);
     try {
       mkdirSync(join(this.o.root(), "state"), { recursive: true });
@@ -162,7 +163,7 @@ export class Permission {
     const message = [
       `## Crew PERMISSION · ${task}`,
       `${base.summary}`,
-      `escalated by rule: ${c.rule}${mode === "shadow" ? " (shadow mode)" : ""}`,
+      `escalated by rule: ${redact(c.rule)}${mode === "shadow" ? " (shadow mode)" : ""}`,
       `agent ${ev.agent.id} · ${info.labels["fm.shape"] ?? "?"} · project ${info.labels["fm.project"] ?? "-"}${serverId ? ` · on ${info.host ?? ev.agent.hostLabel ?? serverId}` : ""} · request ${req.id}`,
       requestJson(req),
     ].join("\n");

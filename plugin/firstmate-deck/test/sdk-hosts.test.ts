@@ -3,6 +3,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { AgentViews } from "../server/agent-views.ts";
 import { CliPort } from "../server/paseo-cli.ts";
 import { PortSelector, resolveFirstMate, SdkPort, type SdkPortOptions } from "../server/paseo-port.ts";
 import { readRemoteStore } from "../server/remote-store.ts";
@@ -192,4 +193,34 @@ test("a changed handle gets its own port and the old hosts are stopped", async (
   assert.equal(seen, 2);
   assert.notEqual(ports.sdkPort()!.hosts, first);
   assert.equal(await first.client("srv_mac"), null);
+});
+
+// ---------- closed agents: reading a timeline would load (resume) them on their host ----------
+
+test("a closed remote agent's timeline is never read: the last view is kept, with its status", async () => {
+  const s = setup();
+  await s.port.listAgents();
+  const views = new AgentViews();
+  await views.refresh(["mac-new"], s.port);
+  s.remote.agents.get("mac-new")!.status = "closed";
+  s.remote.calls.length = 0;
+  views.markDirty("mac-new");
+  await views.refresh(["mac-new"], s.port);
+  const v = views.peek("mac-new")!;
+  assert.deepEqual([v.status, v.final, v.stale], ["closed", "DONE: on mac", undefined]);
+  assert.deepEqual(await s.port.tailItems("mac-new"), []);
+  assert.equal(s.remote.count("refetch:"), 0);
+  // with nothing seen before: the status alone
+  const first = await s.port.agentView("mac-old");
+  assert.equal(first.status, "idle");
+  const none = await s.again().agentView("mac-new");
+  assert.deepEqual([none.status, none.stepCount, none.recent], ["closed", 0, []]);
+});
+
+test("a closed local agent is read as before", async () => {
+  const s = setup();
+  s.local.agents.get("local-old")!.status = "closed";
+  await s.port.agentView("local-old");
+  await s.port.tailItems("local-old");
+  assert.equal(s.local.count("refetch:"), 2);
 });

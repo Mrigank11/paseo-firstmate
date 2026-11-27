@@ -55,7 +55,7 @@ export type RemoteAgent = {
 type Observer = { snapshot(s: any): void; update(m: any): void; error?(e: unknown): void };
 type RemoteSubscription = { readonly ready: Promise<unknown>; subscribe(o: Observer): () => void; release(): Promise<void> };
 type ListResult = { entries: readonly { agent: RemoteAgent }[]; pageInfo: { hasMore: boolean; nextCursor?: string | null }; subscription?: RemoteSubscription };
-type TimelineEntry = { seqStart: number; turnId?: string | null; item: { type: string; text?: string } };
+type TimelineEntry = { seqStart: number; turnId?: string | null; timestamp?: string; item: { type: string; text?: string } };
 
 /** The slice of a host's PaseoApi (`hosts.client(serverId)`) used here. */
 export type RemoteApi = {
@@ -79,6 +79,8 @@ export type HostSource = {
 /** What is remembered of one agent between runs. */
 export type SavedAgent = {
   status: string;
+  /** The last status seen (`status` stays behind while a turn's end cannot be told yet). */
+  seen?: string;
   turnId: string | null;
   lastUserMessageAt: string | null;
   updatedAt: string | null;
@@ -138,6 +140,8 @@ export type RemoteEventsOptions = {
   /** How often the host list is asked again (a reconnect nothing announced). */
   syncMs?: number;
   /** Which agents matter. Default: those carrying an `fm.task` label. */
+  /** Is that agent of that host ours (ownership.ts)? One that is not raises nothing and is never read. */
+  owns: (serverId: string, agent: RemoteAgent) => Promise<boolean>;
   filter?: (agent: RemoteAgent) => boolean;
   /** Timer seam (tests). Returns a cancel function. */
   schedule?: (fn: () => void, ms: number) => () => void;
@@ -148,6 +152,8 @@ export type RemoteEventsOptions = {
   resyncMs?: number;
   /** A remote call that has not answered by then counts as failed (a sleeping host can leave a request hanging). */
   callTimeoutMs?: number;
+  /** How long a crew that closed while working must stay closed, on a host still online, before that is reported. */
+  closeGraceMs?: number;
   /** Timeline entries read for a turn_ended. */
   tailLimit?: number;
 };
@@ -156,6 +162,8 @@ const PARENT_LABEL = "paseo.parent-agent-id";
 const LIST_LIMIT = 200;
 const MAX_PAGES = 10;
 const ENDED_KEEP = 20;
+export const CLOSE_GRACE_MS = 15_000;
+const WORKING = new Set(["running", "initializing"]);
 /** How often an unreadable tail is asked again before the turn is reported without it. */
 const TAIL_TRIES = 3;
 /** Timeline rows that say nothing about whether a message was answered. */
@@ -192,6 +200,7 @@ export function startRemoteEvents(o: RemoteEventsOptions): { stop(): void; flush
   const syncMs = o.syncMs ?? 30_000;
   const callTimeoutMs = o.callTimeoutMs ?? 20_000;
   const tailLimit = o.tailLimit ?? 60;
+  const closeGraceMs = o.closeGraceMs ?? CLOSE_GRACE_MS;
 
   let stopped = false;
   let gen = 0;
@@ -199,6 +208,9 @@ export function startRemoteEvents(o: RemoteEventsOptions): { stop(): void; flush
   const known = new Map<string, Map<string, Known>>(); // serverId -> agentId -> last state (kept while a host is offline)
   const chains = new Map<string, Promise<unknown>>(); // per host: snapshot work is serial so emits keep their order
   let syncChain: Promise<unknown> = Promise.resolve();
+  /** "serverId/agentId" -> cancel: crews that closed while working, waiting out their grace. */
+  const closing = new Map<string, () => void>();
+  const forgetClose = (key: string): void => { closing.get(key)?.(); closing.delete(key); };
 
   const enqueue = (serverId: string, fn: () => Promise<void>): void => {
     const run = (chains.get(serverId) ?? Promise.resolve()).then(fn).catch((e) => o.log(`remote events (${serverId}): ${(e as Error)?.stack ?? e}`)).then(save);
@@ -254,6 +266,8 @@ export function startRemoteEvents(o: RemoteEventsOptions): { stop(): void; flush
       const clients = await o.hosts.clients().catch((e) => { o.log(`remote events: host list failed: ${e}`); return null; });
       if (!clients || stopped) return;
       const online = new Map(clients.map((c) => [c.serverId, c]));
+      // a host that went offline: what closed on it just before says nothing (quitting Paseo closes every agent first)
+      for (const key of [...closing.keys()]) if (!online.has(key.slice(0, key.indexOf("/")))) forgetClose(key);
       for (const [id, c] of conns) if (!online.has(id)) { o.log(`remote events: host ${c.label} offline, subscription dropped`); disconnect(c); }
       for (const c of clients) {
         const cur = conns.get(c.serverId);
@@ -441,9 +455,26 @@ export function startRemoteEvents(o: RemoteEventsOptions): { stop(): void; flush
     }
   };
 
+  /** agent.closed, once the grace has passed with the host still online and the agent still closed there. */
+  const closeLater = (serverId: string, id: string): void => {
+    const key = `${serverId}/${id}`;
+    forgetClose(key);
+    closing.set(key, schedule(() => enqueue(serverId, async () => {
+      if (!closing.delete(key)) return;
+      const h = (await o.hosts.clients()).find((x) => x.serverId === serverId);
+      if (!h) return;
+      const r = await timed(h.api.agents.ref(id).refresh(), "agent refresh").catch(() => undefined);
+      const c = conns.get(serverId);
+      if (c && r?.agent?.status === "closed") emit(c, "agent.closed", { agent: hookAgent(c, r.agent) });
+    }), closeGraceMs));
+  };
+
   const diffAgent = async (c: Conn, a: RemoteAgent, full: boolean): Promise<void> => {
     const k = state(c.serverId);
     if (!filter(a)) { k.delete(a.id); return; }
+    const ours = await o.owns(c.serverId, a).catch(() => null);
+    if (ours === null || !live(c)) return; // could not be told: decides nothing
+    if (!ours) { k.delete(a.id); return; }
     const turnId = a.activeTurn?.turnId ?? null;
     const pendingNow = new Map((a.pendingPermissions ?? []).map((p) => [p.id, p]));
     const closed = a.status === "closed";
@@ -452,7 +483,7 @@ export function startRemoteEvents(o: RemoteEventsOptions): { stop(): void; flush
     const agent = hookAgent(c, a);
 
     if (!prev) {
-      const base: Known = { status: a.status, turnId, lastUserMessageAt: a.lastUserMessageAt ?? null, updatedAt: a.updatedAt ?? null, pending: new Set(), closed, archived, ended: [], tailFails: 0 };
+      const base: Known = { status: a.status, seen: a.status, turnId, lastUserMessageAt: a.lastUserMessageAt ?? null, updatedAt: a.updatedAt ?? null, pending: new Set(), closed, archived, ended: [], tailFails: 0 };
       k.set(a.id, base);
       for (const [id, req] of pendingNow) { base.pending.add(id); emit(c, "agent.permission_requested", { agent, request: req }); }
       return;
@@ -460,6 +491,9 @@ export function startRemoteEvents(o: RemoteEventsOptions): { stop(): void; flush
     // the stream and a re-list can overtake each other: never step back
     if (prev.updatedAt && a.updatedAt && Date.parse(a.updatedAt) < Date.parse(prev.updatedAt)) return;
 
+    // `status` waits for a turn's end to be told; `seen` is what the agent last was
+    const was = prev.seen ?? prev.status;
+    prev.seen = a.status;
     const wasRunning = prev.status === "running";
     const nowRunning = a.status === "running";
     const newMessage = !!a.lastUserMessageAt && a.lastUserMessageAt !== prev.lastUserMessageAt;
@@ -482,7 +516,8 @@ export function startRemoteEvents(o: RemoteEventsOptions): { stop(): void; flush
 
     for (const [id, req] of pendingNow) if (!prev.pending.has(id)) emit(c, "agent.permission_requested", { agent, request: req });
     for (const id of prev.pending) if (!pendingNow.has(id)) emit(c, "agent.permission_resolved", { agent, requestId: id, resolution: null });
-    if (closed && !prev.closed) emit(c, "agent.closed", { agent });
+    if (!closed) forgetClose(`${c.serverId}/${a.id}`);
+    else if (!prev.closed && WORKING.has(was)) closeLater(c.serverId, a.id);
     if (archived && !prev.archived) emit(c, "agent.archived", { agent, archivedAt: a.archivedAt });
 
     prev.pending = new Set(pendingNow.keys());
@@ -528,7 +563,9 @@ export function startRemoteEvents(o: RemoteEventsOptions): { stop(): void; flush
     const timeline = (own.length ? own : named && tid ? [] : entries).map((e) => e.item);
     for (const id of new Set([t.turnId, tid])) if (id && !prev.ended.includes(id)) prev.ended.push(id);
     while (prev.ended.length > ENDED_KEEP) prev.ended.shift();
-    emit(c, "agent.turn_ended", { agent: hookAgent(c, a), turnId: tid, outcome: t.outcome, timeline });
+    // the gate tells this turn from an earlier one that ended in the same words by when it began
+    const turnStartedAt = own[0]?.timestamp ?? a.lastUserMessageAt ?? undefined;
+    emit(c, "agent.turn_ended", { agent: hookAgent(c, a), turnId: tid, turnStartedAt, outcome: t.outcome, timeline });
     return true;
   };
 
@@ -546,6 +583,7 @@ export function startRemoteEvents(o: RemoteEventsOptions): { stop(): void; flush
       offChange();
       cancelSync?.();
       cancelWait?.();
+      for (const key of [...closing.keys()]) forgetClose(key);
       for (const c of [...conns.values()]) disconnect(c);
       save();
       stopped = true;
@@ -563,13 +601,13 @@ export function startRemoteEvents(o: RemoteEventsOptions): { stop(): void; flush
 }
 
 type Followed = {
-  /** The selector's current SDK port, whose `hosts` is what is watched. */
-  sdkPort(): { hosts: Hosts | null } | null;
+  /** The selector's current SDK port: its `hosts` is what is watched, and it says which agents there are ours. */
+  sdkPort(): { hosts: Hosts | null; owns(serverId: string, agent: { id: string; labels?: Record<string, string> }): Promise<boolean> } | null;
   onHandle?: () => void;
 };
 
 /** `startRemoteEvents` on whichever SDK handle the deck holds: it starts with the first one and moves to every new one. */
-export function followRemoteEvents(ports: Followed, o: Omit<RemoteEventsOptions, "hosts">): { stop(): void; flush(): Promise<void> } {
+export function followRemoteEvents(ports: Followed, o: Omit<RemoteEventsOptions, "hosts" | "owns">): { stop(): void; flush(): Promise<void> } {
   let current: ReturnType<typeof startRemoteEvents> | null = null;
   let on: Hosts | null = null;
   let stopped = false;
@@ -581,6 +619,7 @@ export function followRemoteEvents(ports: Followed, o: Omit<RemoteEventsOptions,
     current = hosts && hosts.supported ? startRemoteEvents({
       ...o,
       hosts: hosts as unknown as HostSource,
+      owns: (serverId, a) => ports.sdkPort()?.owns(serverId, a) ?? Promise.resolve(false),
       emit: (name, event) => {
         const a = (event as { agent: RemoteHookAgent }).agent;
         hosts.note(a.id, a.serverId, a.hostLabel); // so the handlers' calls go to its host

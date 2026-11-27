@@ -19,6 +19,8 @@ export type FakeAgent = {
   /** The relative text `ls` prints. */
   created?: string;
   name?: string;
+  /** On another host: exactly these labels. Otherwise it reads as started by the local daemon (srv_local). */
+  bare?: boolean;
 };
 export type FakeHost = {
   serverId: string;
@@ -33,7 +35,9 @@ export type FakeHost = {
   inspectFails?: boolean;
   hangs?: boolean;
 };
-export type World = { local: FakeAgent[]; hosts: FakeHost[]; hostLsFails?: boolean };
+export type World = { local: FakeAgent[]; hosts: FakeHost[]; hostLsFails?: boolean; localLsFails?: boolean };
+/** The local daemon's server id, as `$PASEO_HOME/server-id` holds it. */
+export const SELF = "srv_local";
 
 export const mac = (agents: FakeAgent[], over: Partial<FakeHost> = {}): FakeHost => ({ serverId: "srv_mac", label: "mac", target: MAC, status: "online", lastOnlineAt: "2026-11-27T12:22:45.386Z", agents, ...over });
 export const crew = (id: string, task: string, createdAt: string, over: Partial<FakeAgent> = {}): FakeAgent => ({ id, createdAt, status: "running", labels: { "fm.task": task }, ...over });
@@ -55,11 +59,11 @@ export function answer(w: World, args: string[]): string | "hang" {
   const agents = host ? host.agents : w.local;
   const find = (id: string) => agents.find((a) => a.id === id) ?? fail("AGENT_NOT_FOUND", `Agent not found: ${id}`);
   if (args[0] === "ls") {
-    if (host?.lsFails) fail("DAEMON_UNREACHABLE", "ls failed");
+    if (host ? host.lsFails : w.localLsFails) fail("DAEMON_UNREACHABLE", "ls failed");
     const label = flag("--label");
     const all = args.includes("-a");
     const rows = agents.filter((a) => all || (!a.archived && !a.unlisted)).filter((a) => !label?.includes("=") || a.labels?.[label.split("=")[0]] === label.slice(label.indexOf("=") + 1));
-    return JSON.stringify(rows.map((a) => ({ id: a.id, shortId: a.id.slice(0, 7), name: a.name ?? a.id, status: a.status ?? "idle", created: a.created ?? "1 hours ago", labels: a.labels ?? {} })));
+    return JSON.stringify(rows.map((a) => ({ id: a.id, shortId: a.id.slice(0, 7), name: a.name ?? a.id, status: a.status ?? "idle", created: a.created ?? "1 hours ago", labels: host && !a.bare ? { "paseo.parent-server-id": SELF, ...a.labels } : a.labels ?? {} })));
   }
   if (args[0] === "inspect") {
     if (host?.inspectFails) fail("TIMEOUT", "inspect failed");

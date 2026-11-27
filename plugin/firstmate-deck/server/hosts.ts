@@ -1,8 +1,9 @@
 // The other Paseo hosts this daemon is linked to (`paseo host ls`), through the SDK handle: `hosts.list()` for the directory and
 // `hosts.client(serverId)` for a full API on one of them. A daemon without `hosts` has none, and everything behaves as before.
 //
-// Nothing here may stall the local daemon's work: every call has a timeout; a client whose call failed is disposed and built
-// afresh on the next use; a host whose call hung is left alone for a cool-down.
+// Nothing here may stall the local daemon's work: every call has a timeout; a client whose link failed is disposed and built
+// afresh on the next use (an error about one agent keeps it: the host's live subscription runs on it); a host whose call hung
+// is left alone for a cool-down.
 import type { PluginHandlerContext } from "@getpaseo/plugin/server";
 import { readRemoteStore } from "./remote-store.ts";
 
@@ -31,6 +32,14 @@ export const HOST_COOLDOWN_MS = 15_000;
 
 export class HostTimeoutError extends Error {}
 
+const LINK_NAMES = new Set(["DaemonConnectionError", "PingTimeoutError"]);
+/** The SDK's words for a link that is gone or not answering; anything else is about the one call. */
+const LINK_MESSAGE = /daemon client (is )?(closed|disposed)|api is disposed|transport (is )?(not connected|disconnected|closed|unavailable)|websocket (is )?(not open|closed)|(host \S+|daemon) is (offline|unavailable)|host (route|handshake) failed|(connection|link) (is )?(closed|lost|reset|down)|\bECONN[A-Z]+\b|\bEPIPE\b|\bETIMEDOUT\b|socket hang up|timed out|timeout waiting/i;
+
+/** Did the call fail because the link to the host did? */
+export const linkFailed = (e: unknown): boolean =>
+  e instanceof HostTimeoutError || LINK_NAMES.has((e as Error)?.name) || LINK_MESSAGE.test(String((e as Error)?.message ?? e));
+
 /** `p`, or a HostTimeoutError after `ms`. A result that arrives too late goes to `late` (to be disposed). */
 export function within<T>(p: Promise<T>, ms: number, what: string, late?: (v: T) => void): Promise<T> {
   return new Promise<T>((resolve, reject) => {
@@ -51,6 +60,8 @@ export class Hosts {
   private api: PaseoApi;
   private o: HostsOptions;
   private dir: HostInfo[] | null = null;
+  /** This daemon's own server id, from the directory; "" until it was read. */
+  self = "";
   private signature: string | null = null;
   private readAt: number | null = null;
   private reading: Promise<void> | null = null;
@@ -118,9 +129,10 @@ export class Hosts {
 
   private apply(d: Directory): void {
     if (this.stopped || !Array.isArray(d?.hosts)) return;
+    this.self = d.self?.serverId || this.self;
     const by = new Map<string, HostInfo>();
     for (const h of d.hosts) {
-      if (!h.serverId || h.serverId === d.self?.serverId) continue;
+      if (!h.serverId || h.serverId === this.self) continue;
       const info: HostInfo = {
         serverId: h.serverId, label: h.label || h.serverId, target: h.targetDescription, enabled: h.enabled,
         online: h.enabled && h.status === "online", lastOnlineAt: h.lastOnlineAt ?? null,
@@ -179,7 +191,7 @@ export class Hosts {
     dispose(c.api);
   }
 
-  /** One call on a host's API, with a timeout. Any failure drops the client; a hang also starts the cool-down. */
+  /** One call on a host's API, with a timeout. A failed link drops the client; a hang also starts the cool-down. */
   async call<T>(serverId: string, fn: (api: PaseoApi) => Promise<T>, ms: number = this.timeout()): Promise<T> {
     const c = await this.client(serverId);
     const label = c?.label ?? this.labelOf(serverId);
@@ -187,7 +199,7 @@ export class Hosts {
     try {
       return await within(Promise.resolve().then(() => fn(c.api)), ms, "call");
     } catch (e) {
-      this.drop(serverId, c.api);
+      if (linkFailed(e)) this.drop(serverId, c.api);
       if (e instanceof HostTimeoutError) this.cooling.set(serverId, this.now() + (this.o.cooldownMs ?? HOST_COOLDOWN_MS));
       throw new Error(`${label}: ${(e as Error).message}`, { cause: e });
     }
@@ -203,13 +215,13 @@ export class Hosts {
     this.owners.set(agentId, { serverId, label });
   }
 
-  /** The remote host an agent lives on; undefined for a local (or unknown) one. */
+  /** The remote host one of our agents lives on; undefined for a local (or unknown, or someone else's) one. */
   hostOf(agentId: string): HostRef | undefined {
     const known = this.owners.get(agentId);
     if (known) return known;
     const root = this.o.root?.();
     if (!root) return undefined;
-    for (const [serverId, h] of Object.entries(readRemoteStore(root).hosts)) {
+    for (const [serverId, h] of Object.entries(readRemoteStore(root, this.self).hosts)) {
       if (h.agents.some((a) => a.id === agentId)) { this.note(agentId, serverId, h.label); return this.owners.get(agentId); }
     }
     return undefined;

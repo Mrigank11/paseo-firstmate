@@ -1,10 +1,11 @@
-// The crews of other Paseo hosts through the CLI (`paseo host ls`, then `ls`/`inspect --host <target>`): used by the stage
+// Our crews (ownership.ts; anyone else's agents there are left out entirely) on other Paseo hosts through the CLI (`paseo host ls`, then `ls`/`inspect --host <target>`): used by the stage
 // CLI (stage-data.ts) and by the plugin before it has an SDK handle (paseo-cli.ts, cold-agents.ts). Dependency-free.
 // Nothing here fails a caller because a host is away: its crews come back from state/remote-agents.json (remote-store.ts)
 // as "unknown". `ls` shows neither dates nor permissions, so `inspect` supplies them: the creation date once (it is kept in
 // the store), the rest only for crews that can still be doing something.
 // Env: PASEO_HOST_TIMEOUT_MS (default 8000) bounds each call to another host; one host gets at most twice that per read.
 import type { Exec } from "./paseo-cli.ts";
+import { claims, daemonServerId, type Self } from "./ownership.ts";
 import type { PortAgent } from "./paseo-port.ts";
 import { mergeHosts, readRemoteStore, recordHosts, remoteRecords, type HostSeen, type RemoteAgent, type RemoteRecord, type RemoteStore } from "./remote-store.ts";
 
@@ -43,8 +44,21 @@ const bystander = (a: any, host: CliHost, archived: boolean): PortAgent => ({
   id: String(a.id), status: String(a.status), labels: a.labels ?? {}, createdAt: null, updatedAt: null, model: null, thinking: null, title: a.name ?? null, archived, host: host.label, serverId: host.serverId,
 });
 
-/** One online host's crews (agents carrying `fm.task`), or null when it cannot be listed. */
-async function crewsOf(exec: Exec, host: CliHost, known: Map<string, RemoteAgent>, tasks: ReadonlySet<string> | undefined, now: Date): Promise<Listing | null> {
+/** The live agents of the local daemon, asked once and only if a relay label needs it. */
+function localIds(exec: Exec): Self["isLocal"] {
+  let asked: Promise<Set<string>> | null = null;
+  return async (id) => {
+    asked ??= exec(["ls", "-g", "--background", "--json"]).then((out) => {
+      const rows = JSON.parse(out || "[]");
+      if (!Array.isArray(rows)) throw new Error("unreadable local agent list");
+      return new Set(rows.map((a) => String(a.id)));
+    });
+    return (await asked).has(id);
+  };
+}
+
+/** One online host's crews of ours (agents carrying `fm.task`), or null when it cannot be listed. */
+async function crewsOf(exec: Exec, host: CliHost, self: Self, known: Map<string, RemoteAgent>, tasks: ReadonlySet<string> | undefined, now: Date): Promise<Listing | null> {
   const deadline = Date.now() + 2 * callTimeout();
   const left = () => Math.min(callTimeout(), deadline - Date.now());
   const call = async (args: string[]): Promise<any> => {
@@ -68,13 +82,17 @@ async function crewsOf(exec: Exec, host: CliHost, known: Map<string, RemoteAgent
     return null;
   }
   const unarchived = new Set(live.map((a) => String(a.id)));
-  const listed = new Map<string, any>([...all, ...live].map((a) => [String(a.id), a]));
+  const listed = new Map<string, any>();
+  for (const a of [...all, ...live]) {
+    const id = String(a.id);
+    if (known.has(id) || (await claims(a.labels, self))) listed.set(id, a);
+  }
   const isCrew = (a: any) => typeof a?.labels?.["fm.task"] === "string" && !!a.labels["fm.task"];
   const rows = new Map([...listed].filter(([, a]) => isCrew(a)));
   const others = [...listed].filter(([, a]) => !isCrew(a)).map(([id, a]) => bystander(a, host, !unarchived.has(id)));
   const agents = [...rows].map(([id, a]): RemoteAgent => {
     const was = known.get(id);
-    return { id, task: a.labels["fm.task"], status: String(a.status), archived: !unarchived.has(id), createdAt: was?.createdAt ?? null, lastActivityAt: was?.lastActivityAt ?? null, pending: 0, labels: a.labels };
+    return { id, task: a.labels["fm.task"], status: String(a.status), archived: !unarchived.has(id), createdAt: was?.createdAt ?? null, lastActivityAt: was?.lastActivityAt ?? null, pending: 0, labels: a.labels, owner: self.serverId };
   });
   const busy = (a: RemoteAgent) => !a.archived && a.status !== "closed" && (!tasks || tasks.has(a.task));
   // Inspected: crews that may be doing something, and ones seen for the first time (the two listings are not one snapshot,
@@ -103,9 +121,9 @@ async function crewsOf(exec: Exec, host: CliHost, known: Map<string, RemoteAgent
 }
 
 export type RemoteRead = {
-  /** Every crew of every other host; an offline (or unlistable) host's come from the store, as "unknown". */
+  /** Every crew of ours on every other host; an offline (or unlistable) host's come from the store, as "unknown". */
   records: RemoteRecord[];
-  /** The online hosts' agents that are not crews. */
+  /** The online hosts' agents of ours that are not crews. */
   others: PortAgent[];
   /** serverId -> what `--host` accepts. */
   targets: Map<string, string>;
@@ -116,10 +134,11 @@ export type RemoteRead = {
  * offline host's crews are only known to a caller that has one. `tasks` narrows which crews get the permission check
  * (undefined: all of them). When the host directory cannot be read the store is left alone and all its crews are unknown.
  */
-export async function readRemote(exec: Exec, o: { root?: string; tasks?: ReadonlySet<string>; now?: Date } = {}): Promise<RemoteRead> {
+export async function readRemote(exec: Exec, o: { root?: string; tasks?: ReadonlySet<string>; now?: Date; serverId?: string } = {}): Promise<RemoteRead> {
   const now = o.now ?? new Date();
   const hosts = await listHosts(exec);
-  const prev: RemoteStore = o.root ? readRemoteStore(o.root) : { version: 1, hosts: {} };
+  const self: Self = { serverId: o.serverId ?? daemonServerId(), isLocal: localIds(exec) };
+  const prev: RemoteStore = o.root ? readRemoteStore(o.root, self.serverId) : { version: 1, hosts: {} };
   const targetsOf = (s: RemoteStore) => new Map(Object.entries(s.hosts).flatMap(([id, h]): [string, string][] => (h.target ? [[id, h.target]] : [])));
   if (!hosts) {
     const away = mergeHosts(prev, Object.entries(prev.hosts).map(([serverId, h]): HostSeen => ({ serverId, label: h.label, online: false, agents: null })), now);
@@ -129,12 +148,12 @@ export async function readRemote(exec: Exec, o: { root?: string; tasks?: Readonl
   const others: PortAgent[] = [];
   const seen = await Promise.all(hosts.map(async (h): Promise<HostSeen> => {
     const known = new Map((prev.hosts[h.serverId]?.agents ?? []).map((a) => [a.id, a]));
-    const got = h.online ? await crewsOf(exec, h, known, o.tasks, now) : null;
+    const got = h.online ? await crewsOf(exec, h, self, known, o.tasks, now) : null;
     for (const [id, at] of got?.rough ?? []) rough.set(id, at);
     others.push(...(got?.others ?? []));
     return { serverId: h.serverId, label: h.label, ...(h.target ? { target: h.target } : {}), online: h.online, lastOnlineAt: h.lastOnlineAt, agents: got?.agents ?? null };
   }));
-  const store = o.root ? recordHosts(o.root, seen, now) : mergeHosts(prev, seen, now);
+  const store = o.root ? recordHosts(o.root, seen, now, self.serverId) : mergeHosts(prev, seen, now);
   return { records: remoteRecords(store).map((r) => (r.createdAt ? r : { ...r, createdAt: rough.get(r.id) ?? null })), others, targets: targetsOf(store) };
 }
 

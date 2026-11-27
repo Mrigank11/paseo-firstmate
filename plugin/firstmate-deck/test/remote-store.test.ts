@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { readRemoteStore, recordHosts, remoteRecords, remoteStorePath, type HostSeen, type RemoteAgent } from "../server/remote-store.ts";
@@ -8,7 +8,7 @@ import { readRemoteStore, recordHosts, remoteRecords, remoteStorePath, type Host
 const T0 = new Date("2026-11-27T10:00:00Z");
 const T1 = new Date("2026-11-27T11:00:00Z");
 const T2 = new Date("2026-11-27T12:00:00Z");
-const agent = (id: string, over: Partial<RemoteAgent> = {}): RemoteAgent => ({ id, task: "t1", status: "running", archived: false, createdAt: T0.toISOString(), lastActivityAt: T0.toISOString(), pending: 0, ...over });
+const agent = (id: string, over: Partial<RemoteAgent> = {}): RemoteAgent => ({ id, task: "t1", status: "running", archived: false, createdAt: T0.toISOString(), lastActivityAt: T0.toISOString(), pending: 0, owner: "srv_local", ...over });
 const host = (over: Partial<HostSeen> = {}): HostSeen => ({ serverId: "srv_mac", label: "mac", online: true, agents: [agent("a1")], ...over });
 const root = () => mkdtempSync(join(tmpdir(), "remote-store-"));
 
@@ -66,5 +66,18 @@ test("records come out as agent records, marked with the host, offline ones as u
   assert.deepEqual(remoteRecords(readRemoteStore(r)).map((a) => [a.id, a.host, a.serverId, a.status, a.hostOffline]), [["a1", "mac", "srv_mac", "running", undefined]]);
   recordHosts(r, [host({ online: false, agents: null })], T1);
   assert.deepEqual(remoteRecords(readRemoteStore(r)).map((a) => [a.status, a.pending, a.hostOffline]), [["unknown", 0, { label: "mac", since: T1.toISOString() }]]);
+  rmSync(r, { recursive: true, force: true });
+});
+
+test("only records owned by the reading daemon are read, and a write drops the rest", () => {
+  const r = root();
+  mkdirSync(join(r, "state"), { recursive: true });
+  const { owner: _, ...unproven } = agent("old");
+  writeFileSync(remoteStorePath(r), JSON.stringify({ version: 1, hosts: { srv_mac: { label: "mac", offlineSince: null, agents: [unproven, agent("mine"), agent("copied", { owner: "srv_other" }), agent("unknown-self", { owner: "" })] } } }));
+  const ids = (self?: string) => readRemoteStore(r, self).hosts.srv_mac.agents.map((a) => a.id);
+  assert.deepEqual(ids(), ["mine", "copied", "unknown-self"]);
+  assert.deepEqual(ids("srv_local"), ["mine", "unknown-self"]);
+  recordHosts(r, [host({ online: false, agents: null })], T1, "srv_local");
+  assert.doesNotMatch(readFileSync(remoteStorePath(r), "utf8"), /"old"|copied/);
   rmSync(r, { recursive: true, force: true });
 });

@@ -3,18 +3,20 @@
 // readable is an empty list, and the SDK read replaces this as soon as there is a handle. Crews of other Paseo hosts come
 // through the CLI (host-cli.ts); with `root`, an offline host's are recalled from state/remote-agents.json.
 import { existsSync, readdirSync, readFileSync } from "node:fs";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { readRemote, toPortAgent } from "./host-cli.ts";
+import { daemonServerId } from "./ownership.ts";
 import type { Exec } from "./paseo-cli.ts";
 import type { PortAgent } from "./paseo-port.ts";
 
 /** Agents carrying `key` (any value), archived ones included, from `<agentsDir>/<shard>/<id>.json` and (for `fm.task`) other hosts. */
-export async function coldLabelled(agentsDir: string, key: string, exec: Exec, root?: string): Promise<PortAgent[]> {
+export async function coldLabelled(agentsDir: string, key: string, exec: Exec, root?: string, serverId?: string): Promise<PortAgent[]> {
   const local = await localLabelled(agentsDir, key, exec);
   if (key !== "fm.task") return local;
   const mine = new Set(local.map((a) => a.id));
   try {
-    const { records } = await readRemote(exec, { root: root || undefined });
+    // the daemon home holds both the agent files and this daemon's server id
+    const { records } = await readRemote(exec, { root: root || undefined, serverId: serverId ?? daemonServerId(dirname(agentsDir)) });
     return [...local, ...records.filter((r) => !mine.has(r.id)).map(toPortAgent)];
   } catch {
     return local;

@@ -3,13 +3,14 @@
 //   canvas-cmd.ts answer <root> <task> <askId> (<value> | --decline <why>) [--agent <id>]   deliver (or decline) a pick through agent-canvas
 //   canvas-cmd.ts snapshot <root> <task> [--agent <id>]            state/tasks/<task>/canvas.final.html + canvas.final.tsx
 //   canvas-cmd.ts relabel <root> <newFirstMate> [<project>]        the live crew agents whose canvas.relay is some other agent (one id per line)
+//   canvas-cmd.ts host-target <root> <agentId>                     what `--host` accepts for our agent on another online host (nothing otherwise)
 // Where agent-canvas is: AGENT_CANVAS_URL, else the `canvasUrl` the deck stamped into page.json (default http://127.0.0.1:6790);
 // its checkout AGENT_CANVAS_DIR, else the stamped `canvasDir`; the relay key AGENT_CANVAS_KEY_FILE, else <PASEO_HOME or ~/.paseo>/agent-canvas/relay.key.
 import { execFileSync } from "node:child_process";
 import { mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { canvasUrl, labelledAgents, type Rec } from "./stage-data.ts";
+import { canvasUrl, hostTarget, labelledAgents, type Rec } from "./stage-data.ts";
 import { projectClaimedId } from "./claims.ts";
 import { loadAllLive } from "./state.ts";
 import { currentAgent } from "./stage.ts";
@@ -282,11 +283,12 @@ async function relabel(root: string, newId: string, project?: string): Promise<v
 }
 
 const [cmd, root, ...rest] = process.argv.slice(2);
-if (!cmd || !root) die("usage: canvas-cmd.ts <snippet|answer|snapshot|relabel> <root> ...");
+if (!cmd || !root) die("usage: canvas-cmd.ts <snippet|answer|snapshot|relabel|host-target> <root> ...");
 switch (cmd) {
   case "snippet": { const kind = takeFlag(rest, "--kind"); process.stdout.write(snippet(root, rest[0] ?? "", kind ?? "issue")); break; }
   case "answer": await answer(root, rest); break;
   case "snapshot": await snapshot(root, rest); break;
   case "relabel": if (!rest[0]) die("relabel needs the new first mate's agent id"); await relabel(root, rest[0], rest[1]); break;
+  case "host-target": if (!rest[0]) die("host-target needs an agent id"); process.stdout.write(await hostTarget(root, rest[0])); break;
   default: die(`unknown command '${cmd}'`);
 }

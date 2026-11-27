@@ -553,18 +553,20 @@ status="${FAKE_MAC:-online}"
 case "$1 $2" in
   "host ls") echo "[{\"serverId\":\"srv_mac\",\"label\":\"mac\",\"enabled\":true,\"status\":\"$status\",\"targetDescription\":\"tcp://mac:6767\"}]" ;;
   *) case "$1" in
-       ls) if [[ " $* " == *" --host "* ]]; then echo '[{"id":"mac-crew-1","status":"running","labels":{"fm.task":"far"}}]'; else echo '[]'; fi ;;
+       ls) if [[ " $* " == *" --host "* ]]; then echo '[{"id":"mac-crew-1","status":"running","labels":{"fm.task":"far","paseo.parent-server-id":"srv_local"}},{"id":"mac-theirs","status":"running","labels":{"fm.task":"far","paseo.parent-server-id":"srv_other"}}]'; else echo '[]'; fi ;;
        inspect) echo '{"CreatedAt":"2026-11-27T12:00:00Z","PendingPermissions":[]}' ;;
      esac ;;
 esac
 P
 chmod +x "$RD/paseo"
+echo srv_local >"$RD/home/server-id"
 {
   export FLEET_FILE="$RD/state/fleet.json" PASEO_BIN="$RD/paseo" PASEO_HOME="$RD/home" FLEET_NO_SNAPSHOT=1 AGENT_CANVAS_URL=off STAGE_SNAPSHOT_WAIT_MS=0
   echo '{"version":2,"tasks":[{"id":"far","intent":"x","shape":"ship","state":"active","since":"2026-11-27T07:00:00Z","asks":[]}]}' >"$FLEET_FILE"
   eq "$("$F" by-agent mac-crew-1 | jq -r .id)" far; check "by-agent: an agent on another host maps to its task" $?
   eq "$("$F" stage far | jq -r '.agentId+"@"+.host+"|"+.stage')" "mac-crew-1@mac|Running"; check "stage: a crew on another host is reported with its host" $?
   "$F" stages --table | grep -q 'mac-crew@mac'; check "stages --table shows the host" $?
+  eq "$("$F" by-agent mac-theirs)" ""; check "by-agent: another daemon's agent on that host is nobody here" $?
   eq "$(FAKE_MAC=offline "$F" by-agent mac-crew-1 | jq -r .id)" far; check "by-agent: still known while the host is offline" $?
   eq "$(FAKE_MAC=offline "$F" stage far | jq -r .stage)" "Unknown · mac offline"; check "stage: an offline host's crew is unknown, not lost" $?
   FAKE_MAC=offline "$F" set far state=done >/dev/null; "$F" archive far >/dev/null

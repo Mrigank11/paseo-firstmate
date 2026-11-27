@@ -6,7 +6,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { CliPort, makeExec } from "../server/paseo-cli.ts";
 import { coldLabelled } from "../server/cold-agents.ts";
-import { crew, fakeExec, mac, MAC, type World } from "./fake-hosts.ts";
+import { crew, fakeExec, mac, MAC, SELF, type World } from "./fake-hosts.ts";
+
+// this daemon's home: its server id says which agents on other hosts are ours
+process.env.PASEO_HOME = mkdtempSync(join(tmpdir(), "deck-clip-home-"));
+writeFileSync(join(process.env.PASEO_HOME, "server-id"), `${SELF}\n`);
 
 const LOCAL = crew("local-1", "lh", "2026-11-27T08:00:00Z", { status: "idle" });
 const REMOTE = crew("mac-1", "lh", "2026-11-27T12:00:00Z", { labels: { "fm.task": "lh", "fm.notify": "plugin" }, pending: 1 });
@@ -104,6 +108,7 @@ test("send to a crew on an offline host fails and sends nothing; an unknown id k
 
 test("cold start: labelled agents include other hosts' crews, offline ones from the store", async () => {
   const dir = root();
+  writeFileSync(join(dir, "server-id"), `${SELF}\n`); // the agents directory's daemon home
   const agents = join(dir, "agents");
   mkdirSync(join(agents, "s"), { recursive: true });
   writeFileSync(join(agents, "s", "local-1.json"), JSON.stringify({ id: "local-1", labels: LOCAL.labels, createdAt: LOCAL.createdAt }));
@@ -129,4 +134,16 @@ test("makeExec: --home names the local daemon, and is left off a call for anothe
   } finally {
     if (was === undefined) delete process.env.PASEO_BIN; else process.env.PASEO_BIN = was;
   }
+});
+
+test("a closed remote agent's log is never read (that would load it on its host)", async () => {
+  const w = world();
+  w.hosts[0].agents[0].status = "closed";
+  const f = fakeExec(w);
+  const port = new CliPort(f.exec);
+  await port.listAgents();
+  assert.equal((await port.sweepInfo("mac-1")).finalLine, null);
+  const v = await port.agentView("mac-1");
+  assert.deepEqual([v.status, v.stepCount], ["closed", 0]);
+  assert.ok(!f.calls.some((c) => c[0] === "logs"));
 });

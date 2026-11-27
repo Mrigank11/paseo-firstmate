@@ -64,6 +64,29 @@ test("a failed call drops the client; the next one is built afresh and onChange 
   assert.equal(changes, 1);
 });
 
+test("an error about one agent keeps the host's client: only the link failing drops it", async () => {
+  const m = mac();
+  const h = make(new FakeHosts(m), { cooldownMs: 0 });
+  const first = (await h.client("srv_mac"))!.api;
+  const named = (name: string, message: string) => Object.assign(new Error(message), { name });
+  for (const e of [new Error("agent x not found"), named("DaemonRpcError", "Agent is closed requestType=send_agent_message_request"), new Error("sendAgentMessage rejected"), new Error("agent x is not ours: leaving it alone"), new Error("no such permission request")]) {
+    await assert.rejects(h.call("srv_mac", async () => { throw e; }), new RegExp(`mac: ${e.message.slice(0, 10)}`));
+  }
+  assert.equal(m.disposed ?? 0, 0);
+  assert.equal((await h.client("srv_mac"))!.api, first);
+  const down = [
+    new Error("Daemon client closed"), new Error("Daemon client is disposed"), new Error("Transport not connected (status: disconnected)"), new Error("Transport disconnected before connect"),
+    new Error("The managing daemon is offline"), new Error("Host srv_mac is offline"), new Error("Paseo API is disposed"), new Error("WebSocket not open (readyState=3)"),
+    new Error("fetch_agents_request timed out (10000ms)"), new Error("Timeout waiting for message"), named("DaemonConnectionError", "gone"), named("PingTimeoutError", "no pong"),
+    new Error("connect ECONNRESET 100.1.1.1:6767"),
+  ];
+  for (const e of down) {
+    const before = m.disposed ?? 0;
+    await assert.rejects(h.call("srv_mac", async () => { throw e; }));
+    assert.equal(m.disposed, before + 1, e.message);
+  }
+});
+
 test("a call that hangs times out, and the host is left alone for the cool-down", async () => {
   const m = mac();
   const c = clock();
@@ -112,7 +135,7 @@ test("observe: a pushed directory applies without waiting for the TTL", async ()
 
 test("hostOf: noted ids, and ids learned from the persisted store before any list call", () => {
   const root = mkdtempSync(join(tmp(), "hosts-"));
-  recordHosts(root, [{ serverId: "srv_mac", label: "mac", online: true, agents: [{ id: "mac-1", task: "t", status: "running", archived: false, createdAt: null, lastActivityAt: null, pending: 0 }] }]);
+  recordHosts(root, [{ serverId: "srv_mac", label: "mac", online: true, agents: [{ id: "mac-1", task: "t", status: "running", archived: false, createdAt: null, lastActivityAt: null, pending: 0, owner: "srv_local" }] }]);
   const h = make(new FakeHosts(mac()), { root: () => root });
   assert.deepEqual(h.hostOf("mac-1"), { serverId: "srv_mac", label: "mac" });
   assert.equal(h.hostOf("local-1"), undefined);

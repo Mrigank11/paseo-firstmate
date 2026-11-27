@@ -7,7 +7,7 @@ import { fileStore, startRemoteEvents, type RemoteEventsOptions, type HostClient
 
 // ---------- a fake remote host (the shape hosts.client(serverId) returns, as far as remote-events reads it) ----------
 
-type Entry = { seqStart: number; turnId?: string; item: { type: string; text?: string } };
+type Entry = { seqStart: number; turnId?: string; timestamp?: string; item: { type: string; text?: string } };
 type Observer = { snapshot(s: unknown): void; update(m: unknown): void; error?(e: unknown): void };
 
 let seq = 0;
@@ -28,6 +28,8 @@ class FakeHost {
   refreshes: Record<string, RemoteAgent | null> = {};
   failList: Error | null = null;
   failTail: Error | null = null;
+  /** Agents whose timeline was asked for. */
+  tails: string[] = [];
   /** Page size of the agent list (0 = everything in one page). */
   pageSize = 0;
   hangList: Promise<void> | null = null;
@@ -62,7 +64,7 @@ class FakeHost {
         },
         ref(id: string) {
           return {
-            timeline: { async refetch() { if (self.failTail) throw self.failTail; return { entries: structuredClone(self.timelines.get(id) ?? []) }; } },
+            timeline: { async refetch() { self.tails.push(id); if (self.failTail) throw self.failTail; return { entries: structuredClone(self.timelines.get(id) ?? []) }; } },
             async refresh() { const a = id in self.refreshes ? self.refreshes[id] : self.agents.get(id) ?? null; return a ? { agent: structuredClone(a) } : null; },
           };
         },
@@ -98,7 +100,7 @@ function setup(host = new FakeHost("srv_mac")) {
   const timers: { fn: () => void; ms: number; cancelled: boolean }[] = [];
   const schedule = (fn: () => void, ms: number) => { const t = { fn, ms, cancelled: false }; timers.push(t); return () => { t.cancelled = true; }; };
   const runTimers = (pred: (ms: number) => boolean = () => true) => { for (const t of timers.splice(0)) if (!t.cancelled && pred(t.ms)) t.fn(); else if (!t.cancelled) timers.push(t); };
-  return { host, src, emitted, timers, runTimers, start: (o: Partial<RemoteEventsOptions> = {}) => startRemoteEvents({ hosts: src, emit: (name, event) => emitted.push({ name, event }), log: () => {}, schedule, retryMs: 100, resyncMs: 600_000, syncMs: 700_000, ...o }) };
+  return { host, src, emitted, timers, runTimers, start: (o: Partial<RemoteEventsOptions> = {}) => startRemoteEvents({ hosts: src, owns: async () => true, emit: (name, event) => emitted.push({ name, event }), log: () => {}, schedule, retryMs: 100, resyncMs: 600_000, syncMs: 700_000, ...o }) };
 }
 const names = (e: Emitted[]) => e.map((x) => x.name);
 const RUN = (turnId: string) => ({ status: "running" as const, activeTurn: { turnId, startedAt: null } });
@@ -216,19 +218,154 @@ test("a permission already pending at first sighting is emitted (nothing else wo
   r.stop();
 });
 
+test("turn_ended says when its turn started: its first timeline entry, else the last message to the agent", async () => {
+  const s = setup();
+  s.host.upsert(agent("crew", RUN("t1")));
+  s.src.set(s.host, true);
+  const r = s.start();
+  await r.flush();
+  s.host.timelines.set("crew", [
+    { seqStart: 1, turnId: "t0", timestamp: "2026-11-27T11:00:00.000Z", item: { type: "assistant_message", text: "DONE: old" } },
+    { seqStart: 2, turnId: "t1", timestamp: "2026-11-27T12:01:00.000Z", item: { type: "user_message", text: "go" } },
+    { seqStart: 3, turnId: "t1", timestamp: "2026-11-27T12:02:00.000Z", item: { type: "assistant_message", text: "DONE: new" } },
+  ]);
+  s.host.upsert(agent("crew"));
+  await r.flush();
+  s.host.upsert(agent("crew", RUN("t2")));
+  await r.flush();
+  s.host.timelines.set("crew", []);
+  s.host.upsert(agent("crew", { lastUserMessageAt: "2026-11-27T12:05:00.000Z" }));
+  await r.flush();
+  assert.deepEqual(s.emitted.filter((e) => e.name === "agent.turn_ended").map((e) => e.event.turnStartedAt), ["2026-11-27T12:01:00.000Z", "2026-11-27T12:05:00.000Z"]);
+  r.stop();
+});
+
+// ---------- ownership ----------
+
+test("an agent on that host that is not ours raises nothing, its timeline is never read, and what was saved of it goes", async () => {
+  const s = setup();
+  let saved: any = { version: 1, hosts: { srv_mac: { theirs: { status: "running", turnId: "t0", lastUserMessageAt: null, updatedAt: "x", closed: false, archived: false, ended: [] } } } };
+  const store = { load: () => saved, save: (v: unknown) => { saved = v; } };
+  s.host.upsert(agent("theirs", RUN("t1")));
+  s.host.upsert(agent("crew", RUN("t1")));
+  s.src.set(s.host, true);
+  const asked: string[] = [];
+  const r = s.start({ store, owns: async (serverId, a) => { asked.push(`${serverId}/${a.id}`); return a.id === "crew"; } });
+  await r.flush();
+  const req = { id: "p1", provider: "claude", name: "Bash", kind: "tool" };
+  for (const id of ["theirs", "crew"]) {
+    s.host.upsert(agent(id, { ...RUN("t1"), pendingPermissions: [req] }));
+    s.host.upsert(agent(id));
+    s.host.upsert(agent(id, { status: "closed" }));
+    s.host.upsert(agent(id, { status: "closed", archivedAt: "2026-11-27T13:00:00Z" }));
+  }
+  await r.flush();
+  assert.ok(asked.includes("srv_mac/theirs"));
+  assert.deepEqual([...new Set(s.emitted.map((e) => e.event.agent.id))], ["crew"]);
+  assert.ok(!s.host.tails.includes("theirs"));
+  assert.deepEqual(Object.keys(saved.hosts.srv_mac), ["crew"]);
+  r.stop();
+});
+
 // ---------- archive / close ----------
 
-test("archivedAt and closed each emit once", async () => {
+const GRACE = 15_000;
+const grace = async (s: ReturnType<typeof setup>, r: { flush(): Promise<void> }) => { s.runTimers((ms) => ms === GRACE); await r.flush(); await new Promise((x) => setImmediate(x)); await r.flush(); };
+
+/** A crew seen with `was`, then closed on its host. */
+async function closes(was: Partial<RemoteAgent> = RUN("t1")) {
   const s = setup();
-  s.host.upsert(agent("crew", { status: "idle" }));
+  s.host.upsert(agent("crew", was));
   s.src.set(s.host, true);
   const r = s.start();
   await r.flush();
   s.host.upsert(agent("crew", { status: "closed" }));
   s.host.upsert(agent("crew", { status: "closed" }));
+  await r.flush();
+  return { s, r };
+}
+
+test("a working crew that closes emits agent.closed once, after a grace in which its host stays online", async () => {
+  for (const was of [RUN("t1"), { status: "initializing" as const }]) {
+    const { s, r } = await closes(was);
+    assert.deepEqual(names(s.emitted), []);
+    await grace(s, r);
+    await grace(s, r);
+    assert.deepEqual(names(s.emitted), ["agent.closed"]);
+    assert.equal(s.emitted[0].event.agent.status, "closed");
+    assert.deepEqual(s.host.tails, [], "a closed crew's timeline is not read");
+    r.stop();
+  }
+});
+
+test("an idle or finished crew that closes says nothing (its Paseo was quit, or it was unloaded)", async () => {
+  const { s, r } = await closes({ status: "idle" });
+  await grace(s, r);
+  assert.deepEqual(names(s.emitted), []);
+  r.stop();
+});
+
+test("a crew that stopped working before it closed says nothing, even while that turn's tail was unreadable", async () => {
+  const s = setup();
+  s.host.upsert(agent("crew", RUN("t1")));
+  s.src.set(s.host, true);
+  const r = s.start();
+  await r.flush();
+  s.host.failTail = new Error("link busy");
+  s.host.upsert(agent("crew"));
+  s.host.upsert(agent("crew", { status: "closed" }));
+  await r.flush();
+  await grace(s, r);
+  assert.ok(!names(s.emitted).includes("agent.closed"));
+  r.stop();
+});
+
+test("a host that goes offline during the grace says nothing, even if it is back before the grace ends", async () => {
+  for (const back of [false, true]) {
+    const { s, r } = await closes();
+    s.src.set(s.host, false);
+    await r.flush();
+    if (back) { s.src.set(s.host, true); await r.flush(); }
+    await grace(s, r);
+    assert.deepEqual(names(s.emitted), [], `back: ${back}`);
+    r.stop();
+  }
+});
+
+test("a host no longer online when the grace ends says nothing, though no change was announced", async () => {
+  const { s, r } = await closes();
+  s.src.online.clear();
+  await grace(s, r);
+  assert.deepEqual(names(s.emitted), []);
+  r.stop();
+});
+
+test("a crew resumed during the grace, or one its host cannot be asked about, says nothing", async () => {
+  const a = await closes();
+  a.s.host.upsert(agent("crew"));
+  await a.r.flush();
+  await grace(a.s, a.r);
+  assert.ok(!names(a.s.emitted).includes("agent.closed"));
+  a.r.stop();
+  const b = await closes();
+  b.s.host.refreshes.crew = agent("crew", RUN("t2")); // resumed, and the update not here yet
+  await grace(b.s, b.r);
+  assert.deepEqual(names(b.s.emitted), []);
+  b.r.stop();
+  const c = await closes();
+  c.s.host.refreshes.crew = null;
+  await grace(c.s, c.r);
+  assert.deepEqual(names(c.s.emitted), []);
+  c.r.stop();
+});
+
+test("archivedAt and closed each emit once", async () => {
+  const { s, r } = await closes();
+  await grace(s, r);
   s.host.upsert(agent("crew", { status: "closed", archivedAt: "2026-11-27T13:00:00Z" }));
   s.host.upsert(agent("crew", { status: "closed", archivedAt: "2026-11-27T13:00:00Z" }));
   await r.flush();
+  await grace(s, r);
   assert.deepEqual(names(s.emitted), ["agent.closed", "agent.archived"]);
   assert.equal(s.emitted[1].event.archivedAt, "2026-11-27T13:00:00Z");
   r.stop();

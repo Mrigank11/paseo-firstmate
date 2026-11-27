@@ -86,9 +86,16 @@ async function withRemote(root: string, taskIds: string[], local: ReturnType<typ
   })];
 }
 
-/** Every agent carrying an fm.task label, on this daemon and on every other host. `taskIds`: the tasks being asked about. */
+/** Every agent carrying an fm.task label, on this daemon, and ours (ownership.ts) on every other host. `taskIds`: the tasks being asked about. */
 export async function labelledAgents(root: string, taskIds: string[]): Promise<Rec[]> {
   return fakeAgents() ?? withRemote(root, taskIds, localAgents(taskIds));
+}
+
+/** What `--host` accepts for our agent `id` on another host that is online; "" for any other agent. */
+export async function hostTarget(root: string, id: string): Promise<string> {
+  const { records, others, targets } = await readRemote(makeExec(process.env.PASEO_HOME || undefined), { root, tasks: new Set() });
+  const hit = records.find((r) => r.id === id && !r.hostOffline) ?? others.find((a) => a.id === id);
+  return (hit?.serverId && targets.get(hit.serverId)) || "";
 }
 
 /** The fm.task label of an agent, "" when it has none. Other hosts are asked only about an agent this daemon does not have. */

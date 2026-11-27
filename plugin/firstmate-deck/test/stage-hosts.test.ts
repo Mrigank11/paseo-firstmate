@@ -7,7 +7,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { crew, fakeBin, mac, MAC, type FakeAgent, type World } from "./fake-hosts.ts";
+import { crew, fakeBin, mac, MAC, SELF, type FakeAgent, type World } from "./fake-hosts.ts";
 
 const server = join(dirname(fileURLToPath(import.meta.url)), "..", "server");
 const NOW = "2026-11-27T13:00:00Z";
@@ -23,6 +23,8 @@ function rig(w: World = { local: [OLD], hosts: [mac([MAC_FIRST, MAC_NEW])] }, ta
   mkdirSync(join(root, "state", "projects", "demo"), { recursive: true });
   writeFileSync(join(root, "state", "projects", "demo", "project.json"), "{}");
   writeFileSync(join(root, "state", "fleet.json"), JSON.stringify({ version: 2, tasks }));
+  mkdirSync(home, { recursive: true });
+  writeFileSync(join(home, "server-id"), `${SELF}\n`);
   const files = (agents: FakeAgent[]) => {
     rmSync(join(home, "agents"), { recursive: true, force: true });
     mkdirSync(join(home, "agents", "shard"), { recursive: true });

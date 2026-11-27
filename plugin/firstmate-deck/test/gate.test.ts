@@ -330,6 +330,27 @@ test("the sweep covers remote crews, and the host's own event for that turn is n
   assert.equal(s.world.sent.length, 2);
 });
 
+const minutes = (n: number) => new Date(Date.now() + n * 60_000).toISOString();
+
+test("a sweep-logged finish whose event never came does not swallow a later turn ending in the same line", async () => {
+  const s = await remote();
+  assert.equal(await s.mk().sweep(), 1);
+  // the later turn began after the agent was swept: its own finish, restart or not
+  await s.mk().onTurnEnded({ ...s.end("t10"), turnStartedAt: minutes(1) });
+  assert.deepEqual(s.world.sent.map((m) => m.id), ["fm", "fm"]);
+});
+
+test("a sweep and the host's event for one turn still wake once, however late the event is", async () => {
+  const s = await remote();
+  const g = s.mk();
+  assert.equal(await g.sweep(), 1);
+  await s.mk().onTurnEnded({ ...s.end("t9"), turnStartedAt: minutes(-5) });
+  assert.equal(s.world.sent.length, 1);
+  assert.deepEqual([s.log().at(-1)!.result, s.log().at(-1)!.turnId], ["duplicate", "t9"]);
+  await s.mk().onTurnEnded({ ...s.end("t10"), turnStartedAt: minutes(1) });
+  assert.equal(s.world.sent.length, 2);
+});
+
 test("the sweep does not repeat a remote finish whose event is still being delivered", async () => {
   const s = await remote();
   const g = s.mk();

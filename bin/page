@@ -155,34 +155,30 @@ claimed_agent() { # [project]
 # A call to another host is bounded (PASEO_HOST_TIMEOUT seconds, where timeout(1) exists) so a sleeping one cannot hang us.
 bounded() { if command -v timeout >/dev/null 2>&1; then timeout "${PASEO_HOST_TIMEOUT:-10}" "$@"; else "$@"; fi; }
 
-# What `--host` accepts for each other host that is enabled and online (none on a Paseo without `host`).
-host_targets() {
-  local home=() out; mapfile -t home < <(paseo_home_args)
-  out="$(bounded paseo host ls --json "${home[@]}" 2>/dev/null)" || return 0
-  jq -r '.[]? | select(.enabled != false and .status == "online") | .targetDescription // empty' <<<"$out" 2>/dev/null || true
+# What `--host` accepts for our agent $1 on another online host; nothing for anyone else's agent there (which is never
+# looked at or relabelled). Who is ours: plugin/firstmate-deck/server/ownership.ts.
+remote_target() { # agent-id
+  NODE_NO_WARNINGS=1 node "$REPO/plugin/firstmate-deck/server/canvas-cmd.ts" host-target "$ROOT" "$1" 2>/dev/null || true
 }
 
-# `paseo inspect <id> --json` from this daemon, else from the online host that has the agent.
+# `paseo inspect <id> --json` from this daemon, else from the online host that has the agent, if it is ours.
 agent_inspect() { # agent-id
   local meta t home=(); mapfile -t home < <(paseo_home_args)
   if meta="$(paseo inspect "$1" --json "${home[@]}" 2>/dev/null)" && [[ -n "$meta" ]]; then printf '%s' "$meta"; return 0; fi
-  for t in $(host_targets); do
-    if meta="$(bounded paseo inspect "$1" --json --host "$t" 2>/dev/null)" && [[ -n "$meta" ]]; then printf '%s' "$meta"; return 0; fi
-  done
-  return 1
+  t="$(remote_target "$1")"; [[ -n "$t" ]] || return 1
+  meta="$(bounded paseo inspect "$1" --json --host "$t" 2>/dev/null)" && [[ -n "$meta" ]] || return 1
+  printf '%s' "$meta"
 }
 
-# Set a label on an agent, on this daemon or else on the online host that has it.
+# Set a label on an agent, on this daemon or else on the online host that has it, if it is ours.
 agent_label() { # agent-id key=value
   local t home=(); mapfile -t home < <(paseo_home_args)
   paseo agent update "$1" --label "$2" "${home[@]}" >/dev/null 2>&1 && return 0
-  for t in $(host_targets); do
-    bounded paseo agent update "$1" --label "$2" --host "$t" >/dev/null 2>&1 && return 0
-  done
-  return 1
+  t="$(remote_target "$1")"; [[ -n "$t" ]] || return 1
+  bounded paseo agent update "$1" --label "$2" --host "$t" >/dev/null 2>&1
 }
 
-# Is $1 an agent that lives on this daemon or an online host and is not archived?
+# Is $1 an agent that lives on this daemon (or is ours on an online host) and is not archived?
 agent_live() {
   command -v paseo >/dev/null 2>&1 || return 1
   local meta; meta="$(agent_inspect "$1")" || return 1

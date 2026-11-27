@@ -68,7 +68,7 @@ export class AgentViews {
       const e = this.entries.get(id);
       if (e) e.dirty = false; // an event during the fetch sets it again
       try {
-        const view = await sdk.agentView(id);
+        const view = await sdk.agentView(id, e?.view);
         const cur = this.entries.get(id);
         if (cur) Object.assign(cur, { view, live: true, failed: false });
         else this.entries.set(id, { view, live: true, dirty: false, failed: false });

@@ -7,9 +7,13 @@ import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { listHosts, readRemote, toPortAgent, type RemoteRead } from "./host-cli.ts";
 import { human, parseStep } from "./humanize.ts";
+import { daemonServerId } from "./ownership.ts";
+import { redact } from "./redact.ts";
 import type { AgentView } from "./render.ts";
 import type { CommentRowData, ListOptions, PaseoPort, PortAgent } from "./paseo-port.ts";
 import { readRemoteStore, remoteRecords } from "./remote-store.ts";
+
+const redacted = (line: string | undefined): string | undefined => (line === undefined ? undefined : redact(line));
 
 export type Exec = (args: string[], timeoutMs?: number) => Promise<string>;
 
@@ -61,8 +65,11 @@ export class CliPort implements PaseoPort {
   private root: () => string | undefined;
   private owners = new Map<string, Owner>();
   private flight: { at: number; p: Promise<RemoteRead> } | null = null;
-  constructor(exec: Exec, o: { root?: string | (() => string | undefined) } = {}) {
+  /** This daemon's server id, which says which agents on other hosts are ours. */
+  private serverId: () => string;
+  constructor(exec: Exec, o: { root?: string | (() => string | undefined); home?: string; serverId?: string } = {}) {
     this.exec = exec;
+    this.serverId = () => o.serverId ?? daemonServerId(o.home);
     const root = o.root;
     this.root = typeof root === "function" ? root : () => root;
   }
@@ -70,7 +77,7 @@ export class CliPort implements PaseoPort {
   /** Every other host's crews (never throws: a host that cannot be read is not a reason to fail the local part). */
   private remote(): Promise<RemoteRead> {
     if (this.flight && Date.now() - this.flight.at < REMOTE_TTL_MS) return this.flight.p;
-    const p = readRemote(this.exec, { root: this.root() || undefined })
+    const p = readRemote(this.exec, { root: this.root() || undefined, serverId: this.serverId() })
       .catch((): RemoteRead => ({ records: [], others: [], targets: new Map() }))
       .then((read) => {
         for (const r of read.records) this.owners.set(r.id, { serverId: r.serverId, label: r.host, target: read.targets.get(r.serverId) });
@@ -107,13 +114,13 @@ export class CliPort implements PaseoPort {
       !here.has(a.id) && (o.includeArchived || !a.archived) && (!key || (a.labels[key] !== undefined && (value === null || a.labels[key] === value))));
   }
 
-  /** The other host `id` is known to live on, from a listing or from the store. */
+  /** The other host our agent `id` is known to live on, from a listing or from the store (both hold only ours). */
   private ownerOf(id: string): Owner | undefined {
     const listed = this.owners.get(id);
     if (listed) return listed;
     const root = this.root();
     if (!root) return undefined;
-    const store = readRemoteStore(root);
+    const store = readRemoteStore(root, this.serverId());
     const r = remoteRecords(store).find((x) => x.id === id);
     return r ? { serverId: r.serverId, label: r.host, target: store.hosts[r.serverId]?.target } : undefined;
   }
@@ -156,7 +163,9 @@ export class CliPort implements PaseoPort {
       });
     } catch {}
     let log: string[] = [];
-    try { log = (await this.exec(["logs", id, ...host])).split("\n"); } catch {}
+    // reading a log loads (resumes) an unloaded agent on its host, so a closed one's is not asked for
+    const shut = host.length > 0 && String(meta.Status ?? "").toLowerCase() === "closed";
+    if (!shut) try { log = (await this.exec(["logs", id, ...host])).split("\n"); } catch {}
     const steps = log.map(parseStep).filter((x): x is [string, string] => !!x);
     return {
       status: (meta.Archived ? "archived" : String(meta.Status ?? "unknown").toLowerCase()) as AgentView["status"],
@@ -166,7 +175,7 @@ export class CliPort implements PaseoPort {
       thinking: meta.Thinking || undefined,
       stepCount: steps.length,
       recent: steps.slice(-8).map(([t, x]) => human(t, x)),
-      final: [...log].reverse().find((l) => l.startsWith("DONE:") || l.startsWith("BLOCKED:")),
+      final: redacted([...log].reverse().find((l) => l.startsWith("DONE:") || l.startsWith("BLOCKED:"))),
     };
   }
 
@@ -189,11 +198,13 @@ export class CliPort implements PaseoPort {
   async sweepInfo(id: string): Promise<{ status: string; updatedAt: string | null; parentAgentId: string | null; finalLine: string | null }> {
     return this.onOwner(id, async (host) => {
       const meta: any = JSON.parse((await this.exec(["inspect", id, "--json", ...host])) || "{}");
-      const log = (await this.exec(["logs", id, "--tail", "40", ...host])).split("\n");
+      const status = String(meta.Status ?? "").toLowerCase();
+      // see agentView: no log of a closed agent on another host
+      const log = host.length > 0 && status === "closed" ? [] : (await this.exec(["logs", id, "--tail", "40", ...host])).split("\n");
       let from = 0;
       log.forEach((l, i) => { if (l.startsWith("[")) from = i + 1; });
       const finalLine = [...log.slice(from)].reverse().find((l) => l.startsWith("DONE:") || l.startsWith("BLOCKED:")) ?? null;
-      return { status: String(meta.Status ?? "").toLowerCase(), updatedAt: meta.UpdatedAt ?? null, parentAgentId: meta.ParentAgentId ?? null, finalLine };
+      return { status, updatedAt: meta.UpdatedAt ?? null, parentAgentId: meta.ParentAgentId ?? null, finalLine: redacted(finalLine ?? undefined) ?? null };
     });
   }
 

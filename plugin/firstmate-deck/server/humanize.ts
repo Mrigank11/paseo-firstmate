@@ -1,4 +1,5 @@
 // Port of live.py's shell_phrase / human: turn a raw agent step (tag, text) into a short readable phrase.
+import { redact } from "./redact.ts";
 
 export function cut(s: string, n: number): string {
   return s.length <= n ? s : s.slice(0, n - 1).trimEnd() + "…";
@@ -40,7 +41,7 @@ export function shellPhrase(cmdIn: string): string {
 }
 
 export function human(tag: string, text: string): string {
-  const t = text.trim();
+  const t = redact(text).trim();
   if (!t) return tag === "Bash" || tag === "Shell" ? "Running a shell command" : tag;
   if (tag === "Shell") return shellPhrase(t);
   if (tag === "Task notification") {

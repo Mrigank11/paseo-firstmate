@@ -1,8 +1,10 @@
-// state/remote-agents.json: the last-known crew records of every other Paseo host, so an offline host's crews stay
-// "unknown" (never gone) for the plugin and for `bin/fleet stage(s)`. Written by both; derived data, safe to delete.
+// state/remote-agents.json: the last-known records of our crews (ownership.ts) on every other Paseo host, so an offline
+// host's crews stay "unknown" (never gone) for the plugin and for `bin/fleet stage(s)`. Written by both; derived data, safe
+// to delete. A record without `owner` was never shown to be ours: it is not read, and the next write leaves it out.
 // Dependency-free (bin/fleet runs it without installing the plugin).
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
+import { ownedBy } from "./ownership.ts";
 import type { HostOffline } from "./stage.ts";
 
 /** One crew (an agent carrying `fm.task`) as last seen on its host. */
@@ -15,6 +17,8 @@ export type RemoteAgent = {
   lastActivityAt: string | null;
   pending: number;
   labels?: Record<string, string>;
+  /** The server id of the daemon this crew was shown to belong to ("" if that daemon's id was unknown). */
+  owner?: string;
 };
 
 export type StoredHost = {
@@ -35,10 +39,15 @@ export type RemoteRecord = RemoteAgent & { host: string; serverId: string; hostO
 
 export const remoteStorePath = (root: string): string => join(root, "state", "remote-agents.json");
 
-export function readRemoteStore(root: string): RemoteStore {
+/** `store` without the records that do not count for the daemon `self` ("" when unknown). */
+export function ownedOnly(store: RemoteStore, self = ""): RemoteStore {
+  return { version: 1, hosts: Object.fromEntries(Object.entries(store.hosts).map(([id, h]) => [id, { ...h, agents: (h.agents ?? []).filter((a) => ownedBy(a, self)) }])) };
+}
+
+export function readRemoteStore(root: string, self = ""): RemoteStore {
   try {
     const s = JSON.parse(readFileSync(remoteStorePath(root), "utf8"));
-    if (s?.version === 1 && s.hosts && typeof s.hosts === "object") return s as RemoteStore;
+    if (s?.version === 1 && s.hosts && typeof s.hosts === "object") return ownedOnly(s as RemoteStore, self);
   } catch {}
   return { version: 1, hosts: {} };
 }
@@ -61,12 +70,13 @@ export function mergeHosts(prev: RemoteStore, seen: readonly HostSeen[], now: Da
 }
 
 /** Merge `seen` into the file (written only when it changes) and return the new store. */
-export function recordHosts(root: string, seen: readonly HostSeen[], now: Date = new Date()): RemoteStore {
-  const prev = readRemoteStore(root);
-  const next = mergeHosts(prev, seen, now);
+export function recordHosts(root: string, seen: readonly HostSeen[], now: Date = new Date(), self = ""): RemoteStore {
+  const next = mergeHosts(readRemoteStore(root, self), seen, now);
   const body = JSON.stringify(next);
-  if (body !== JSON.stringify(prev)) {
-    const path = remoteStorePath(root);
+  const path = remoteStorePath(root);
+  let on = JSON.stringify({ version: 1, hosts: {} });
+  try { on = readFileSync(path, "utf8"); } catch {}
+  if (body !== on) {
     mkdirSync(dirname(path), { recursive: true });
     const tmp = `${path}.${process.pid}.tmp`;
     writeFileSync(tmp, body);

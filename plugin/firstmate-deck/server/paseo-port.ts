@@ -12,6 +12,8 @@ type PaseoAgentHandle = ReturnType<PaseoApi["agents"]["ref"]>;
 import { COMMENT_ROW_KIND, COMMENT_ROW_VERSION } from "../shared/contract.ts";
 import { claimedId, projectClaimedId } from "./claims.ts";
 import { Hosts, within, type HostInfo, type HostRef, type HostsOptions } from "./hosts.ts";
+import { claims } from "./ownership.ts";
+import { redact } from "./redact.ts";
 import { mergeHosts, readRemoteStore, recordHosts, remoteRecords, type HostSeen, type RemoteRecord, type RemoteStore } from "./remote-store.ts";
 import { human } from "./humanize.ts";
 import type { AgentView } from "./render.ts";
@@ -56,7 +58,8 @@ export interface PaseoPort {
    * `includeArchived`. Every host's agents are merged in (marked `host`/`serverId`) unless `local` asks for this daemon's only.
    */
   listAgents(o?: ListOptions): Promise<PortAgent[]>;
-  agentView(id: string): Promise<AgentView>;
+  /** `last` is the view already shown: an agent that may not be read (closed, on another host) keeps what it says. */
+  agentView(id: string, last?: AgentView): Promise<AgentView>;
   /** Send `text` to the agent, steering it if it is mid-turn (never interrupting). */
   send(id: string, text: string): Promise<void>;
   /** Handle-less peek for the gate sweep (CLI only): status, age, parent and the last DONE:/BLOCKED: line of the trailing log block. */
@@ -140,7 +143,7 @@ export function finalLine(items: readonly TimelineItem[]): string | undefined {
     const it = items[i];
     if (it.type !== "assistant_message") continue;
     const lines = it.text.split("\n");
-    for (let j = lines.length - 1; j >= 0; j--) if (lines[j].startsWith("DONE:") || lines[j].startsWith("BLOCKED:")) return lines[j];
+    for (let j = lines.length - 1; j >= 0; j--) if (lines[j].startsWith("DONE:") || lines[j].startsWith("BLOCKED:")) return redact(lines[j]);
   }
   return undefined;
 }
@@ -170,6 +173,9 @@ export const REMOTE_SEND_MS = 20_000;
 export const REMOTE_TTL_MS = 2000;
 /** How long a caller waits for a slow host before taking what is already known (the read carries on behind it). */
 export const REMOTE_PATIENCE_MS = 1000;
+
+/** How long a lookup of a local relay agent is reused. */
+export const RELAY_TTL_MS = 10_000;
 
 export type SdkPortOptions = HostsOptions & {
   listTimeoutMs?: number;
@@ -213,10 +219,10 @@ const matches = (a: PortAgent, o: ListOptions): boolean => {
   return value === null ? key in a.labels : a.labels[key] === value;
 };
 
-/** The persisted form of one remote crew. */
-const toRecord = (a: PortAgent) => ({
+/** The persisted form of one remote crew of the daemon `owner`. */
+const toRecord = (a: PortAgent, owner: string) => ({
   id: a.id, task: a.labels["fm.task"], status: a.status, archived: a.archived, createdAt: a.createdAt, lastActivityAt: a.lastActivityAt ?? a.updatedAt,
-  pending: a.pendingPermissions ?? 0, labels: a.labels,
+  pending: a.pendingPermissions ?? 0, labels: a.labels, owner,
 });
 
 /** A remembered remote crew as a port agent. */
@@ -229,8 +235,9 @@ export function fromRecord(r: RemoteRecord): PortAgent {
 }
 
 /**
- * The SDK handle's agents: this daemon's, plus those of every other Paseo host it is linked to. Per-agent calls go to the host
- * the agent lives on. A host that cannot be listed keeps its last-known crews, as status "unknown" with `hostOffline`.
+ * The SDK handle's agents: this daemon's, plus ours (ownership.ts) on every other Paseo host it is linked to; anyone else's
+ * there is never listed, read or touched. Per-agent calls go to the host the agent lives on. A host that cannot be listed
+ * keeps its last-known crews, as status "unknown" with `hostOffline`.
  */
 export class SdkPort implements PaseoPort {
   readonly kind = "sdk" as const;
@@ -243,6 +250,9 @@ export class SdkPort implements PaseoPort {
   private lists = new Map<string, { at: number; agents: PortAgent[] }>();
   private listing = new Map<string, Promise<PortAgent[] | null>>();
   private failing = new Set<string>();
+  /** "serverId/agentId" of the agents on other hosts shown to be ours. */
+  private ours = new Set<string>();
+  private relays = new Map<string, { at: number; live: Promise<boolean> }>();
   constructor(api: PaseoApi, o: SdkPortOptions = {}) {
     this.api = api;
     this.o = o;
@@ -259,6 +269,49 @@ export class SdkPort implements PaseoPort {
     return [...local, ...remote.filter((a) => !here.has(a.id) && matches(a, o))];
   }
 
+  /** Is `id` exactly a live agent of this daemon? Rejects when it cannot be looked up. */
+  private liveHere(id: string): Promise<boolean> {
+    const have = this.relays.get(id);
+    if (have && Date.now() - have.at < RELAY_TTL_MS) return have.live;
+    const live = within(Promise.resolve().then(() => this.api.agents.ref(id).refresh()), this.o.listTimeoutMs ?? this.o.timeoutMs ?? REMOTE_LIST_MS, "relay lookup")
+      .then((r) => r?.agent?.id === id && !r.agent.archivedAt);
+    this.relays.set(id, { at: Date.now(), live });
+    live.catch(() => this.relays.delete(id)); // a failed lookup decides nothing
+    return live;
+  }
+
+  private store(): RemoteStore {
+    const root = this.o.root?.() || "";
+    return root ? readRemoteStore(root, this.hosts?.self) : this.memory;
+  }
+
+  /** The ids of the crews of one host already on record as ours. */
+  private recorded(serverId: string): Set<string> {
+    return new Set(this.store().hosts[serverId]?.agents.map((a) => a.id) ?? []);
+  }
+
+  /** Is `a`, on the host `serverId`, ours? Once shown to be, it stays so. */
+  async owns(serverId: string, a: { id: string; labels?: Record<string, string> }, recorded?: ReadonlySet<string>): Promise<boolean> {
+    if (!this.hosts) return false;
+    const key = `${serverId}/${a.id}`;
+    if (this.ours.has(key)) return true;
+    await this.hosts.list(); // for our own server id
+    if (!(recorded ?? this.recorded(serverId)).has(a.id) && !(await claims(a.labels, { serverId: this.hosts.self, isLocal: (id) => this.liveHere(id) }))) return false;
+    this.ours.add(key);
+    return true;
+  }
+
+  /** The last check before anything is read from, or done to, an agent on another host. */
+  private async guard(api: PaseoApi, serverId: string, id: string): Promise<void> {
+    if (this.ours.has(`${serverId}/${id}`) || this.recorded(serverId).has(id)) return;
+    const a = (await api.agents.ref(id).refresh())?.agent;
+    if (a?.id !== id || !(await this.owns(serverId, a))) throw new Error(`agent ${id} is not ours: leaving it alone`);
+  }
+
+  private onHost<T>(serverId: string, id: string, op: (api: PaseoApi) => Promise<T>, ms?: number): Promise<T> {
+    return this.hosts!.call(serverId, async (api) => { await this.guard(api, serverId, id); return op(api); }, ms);
+  }
+
   /** The agents of one host, or null when they cannot be read now. A slow host is waited for only `patienceMs`. */
   private async hostAgents(h: HostInfo): Promise<PortAgent[] | null> {
     const id = h.serverId;
@@ -268,6 +321,11 @@ export class SdkPort implements PaseoPort {
     if (!flight) {
       flight = this.hosts!
         .call(id, (api) => listFrom(api, { includeArchived: true }, [{ key: "updated_at", direction: "desc" }]), this.o.listTimeoutMs ?? this.o.timeoutMs ?? REMOTE_LIST_MS)
+        .then(async (all) => {
+          const recorded = this.recorded(id);
+          const mine = await Promise.all(all.map((a) => this.owns(id, a, recorded)));
+          return all.filter((_, i) => mine[i]);
+        })
         .then(
           (all) => {
             const agents = all.map((a) => ({ ...a, host: h.label, serverId: id }));
@@ -293,19 +351,19 @@ export class SdkPort implements PaseoPort {
   private async remoteAgents(): Promise<PortAgent[]> {
     const root = this.o.root?.() || "";
     const dir = await this.hosts!.list();
-    const read = (): RemoteStore => (root ? readRemoteStore(root) : this.memory);
+    const read = (): RemoteStore => this.store();
     // no directory: every remembered host is one that cannot be listed
     const seen: (HostSeen & { live: PortAgent[] | null })[] = dir
       ? await Promise.all(dir.map(async (h) => {
           const live = h.online ? await this.hostAgents(h) : null;
-          return { serverId: h.serverId, label: h.label, target: h.target, online: h.online, lastOnlineAt: h.online ? null : h.lastOnlineAt, agents: live?.filter((a) => a.labels["fm.task"]).map(toRecord) ?? null, live };
+          return { serverId: h.serverId, label: h.label, target: h.target, online: h.online, lastOnlineAt: h.online ? null : h.lastOnlineAt, agents: live?.filter((a) => a.labels["fm.task"]).map((a) => toRecord(a, this.hosts!.self)) ?? null, live };
         }))
       : Object.entries(read().hosts).map(([serverId, h]) => ({ serverId, label: h.label, online: false, agents: null, live: null }));
     if (!seen.length && !Object.keys(read().hosts).length) return [];
     let store: RemoteStore;
     const records = seen.map(({ live: _, ...h }) => h);
     try {
-      store = root ? recordHosts(root, records) : (this.memory = mergeHosts(this.memory, records, new Date()));
+      store = root ? recordHosts(root, records, new Date(), this.hosts!.self) : (this.memory = mergeHosts(this.memory, records, new Date()));
     } catch (e) {
       this.o.log?.(`could not record other hosts' crews: ${(e as Error).message}`);
       store = this.memory = mergeHosts(this.memory, records, new Date());
@@ -327,12 +385,15 @@ export class SdkPort implements PaseoPort {
     return this.hosts?.hostOf(id);
   }
 
-  /** Ask every online host for an agent nobody has placed yet. */
+  /** Ask every online host for an agent of ours that nobody has placed yet. */
   private async discover(id: string): Promise<HostRef | undefined> {
     if (!this.hosts) return undefined;
     const clients = await this.hosts.clients();
     const found = await Promise.all(clients.map(async (c) => {
-      try { return (await within(c.api.agents.ref(id).refresh(), this.o.listTimeoutMs ?? this.o.timeoutMs ?? REMOTE_LIST_MS, "agent lookup"))?.agent ? c : null; }
+      try {
+        const a = (await within(c.api.agents.ref(id).refresh(), this.o.listTimeoutMs ?? this.o.timeoutMs ?? REMOTE_LIST_MS, "agent lookup"))?.agent;
+        return a?.id === id && (await this.owns(c.serverId, a)) ? c : null;
+      }
       catch { return null; }
     }));
     const c = found.find((x) => !!x);
@@ -342,21 +403,45 @@ export class SdkPort implements PaseoPort {
   }
 
   /** Run `op` against the API of the agent's host. An unplaced agent is tried here first, then looked for on the other hosts. */
-  private async routed<T>(id: string, op: (api: PaseoApi) => Promise<T>, ms?: number): Promise<T> {
+  private async routed<T>(id: string, op: (api: PaseoApi, remote: boolean) => Promise<T>, ms?: number): Promise<T> {
+    const there = (host: HostRef) => this.onHost(host.serverId, id, (api) => op(api, true), ms);
     const owner = this.hostOf(id);
-    if (owner) return this.hosts!.call(owner.serverId, op, ms);
+    if (owner) return there(owner);
     try {
-      return await op(this.api);
+      return await op(this.api, false);
     } catch (e) {
       const found = await this.discover(id);
       if (!found) throw e;
-      return this.hosts!.call(found.serverId, op, ms);
+      return there(found);
     }
   }
 
-  async agentView(id: string): Promise<AgentView> {
-    return this.routed(id, async (api) => {
+  /**
+   * The agent on another host when it is closed there, else null. Reading a timeline loads (resumes) an unloaded agent on its
+   * host, so a closed one's is never asked for.
+   */
+  private async closedThere(api: PaseoApi, id: string) {
+    const a = (await api.agents.ref(id).refresh())?.agent;
+    return a && a.status === "closed" ? a : null;
+  }
+
+  async agentView(id: string, last?: AgentView): Promise<AgentView> {
+    return this.routed(id, async (api, remote) => {
       const h = api.agents.ref(id);
+      const shut = remote ? await this.closedThere(api, id) : null;
+      if (shut) {
+        return {
+          status: (shut.archivedAt ? "archived" : "closed") as AgentView["status"],
+          createdAt: shut.createdAt || undefined,
+          updatedAt: shut.updatedAt || undefined,
+          model: shut.model || shut.runtimeInfo?.model || undefined,
+          thinking: shut.effectiveThinkingOptionId || shut.thinkingOptionId || undefined,
+          stepCount: last?.stepCount ?? 0,
+          recent: last?.recent ?? [],
+          ...(last?.stepsAtLeast ? { stepsAtLeast: true } : {}),
+          ...(last?.final ? { final: last.final } : {}),
+        };
+      }
       // A bounded tail: for an agent with more than TAIL_LIMIT timeline entries `stepCount` is a lower bound
       // (`stepsAtLeast` says so and the page shows "N+ steps").
       const page = await h.timeline.refetch({ direction: "tail", limit: TAIL_LIMIT, projection: "projected" });
@@ -376,7 +461,7 @@ export class SdkPort implements PaseoPort {
     });
   }
 
-  /** Status and labels of one agent, fresh from its daemon (hook events carry no labels). Null when it is gone. */
+  /** Status and labels of one agent, fresh from its daemon (hook events carry no labels). Null when it is gone, or not ours. */
   async agentInfo(id: string): Promise<AgentInfo | null> {
     const read = async (api: PaseoApi): Promise<AgentInfo | null> => {
       const a = (await api.agents.ref(id).refresh())?.agent;
@@ -384,7 +469,8 @@ export class SdkPort implements PaseoPort {
     };
     const there = async (host: HostRef) => {
       const a = await this.hosts!.call(host.serverId, read);
-      return a && { ...a, host: host.label, serverId: host.serverId };
+      if (!a || !(await this.owns(host.serverId, a))) return null;
+      return { ...a, host: host.label, serverId: host.serverId };
     };
     const owner = this.hostOf(id);
     if (owner) return there(owner);
@@ -403,9 +489,10 @@ export class SdkPort implements PaseoPort {
     await this.routed(id, (api) => api.agents.ref(id).respondToPermission({ requestId, response }));
   }
 
-  /** The newest timeline items (oldest first), for the gate's sweep. */
+  /** The newest timeline items (oldest first), for the gate's sweep. None for a closed agent on another host. */
   async tailItems(id: string): Promise<TimelineItem[]> {
-    return this.routed(id, async (api) => {
+    return this.routed(id, async (api, remote) => {
+      if (remote && (await this.closedThere(api, id))) return [];
       const page = await api.agents.ref(id).timeline.refetch({ direction: "tail", limit: TAIL_LIMIT, projection: "projected" });
       return [...page.entries].sort((x, y) => x.seqStart - y.seqStart).map((e) => e.item);
     });

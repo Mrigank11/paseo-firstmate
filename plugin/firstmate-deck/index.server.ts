@@ -30,7 +30,7 @@ export default function contribute(server: PluginServerContext) {
   // The SDK handle only reaches hooks and RPC handlers (never contribute()): every one of them hands it to the
   // selector, which switches the deck from the CLI to the SDK as soon as the first one arrives.
   const exec = makeExec(home);
-  const ports = new PortSelector(new CliPort(exec, { root: (): string => deck.root() }), log);
+  const ports = new PortSelector(new CliPort(exec, { root: (): string => deck.root(), home }), log);
 
   const settings = server.registerSettings(deckSettings);
   const deck = new Deck({
