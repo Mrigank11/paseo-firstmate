@@ -81,6 +81,15 @@ test("any setting that differs from every profile is refused, and the message na
   assert.ok(!refusal(() => s.launch(OPUS_HIGH, SHIP)).includes("fm-planning (planning scouts only)"), "a ship is never offered the planning profile");
 });
 
+test("a refused ship is never offered fm-planning, even when the contributor profiles are missing", () => {
+  const planning = SHIPPED.find((p) => p.id === "fm-planning")!;
+  const extra = { id: "fm-extra", name: "x", ...SONNET };
+  const m = refusal(() => setup({ daemon: [planning, extra] }).launch(OPUS_HIGH, SHIP));
+  assert.match(m, /Relaunch with fm-extra: provider "claude\/claude-sonnet-5-5"/);
+  assert.ok(!m.includes("fm-planning:"));
+  assert.match(refusal(() => setup({ daemon: [planning] }).launch(OPUS, SHIP)), /No firstmate profile may run this: add fm-contributor in Paseo\./);
+});
+
 test("scope: a parent label alone makes it a crew; captain agents and first mates are exempt", () => {
   const s = setup();
   assert.match(refusal(() => s.launch(OPUS_HIGH, { "paseo.parent-agent-id": "x" })), /Launch refused/);

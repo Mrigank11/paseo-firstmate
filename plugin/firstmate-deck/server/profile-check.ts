@@ -87,7 +87,9 @@ function replacement(profiles: Profile[], ship: boolean): string {
     ...(ship ? [] : [[PLANNING, `${PLANNING} (planning scouts only)`]]),
     ["fm-fallback", "if fm-contributor cannot start, fm-fallback"],
   ].flatMap(([id, label]) => (find(id) ? [`${label}: ${howTo(find(id)!)}`] : []));
-  const list = offers.length ? offers : profiles.map((p) => `${p.id}: ${howTo(p)}`);
+  const others = profiles.filter((p) => !ship || p.id !== PLANNING);
+  const list = offers.length ? offers : others.map((p) => `${p.id}: ${howTo(p)}`);
+  if (!list.length) return "No firstmate profile may run this: add fm-contributor in Paseo.";
   return `Relaunch with ${list.join("; ")}. Copy the values from list_profiles (dispatch-routing section 3).`;
 }
 

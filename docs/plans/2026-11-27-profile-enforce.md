@@ -35,7 +35,7 @@
 - Match on a daemon with `fm-*` profiles: provider, model, mode, thinking level, and every option the profile declares.
 - Match on a daemon with none (a remote host): provider, model, thinking level, against `config/paseo-profiles.json` of the first mate checkout.
 - `fm.shape=ship` whose only matching profile is `fm-planning`: refused.
-- Fail open, with a log line, when the profiles cannot be read, the stamp is missing, or the check itself throws. Only a deliberate refusal blocks a launch.
+- Fail open, with a log line, when the profiles cannot be read, the stamp is missing, or the check itself throws. Only a deliberate refusal blocks a launch (a hung plugin process is the exception: Paseo's hook timeout fails the open).
 - `profile-check: off` in `state/decisions.md` switches the check off.
 - Refusals and fail-open launches are appended to `state/profile-log.jsonl`.
 

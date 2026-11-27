@@ -22,12 +22,14 @@ The deck plugin enforces the profiles on every crew launch, in the daemon, whate
 | Rule | Behaviour |
 | --- | --- |
 | Checked | first session of an agent with `fm.task` or `paseo.parent-agent-id`; a `firstmate=true` agent without `fm.task` and agents with neither label are exempt |
-| Match | any daemon profile whose id starts `fm-`: provider, model, thinking level, mode (when the profile sets one) and every option it declares |
+| Match | any daemon profile whose id starts `fm-`: provider, model, thinking level, mode (when the profile sets one) and every option it declares. A profile must name a model: `create_agent` cannot launch one without |
 | Daemon with no `fm-*` profiles | provider, model and thinking level against this checkout's `config/paseo-profiles.json` |
 | Ships | refused when `fm-planning` is the only profile that matches |
 | Refusal | the create call fails with `Launch refused: …` naming the settings to use; no agent is made; one line in `state/profile-log.jsonl` |
 | Cannot tell | profiles unreadable or a fault in the check: the launch goes through, logged `unchecked` |
 | Off switch | `profile-check: off` in `state/decisions.md` |
+
+The daemon waits on the deck plugin for every session open, resumes included: if the plugin process hangs, Paseo's hook timeout fails the open. Reloading the plugin also makes Paseo reopen each idle agent's session before its next message, which ends background work running in that session.
 
 Not covered: settings changed on a running agent, agents re-used for a new task, imported sessions, daemons that do not run the plugin, and whether `fm-contributor` really failed before an `fm-fallback` launch.
 
