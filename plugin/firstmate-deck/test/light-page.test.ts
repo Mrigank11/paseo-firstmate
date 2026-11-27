@@ -57,20 +57,23 @@ function boot() {
   let clock = 1_000_000;
   const timers: { fn: () => void; every: number; next: number }[] = [];
   const srcs: string[] = [];
+  const scripts: any[] = [];
   const doc: any = { activeElement: null, addEventListener() {}, getElementById: () => null, querySelectorAll: () => [],
-    createElement: () => { const s: any = { remove() {} }; return s; }, head: { appendChild(s: any) { srcs.push(s.src); } } };
+    createElement: () => { const s: any = { remove() {} }; return s; }, head: { appendChild(s: any) { srcs.push(s.src); scripts.push(s); } } };
   const win: any = { name: "", scrollY: 0, scrollTo() {} };
   const ctx = vm.createContext({ document: doc, window: win, location: { hash: "" }, localStorage: undefined, Date: { now: () => clock, parse: Date.parse },
     JSON, Object, Math, Array, setInterval: (fn: () => void, every: number) => { timers.push({ fn, every, next: clock + every }); return timers.length; } });
   vm.runInContext(pageScript("p", "page.live.js", 1), ctx);
   const advance = (ms: number) => { const end = clock + ms; for (;;) { const d = timers.filter((t) => t.next <= end).sort((a, b) => a.next - b.next)[0]; if (!d) break; clock = d.next; d.next += d.every; d.fn(); } clock = end; };
-  return { win, srcs, advance, versionTicks: () => srcs.filter((s) => s.startsWith("page.live.v.js")).length, fullTicks: () => srcs.filter((s) => s.startsWith("page.live.js")).length };
+  /** The payload fetch still open answers: its script runs (when it says something), then loads. */
+  const answer = (...args: unknown[]) => { const s = scripts.filter((x) => x.src.startsWith("page.live.js") && !x.answered).at(-1); if (args.length) win.__fdLive(...args); if (s) { s.answered = true; s.onload(); } };
+  return { win, srcs, answer, advance, versionTicks: () => srcs.filter((s) => s.startsWith("page.live.v.js")).length, fullTicks: () => srcs.filter((s) => s.startsWith("page.live.js")).length };
 }
 
 test("an idle tab polls only the version file; the full payload loads once, then again only when the hash moves", () => {
   const b = boot();
   assert.equal(b.fullTicks(), 1, "first load fetches the full payload");
-  b.win.__fdLive("<p>a</p>", "i", 1, "h1");
+  b.answer("<p>a</p>", "i", 1, "h1");
   const base = b.fullTicks();
   b.advance(10_000);
   assert.equal(b.versionTicks() >= 10, true, "one tiny check per second");
@@ -83,6 +86,24 @@ test("an idle tab polls only the version file; the full payload loads once, then
   assert.equal(b.fullTicks(), base + 1, "new hash: exactly one full fetch");
   b.advance(1_000);
   assert.equal(b.fullTicks(), base + 1, "and not another while it is in flight or once loaded");
+});
+
+test("one payload fetch at a time: a newer version waits for it, a lost one is given up, and a late old answer is ignored", () => {
+  const b = boot();
+  b.answer("<p>a</p>", "i", 1, "h1");
+  b.win.__fdVer("h2", 2, "i");
+  const n = b.fullTicks();
+  b.advance(6_000);
+  b.win.__fdVer("h3", 3, "i");
+  assert.equal(b.fullTicks(), n, "h2 is still on its way: nothing else is started, however long it has been up to 15 s");
+  b.advance(10_000);
+  b.win.__fdVer("h3", 4, "i");
+  assert.equal(b.fullTicks(), n + 1, "after 15 s without an answer the next one may go");
+  b.answer("<p>c</p>", "i", 4, "h3");
+  b.win.__fdLive("<p>b</p>", "i", 2, "h2"); // the lost answer turns up after all
+  b.win.__fdVer("h3", 5, "i");
+  b.advance(5_000);
+  assert.equal(b.fullTicks(), n + 1, "the page still holds h3: the older answer did not roll it back");
 });
 
 import { CanvasPort } from "../server/canvas-port.ts";

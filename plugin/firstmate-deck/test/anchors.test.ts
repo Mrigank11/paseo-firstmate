@@ -80,14 +80,22 @@ test("replay of c-mw3a8s80-64b25c: through Lavish's own selector it is 'page' be
 
 test("the stamp is also what the page script applies to a payload (not only the helper)", () => {
   const live = parse(render());
-  const liveEl: any = { ...live, children: live.children, set innerHTML(h: string) { /* fallback path */ } };
+  const liveEl: any = { ...live, children: live.children, querySelectorAll: () => [], querySelector: () => null, set innerHTML(h: string) { /* fallback path */ } };
   const ctx = vm.createContext({
     document: { getElementById: (i: string) => (i === "live" ? liveEl : null), addEventListener() {}, querySelectorAll: () => [], createElement: () => ({ remove() {} }), head: { appendChild() {} }, activeElement: null },
     window: { name: "", scrollY: 0, scrollTo() {} }, location: { hash: "" }, localStorage: undefined, Date, JSON, Object, Math, Array, setInterval() {},
   });
   vm.runInContext(pageScript("p", "page.live.js", 1), ctx);
-  assert.match(pageScript("p", "x", 1), /anchorIds\(nx\)/, "the morph path stamps the incoming block before the morph");
-  assert.match(pageScript("p", "x", 1), /anchorIds\(el\)/, "the fallback path stamps after the swap");
+  assert.match(pageScript("p", "x", 1), /own\(nx\)/, "the morph path runs the restore step (stamps included) on the incoming block before the morph");
+  assert.match(pageScript("p", "x", 1), /anchorIds\(root\)/, "the one restore step stamps whatever it is given");
+});
+
+test("stamping the same block again changes nothing (the restore step runs after every update)", () => {
+  const live = parse(render([{ id: "env1", question: "Which change should I plan next?" }]));
+  anchor(live);
+  const first = live.all().map((e) => e.id);
+  anchor(live);
+  assert.deepEqual(live.all().map((e) => e.id), first);
 });
 
 test("every element in every task card is placeable on a task; ones inside a canvas ask box name the ask", () => {

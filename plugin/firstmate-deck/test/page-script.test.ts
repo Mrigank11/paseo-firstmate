@@ -18,6 +18,7 @@ function boot(opts: { focusIn?: () => string | null } = {}) {
   const liveEl: any = {
     contains: (n: any) => n === active,
     querySelectorAll: () => [],
+    querySelector: () => null,
     set innerHTML(html: string) { liveEl._html = html; active = null; /* a swap drops the focused node */ },
   };
   const doc: any = {
