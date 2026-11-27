@@ -47,3 +47,7 @@ Design: the `deck-page-firstprinciples` canvas (the page as an app: the deck own
 ### 5. Index plus content-named task files
 
 - The deck writes an index (lanes, groups, order, sidebar) and one file per card named by content hash; the page fetches the index, then only files it lacks, and swaps only changed cards. Gate: busy copy < 0.5 MB a minute, update p95 < 50 ms; fallback to the full payload on any gap.
+
+## After review (2026-11-27)
+
+Step 5 (index plus content-named task files) is removed, and so is the step-1 heartbeat: the page has one update path (fetch the whole live payload, morph it, then one restore step), and the plugin renders every 20 s again so the stale warning means "rendering stopped". The gate now also checks correctness (`canvas`: nothing disappears in a canvas outage; `correct`: with focus view on and folds open, the page after live updates equals a fresh load). The `bytes` (0.5 MB a minute) and `update` (p95 under 50 ms) budgets are not met on this design: every change downloads the whole payload.

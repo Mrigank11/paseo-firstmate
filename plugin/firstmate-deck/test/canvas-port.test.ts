@@ -5,11 +5,11 @@ import { CanvasPort } from "../server/canvas-port.ts";
 import { FakeCanvas, summary } from "./fake-canvas.ts";
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
-const rig = async (o: { url?: string } = {}) => {
+const rig = async (o: { url?: string; graceMs?: number } = {}) => {
   const fc = await new FakeCanvas().start();
   const changes: string[][] = [];
   const logs: string[] = [];
-  const port = new CanvasPort({ url: () => o.url ?? fc.url, onChange: (ids) => changes.push(ids), log: (m) => logs.push(m), pollMs: 20, maxBackoffMs: 80 });
+  const port = new CanvasPort({ url: () => o.url ?? fc.url, onChange: (ids) => changes.push(ids), log: (m) => logs.push(m), pollMs: 20, maxBackoffMs: 80, graceMs: o.graceMs });
   return { fc, port, changes, logs, done: async () => { port.stop(); await fc.stop(); } };
 };
 
@@ -49,8 +49,52 @@ test("only the wanted agents are asked for, and one want() per project is unione
   await r.done();
 });
 
-test("unreachable canvas: soft 'down' (no fragment, no stage input), backoff, and recovery", async () => {
+test("a transient failure keeps the last good canvases: nothing drops until the failures have lasted the grace time", async () => {
+  const r = await rig({ graceMs: 80 });
+  r.fc.set(summary("ag-1"));
+  r.port.want("demo", ["ag-1"]);
+  await r.port.poll();
+  r.port.stop(); // this test drives every poll itself
+  r.changes.length = 0;
+  r.fc.down = true;
+  await r.port.poll(); await r.port.poll();
+  assert.equal(r.port.status, "ok", "one bad read is not an outage");
+  assert.equal(r.port.data(["ag-1"]).summaries["ag-1"].rev, 1, "the last good summary is still shown");
+  assert.match(r.port.data(["ag-1"]).cards["ag-1"], /rev 1/, "and the last good card");
+  assert.equal(r.changes.length, 0, "nothing to re-render");
+  assert.equal(r.logs.filter((l) => /unreachable/.test(l)).length, 1, "it is logged");
+  r.fc.down = false;
+  await r.port.poll();
+  await sleep(100); // a success ends the streak: the old failures do not count towards the next one
+  r.fc.down = true;
+  await r.port.poll();
+  assert.equal(r.port.status, "ok");
+  await sleep(100);
+  await r.port.poll();
+  assert.equal(r.port.status, "down", "failing for longer than the grace time");
+  assert.deepEqual(r.port.data(["ag-1"]).summaries, {});
+  await r.done();
+});
+
+test("a card that fails to load is announced when it does arrive", async () => {
   const r = await rig();
+  r.fc.set(summary("ag-1"));
+  r.port.want("demo", ["ag-1"]);
+  await r.port.poll();
+  r.port.stop();
+  r.fc.set(summary("ag-1", { rev: 2 }));
+  r.fc.cardsDown = true;
+  await r.port.poll();
+  r.fc.cardsDown = false;
+  r.changes.length = 0;
+  await r.port.poll();
+  assert.match(r.port.data(["ag-1"]).cards["ag-1"], /rev 2/);
+  assert.deepEqual(r.changes.flat(), ["ag-1"], "the page is told to re-render with the new card");
+  await r.done();
+});
+
+test("unreachable canvas: soft 'down' (no fragment, no stage input), backoff, and recovery", async () => {
+  const r = await rig({ graceMs: 0 });
   r.fc.set(summary("ag-1"));
   r.port.want("demo", ["ag-1"]);
   await r.port.poll();

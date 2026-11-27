@@ -28,15 +28,19 @@ export function navScript(): string {
   function adopt(){var p=pref();if(p===undefined)p=1;if(p!==applied){applied=p;if(wide())setExp(p===1,false)}[fl,sl].forEach(applyShut);applyFocus()}
   // ---- focus view: only the selected task's card shows. On/off is "tn-focus"; the selection is the one "tn-sel:<card id>"
   // set to 1 (the marks endpoint stores only 0/1 flags, so switching sets the old key to 0). Both persist like the fold.
-  var fbar=$("tn-fbar");
+  // Which card shows is a style rule this script owns, never a mark on the card: a live update rewrites the cards.
+  var fbar=$("tn-fbar"),fcss=null;
+  function focusRule(id){if(!fcss){fcss=d.createElement("style");fcss.id="fd-focus";d.head.appendChild(fcss)}
+    var c='[id="'+id.replace(/["\\\\]/g,"\\\\$&")+'"]',css="body.tn-focus #live .task:not("+c+"),body.tn-focus #live .grp:not(:has("+c+")),body.tn-focus #live .summary{display:none}"+
+      "body.tn-focus "+c+" .cv.has-full .cv-c{display:none}";
+    if(fcss.textContent!==css)fcss.textContent=css}
   function fp(k,v){return window.__fdPref?(arguments.length<2?window.__fdPref(k):window.__fdPref(k,v)):undefined}
   function selected(){var ks=window.__fdPrefKeys?window.__fdPrefKeys("tn-sel:"):[];for(var i=0;i<ks.length;i++){var id=ks[i].slice(7);if($(id))return id}return null}
   function select(id){if(!window.__fdPrefKeys)return;window.__fdPrefKeys("tn-sel:").forEach(function(k){if(k!=="tn-sel:"+id)fp(k,0)});if(fp("tn-sel:"+id)!==1)fp("tn-sel:"+id,1)}
   function applyFocus(){var want=fp("tn-focus")===1,id=want?selected():null;
     if(want&&!id){var a=(cur&&fl.querySelector('.tn-a[data-t="'+cur+'"]'))||fl.querySelector(".tn-a");if(a){id=a.getAttribute("data-t");select(id)}}
     var on=want&&!!id;body.classList.toggle("tn-focus",on);
-    q(d,".task.tn-sel").forEach(function(t){if(t.id!==id)t.classList.remove("tn-sel")});
-    if(on){var t=$(id);t.classList.add("tn-sel");q(t,"details.cv-d").forEach(function(x){x.open=true});for(var p=t.parentElement;p;p=p.parentElement)if(p.tagName==="DETAILS"&&!p.open)p.open=true}
+    if(on){focusRule(id);var t=$(id);q(t,"details.cv-d,details.lz").forEach(function(x){x.open=true});for(var p=t.parentElement;p;p=p.parentElement)if(p.tagName==="DETAILS"&&!p.open)p.open=true}
     q(d,".tn-fx").forEach(function(b){b.setAttribute("aria-pressed",on?"true":"false")});
     if(fbar){fbar.hidden=!on;if(on){var l=fl.querySelector('.tn-a[data-t="'+id+'"]'),name=l?l.textContent:id,key=fbar.getAttribute("data-id")+"|"+name;
       if(key!==id+"|"+name){fbar.setAttribute("data-id",id);fbar.innerHTML=${JSON.stringify(svg(ICON.focus))}+'<span>Focus view: <b></b></span><button type="button" class="tn-fall">Show all tasks</button>';fbar.querySelector("b").textContent=name}}}}

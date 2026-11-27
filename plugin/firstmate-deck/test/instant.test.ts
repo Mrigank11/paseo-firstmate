@@ -105,7 +105,7 @@ test("page script in a fake DOM: click marks optimistically, queues, sends, surv
   const card = {};
   btns.forEach((b) => { b.closest = (sel: string) => (sel === ".opts" ? box : card); });
   let click: ((e: any) => void) | undefined;
-  const liveEl: any = { querySelectorAll: (s: string) => (s === ".opts[data-key]" ? [box] : []), set innerHTML(_v: string) {} };
+  const liveEl: any = { querySelectorAll: (s: string) => (s === ".opts[data-key]" ? [box] : []), querySelector: () => null, set innerHTML(_v: string) {} };
   const doc: any = {
     addEventListener: (ev: string, fn: any) => { if (ev === "click") click = fn; },
     getElementById: (id: string) => (id === "live" ? liveEl : null),

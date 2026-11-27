@@ -13,6 +13,8 @@ export class FakeCanvas {
   summaries = new Map<string, FmSummary>();
   hits: string[] = [];
   down = false;
+  /** Only the card fetches fail. */
+  cardsDown = false;
   cssTheme: string | null = null;
   private server: Server;
   url = "";
@@ -33,6 +35,7 @@ export class FakeCanvas {
         return void res.end(JSON.stringify({ agents, missing: ids.filter((i) => !this.summaries.has(i)) }));
       }
       const m = /^\/api\/fm\/card\/([\w-]+)$/.exec(u.pathname);
+      if (m && this.cardsDown) { res.writeHead(503); return void res.end("down"); }
       if (m && this.summaries.has(m[1])) { res.writeHead(200, { "content-type": "text/html" }); return void res.end(this.cardHtml.get(m[1]) ?? `<div class="blk">FULL CANVAS ${m[1]} rev ${this.summaries.get(m[1])!.rev}</div>`); }
       const a = /^\/asset\/([0-9a-f]{32})$/.exec(u.pathname);
       if (a && this.assets.has(a[1])) { const f = this.assets.get(a[1])!; res.writeHead(200, { "content-type": f.mime }); return void res.end(f.bytes); }

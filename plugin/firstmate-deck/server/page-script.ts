@@ -1,4 +1,7 @@
 // The page's inline script, adapted from lh-dev-status.html.
+// One update path: the version file says the content moved, the page fetches the whole live payload, morphs it into #live and runs
+// one step (own, then after) that puts back everything this browser owns on the server's elements. Anything new the browser
+// writes onto those elements belongs in own(); state that can live elsewhere does (the focus-view selection is a style rule).
 // Lavish's iframe has an opaque origin: localStorage may throw and fetch() cannot read the live data,
 // so the live block arrives by re-adding a <script> tag that calls window.__fdLive(html). Open/closed
 // <details> state lives in memory, mirrored to localStorage when allowed, else to window.name. Read marks ("Done,
@@ -27,7 +30,7 @@ export function pageScript(project: string, liveFile: string, tickSeconds: numbe
   function place(box,list){var kids=[].slice.call(box.children),same=kids.length===list.length;
     for(var i=0;same&&i<list.length;i++)if(kids[i]!==list[i])same=false;
     if(!same)list.forEach(function(t){box.appendChild(t)})}
-  function arrange(root){root=root||document;var g=function(i){return root===document?document.getElementById(i):root.querySelector("#"+i)},u=g("g-doneu"),d=g("g-done");if(!u||!d)return;
+  function arrange(root){var u=root.querySelector("#g-doneu"),d=root.querySelector("#g-done");if(!u||!d)return;
     // cards the server already placed in Done are read (it applied the stored marks): adopt that, so an unreachable endpoint does not undo it
     [].slice.call(d.querySelectorAll(".task[data-h]")).forEach(function(t){if(!(t.id in R))R[t.id]=t.getAttribute("data-h")});
     var all=[].slice.call(u.querySelectorAll(".task")).concat([].slice.call(d.querySelectorAll(".task")));
@@ -38,7 +41,7 @@ export function pageScript(project: string, liveFile: string, tickSeconds: numbe
     place(ur,ul);place(dr,dl);
     u.querySelector(".cn").textContent=ul.length;d.querySelector(".cn").textContent=dl.length;u.hidden=!ul.length;d.hidden=!dl.length;
     [].slice.call(root.querySelectorAll(".sum[data-k]")).forEach(function(a){var un=a.getAttribute("data-k")==="u",n=un?cu:cd;
-      a.hidden=!n;a.textContent=n+(un?" done, unread":" done")});if(root===document)tn()}
+      a.hidden=!n;a.textContent=n+(un?" done, unread":" done")})}
   // the task navigator (nav-script.ts) rebuilds from the live block's data-tn template and re-reads the unread marks
   function tn(){if(window.__tn)try{window.__tn()}catch(e){}}
   var pt=null;
@@ -48,11 +51,11 @@ export function pageScript(project: string, liveFile: string, tickSeconds: numbe
     Object.keys(rr).forEach(function(k){if(R[k]!==rr[k]){R[k]=rr[k];ch=true}});
     Object.keys(oo).forEach(function(k){if(!(k in S)){S[k]=oo[k];ch=true}});
     if(j&&j.s&&j.s.at>SA){SA=j.s.at;SEEN=j.s.keys||{};attn()}
-    if(ch){save();restore(document);arrange();tn()}}).catch(function(){})}catch(e){}}
+    if(ch){save();restore(document);after()}}).catch(function(){})}catch(e){}}
   document.addEventListener("click",function(e){var b=e.target.closest&&e.target.closest("button.mr,button.mra");if(!b)return;
     if(b.classList.contains("mr")){var t=b.closest(".task"),h=t&&t.getAttribute("data-h");if(h)R[t.id]=h}
     else [].slice.call(document.querySelectorAll("#g-doneu .task")).forEach(function(t){var h=t.getAttribute("data-h");if(h)R[t.id]=h});
-    save();arrange();push()});
+    save();after();push()});
   if(MU)setInterval(pull,30000);
   function reveal(id){var t=id&&document.getElementById(id);for(var p=t&&t.parentElement;p;p=p.parentElement)if(p.tagName==="DETAILS")p.open=true;
     var z=t&&t.querySelector&&t.querySelector(":scope > details.lz");if(z&&!z.open)z.open=true}
@@ -128,25 +131,31 @@ export function pageScript(project: string, liveFile: string, tickSeconds: numbe
     [].slice.call(root.querySelectorAll("[data-chg]")).forEach(function(e){var t=chgText(e.getAttribute("data-chg"));if(t&&e.textContent!==t)e.textContent=t});
     [].slice.call(root.querySelectorAll("[data-so]")).forEach(function(e){var t=dur(Math.max(0,(now-Number(e.getAttribute("data-so")))/1000))+" so far";if(e.textContent!==t)e.textContent=t});
     [].slice.call(root.querySelectorAll("[data-ago]")).forEach(function(e){var t=dur(Math.max(0,(now-Number(e.getAttribute("data-ago")))/1000));if(e.textContent!==t)e.textContent=t});
-    if(root!==document)return;
     [].slice.call(root.querySelectorAll(".st-send[data-late]")).forEach(function(e){if(!e.__t)e.__t=now;if(now-e.__t>Number(e.getAttribute("data-late")))e.classList.add("st-late")})}
   setInterval(function(){clocks()},15000);
   // ---- cards that are one line until opened (data-bh): the body is a content-named file next to the page, loaded when the card is
   // opened (or when it is open already). BODY keeps what was loaded, by task id, so a swap re-fills an open card with no flash.
   var D=${j(liveFile.replace(/\.live\.js$/, "") + ".d")}+"/",BODY={},CSSK={},BL={};
   function hs(t){var h=5381;for(var i=0;i<t.length;i++)h=((h<<5)+h+t.charCodeAt(i))|0;return h+":"+t.length}
-  function fillBody(card,any){var id=card.id.slice(2),h=card.getAttribute("data-bh"),b=BODY[id],z=card.querySelector(".lzb");
-    if(!z||!b||(!any&&b.h!==h))return;if(z.firstChild&&z.__h===b.h)return;z.innerHTML=b.html;z.__h=b.h;restore(z);anchorIds(z);clocks(z)}
-  function want(d){var card=d.closest&&d.closest("article.task[data-bh]");if(!card)return;var id=card.id.slice(2),h=card.getAttribute("data-bh"),b=BODY[id];
-    if(b&&b.h===h){fillBody(card);return}
-    var k=id+" "+h;if(BL[k])return;BL[k]=1;var sc=document.createElement("script");sc.src=D+"b."+id+"."+h+".js";
+  function fillBody(card){var b=BODY[card.id.slice(2)],z=card.querySelector(".lzb");
+    if(!z||!b||(z.firstChild&&z.__h===b.h))return;z.innerHTML=b.html;z.__h=b.h;restore(z)}
+  function current(card){var b=BODY[card.id.slice(2)];return !!b&&b.h===card.getAttribute("data-bh")}
+  function want(d){var card=d.closest&&d.closest("article.task[data-bh]");if(!card||current(card))return;var id=card.id.slice(2),h=card.getAttribute("data-bh");
+    var k=id+" "+h;if(BL[k])return;BL[k]=1;var sc=document.createElement("script");sc.src=D+"b."+id.replace(/[^\\w.-]/g,"_")+"."+h+".js";
     sc.onload=sc.onerror=function(){sc.remove();setTimeout(function(){delete BL[k]},4000)};document.head.appendChild(sc)}
   function bodies(){[].slice.call(document.querySelectorAll("details.lz[open]")).forEach(want)}
-  document.addEventListener("toggle",function(e){var d=e.target;if(d&&d.classList&&d.classList.contains("lz")&&d.open)want(d)},true);
+  document.addEventListener("toggle",function(e){var d=e.target;if(d&&d.classList&&d.classList.contains("lz")&&d.open){after();want(d)}},true);
   window.__fdBody=function(id,h,html,css){
     if(css){var k=hs(css);if(!CSSK[k]){CSSK[k]=1;var st=document.createElement("style");st.setAttribute("data-cv-snap","");st.textContent=css;document.head.appendChild(st)}}
-    BODY[id]={h:h,html:html};var c=document.getElementById("t-"+id);if(c&&c.getAttribute("data-bh")===h){var d=c.querySelector("details.lz");if(d&&d.open)fillBody(c)}};
-  restore(document);arrange();clocks();pull();reveal(location.hash.slice(1));fill();
+    BODY[id]={h:h,html:html};after()};
+  // ---- the one restore step. own() puts on a copy of the list (the live block, or the new one before it is morphed in, so the
+  // morph leaves matching nodes alone) everything this browser owns there: open folds, read marks, picked options, the bodies of
+  // open one-line cards, comment anchors and the clock words. after() runs it on the page and refreshes what sits around the list.
+  function own(root){restore(root);arrange(root);reapply(root);
+    [].slice.call(root.querySelectorAll("article.task[data-bh]")).forEach(function(c){var d=c.querySelector("details.lz");if(d&&d.open)fillBody(c)});
+    anchorIds(root);clocks(root)}
+  function after(){var el=live();if(!el)return;own(el);fill();bodies()}
+  restore(document);after();pull();reveal(location.hash.slice(1));
   // Keyboard focus survives a live swap: remember the focused element's id (or its <details> id, for a summary) and put focus back.
   function fkey(){var a=document.activeElement,el=live();if(!a||!el||!el.contains||!el.contains(a))return null;
     if(a.id)return a.id;var p=a.parentElement;return a.tagName==="SUMMARY"&&p&&p.id?"sum:"+p.id:null}
@@ -154,78 +163,39 @@ export function pageScript(project: string, liveFile: string, tickSeconds: numbe
     if(k.indexOf("sum:")===0){var d=document.getElementById(k.slice(4));t=d&&d.querySelector&&d.querySelector("summary")}else t=document.getElementById(k);
     if(t&&t.focus)try{t.focus({preventScroll:true})}catch(e){}}
   var last=null,changedAt=Date.now(),token=null,STALE=60000;
-  // Staleness is measured on THIS browser's clock only: how long ago the payload last CHANGED (the plugin stamps every
-  // render with a growing sequence number and re-renders at least every 20 s). The daemon's timestamp is never compared
+  // Staleness is measured on THIS browser's clock only: how long ago the plugin last RENDERED (it stamps every render with a
+  // growing sequence number and renders at least every 20 s, changed or not). The daemon's timestamp is never compared
   // with the browser's, so a skewed phone clock cannot raise a false alarm or hide a real stall.
   function stale(){var b=document.getElementById("fd-stale");staleNow=(Date.now()-changedAt)>STALE;if(b)b.hidden=!staleNow;meta()}
   setInterval(stale,5000);
-  // The page polls a tiny version file (V) every second. It names the content of the page in pieces (see render.ts renderLive): the
-  // skeleton (sk), the parked and done block (cd) and the manifest of the active cards (mf), each a content-named file in D. A
-  // change fetches only the pieces whose name moved, then only the cards whose hash differs from the one on screen, and swaps just
-  // those cards (or, when the skeleton or the cold block moved, morphs the page with an empty stub for every unchanged card, which
-  // the morph skips). The whole payload (F) is the first load and the fallback for anything that does not add up.
-  var have=null,loading=false,HV={sk:null,cd:null,mf:null},SKL={},COL={},MAN={},CAR={},noSync=0;
-  var CB={beforeAttributeUpdated:function(a,n){if(a==="open"&&n.id&&n.id in S)return false},
-    beforeNodeMorphed:function(n,m){if(n.nodeName==="IFRAME"&&m.nodeName==="IFRAME"&&n.getAttribute("srcdoc")===m.getAttribute("srcdoc"))return false;
-      if(n.getAttribute&&m.getAttribute){var a=n.getAttribute("data-ch");if(a&&a===m.getAttribute("data-ch"))return false}}};
-  function safe(id){return id.replace(/[^\\w.-]/g,"_")}
+  // The page polls a tiny version file (V) every second and fetches the live payload (F) only when its content hash moved: an
+  // idle tab costs bytes, not the whole page. have is the hash on screen, want the newest one the version file has named.
+  var have=null,named=null,busy=null,tried={h:null,at:0},SEQ=0;
   function seen(seq,iso){var tk=seq!==undefined&&seq!==null?"s"+seq:(iso?"i"+iso:null);
     if(tk!==null&&tk!==token){token=tk;changedAt=Date.now();stale()}}
-  window.__fdVer=function(hash,seq,iso,chg,sk,cd,mf){seen(seq,iso);
+  window.__fdVer=function(hash,seq,iso,chg){seen(seq,iso);
     if(chg){var c=Date.parse(chg);if(c&&c!==CHG){CHG=c;clocks()}}
-    if(!hash||hash===have||loading)return;
-    if(sk&&have!==null&&Date.now()>noSync)sync(hash,sk,cd,mf);else full()};
-  window.__fdSkel=function(h,html){SKL[h]=html};window.__fdCold=function(h,html){COL[h]=html};window.__fdMan=function(h,m){MAN[h]=m};
-  window.__fdCard=function(id,h,html){CAR[id+" "+h]=html;var ks=Object.keys(CAR);if(ks.length>400)delete CAR[ks[0]]};
-  function getAll(jobs,cb){var n=jobs.length,bad=false;if(!n)return cb(true);
-    jobs.forEach(function(j){var sc=document.createElement("script");sc.src=D+j.f;
-      sc.onload=sc.onerror=function(){sc.remove();if(!j.ok())bad=true;if(--n===0)cb(!bad)};document.head.appendChild(sc)})}
-  function sync(hash,sk,cd,mf){loading=true;var jobs=[];
-    if(sk!==HV.sk&&!SKL[sk])jobs.push({f:"s."+sk+".js",ok:function(){return SKL[sk]!==undefined}});
-    if(cd!==HV.cd&&!COL[cd])jobs.push({f:"k."+cd+".js",ok:function(){return COL[cd]!==undefined}});
-    if(mf!==HV.mf&&!MAN[mf])jobs.push({f:"m."+mf+".js",ok:function(){return !!MAN[mf]}});
-    getAll(jobs,function(ok){if(!ok)return bad();
-      var man=MAN[mf]||{},cards=[];
-      Object.keys(man).forEach(function(id){var e=document.getElementById("t-"+id),h=man[id];
-        if((e&&e.getAttribute("data-ch"))!==h&&CAR[id+" "+h]===undefined)cards.push({f:"c."+safe(id)+"."+h+".js",ok:function(){return CAR[id+" "+h]!==undefined}})});
-      getAll(cards,function(ok2){if(!ok2)return bad();finish(hash,sk,cd,mf)})})}
-  function bad(){noSync=Date.now()+30000;full()}
-  function finish(hash,sk,cd,mf){var t0=performance.now(),skC=sk!==HV.sk,cdC=cd!==HV.cd,man=MAN[mf]||{},ok=true,fk=fkey(),y=window.scrollY;
-    if(!skC&&!cdC){
-      Object.keys(man).forEach(function(id){var e=document.getElementById("t-"+id),h=man[id];if(!e){ok=false;return}if(e.getAttribute("data-ch")===h)return;
-        var c=CAR[id+" "+h];if(c===undefined){ok=false;return}swapCard(e,c)});
-      if(!ok)return bad()}
-    else{
-      var html=(SKL[sk]||"").replace("<!--cold-->",function(){return cdC?(COL[cd]||""):'<div class="fd-cold" id="fd-cold" data-ch="'+cd+'"></div>'})
-        .replace(/<!--c:([^>]+?)-->/g,function(m,id){var h=man[id],e=document.getElementById("t-"+id);if(!h){ok=false;return ""}
-          if(e&&e.getAttribute("data-ch")===h)return '<article class="task" id="t-'+id+'" data-ch="'+h+'"></article>';
-          var c=CAR[id+" "+h];if(c===undefined){ok=false;return ""}return c});
-      if(!ok)return bad();
-      applyHtml(html)}
-    HV={sk:sk,cd:cd,mf:mf};have=hash;loading=false;clocks();refocus(fk);if(window.scrollY!==y)window.scrollTo(0,y);if(window.__fdUpd)window.__fdUpd(performance.now()-t0)}
-  function swapCard(e,html){var I=window.Idiomorph,tmp=document.createElement("div");tmp.innerHTML=html;restore(tmp);reapply(tmp);clocks(tmp);anchorIds(tmp);
-    var n=tmp.firstElementChild;if(!n)return;
-    if(I&&I.morph)I.morph(e,n,{morphStyle:"outerHTML",restoreFocus:true,callbacks:CB});else e.replaceWith(n)}
-  window.__fdLive=function(html,iso,seq,hash,pc){seen(seq,iso);loading=false;if(hash)have=hash;
-    if(pc)HV={sk:pc[0],cd:pc[1],mf:pc[2]};
-    if(iso){var c=Date.parse(iso);if(c)CHG=c}
-    applyHtml(html)};
-  function applyHtml(html){
+    if(!hash)return;named=hash;if(hash!==have)full(hash)};
+  // an older answer that arrives late (lower number, and not the content now asked for) must not roll the page back
+  window.__fdLive=function(html,iso,seq,hash){if(seq<SEQ&&hash!==named)return;if(seq)SEQ=seq;
+    seen(seq,iso);if(hash)have=hash;if(iso){var c=Date.parse(iso);if(c)CHG=c}
     var el=live();if(!el||html===last)return;last=html;
     var fk=fkey();snapshot();var y=window.scrollY,M="<!--LIVE-",I=window.Idiomorph;
     if(I&&I.morph&&window.Element&&el instanceof window.Element){
-      // Morph, do not replace: build the new block off-screen, bring it in line with what this browser has done to the
-      // page (open folds, read marks, picked options), then let the morph touch only the nodes that differ. Nothing
-      // unchanged is re-created or moved, so embedded canvas frames do not reload and scroll, hover and selection stay.
-      var nx=document.createElement("div");nx.innerHTML=html;restore(nx);arrange(nx);reapply(nx);clocks(nx);
-      [].slice.call(nx.querySelectorAll("article.task[data-bh]")).forEach(function(c){var d=c.querySelector("details.lz");if(d&&d.open)fillBody(c,true)});anchorIds(nx);
-      I.morph(el,nx,{morphStyle:"innerHTML",restoreFocus:true,callbacks:CB});
-      arrange();clocks();bodies();fill();refocus(fk);if(window.scrollY!==y)window.scrollTo(0,y);return}
-    el.innerHTML=M+"START-->"+html+M+"END-->";restore(el);arrange();reapply(el);clocks();anchorIds(el);bodies();fill();refocus(fk);window.scrollTo(0,y)}
+      // Morph, do not replace: only the nodes that differ are touched, so nothing unchanged is re-created or moved, embedded
+      // canvas frames do not reload and scroll, hover and selection stay.
+      var nx=document.createElement("div");nx.innerHTML=html;own(nx);
+      I.morph(el,nx,{morphStyle:"innerHTML",restoreFocus:true,callbacks:{
+        beforeAttributeUpdated:function(a,n){if(a==="open"&&n.id&&n.id in S)return false},
+        beforeNodeMorphed:function(n,m){if(n.nodeName==="IFRAME"&&m.nodeName==="IFRAME"&&n.getAttribute("srcdoc")===m.getAttribute("srcdoc"))return false}}})}
+    else el.innerHTML=M+"START-->"+html+M+"END-->";
+    after();refocus(fk);if(window.scrollY!==y)window.scrollTo(0,y)};
   function load(file,done){var s=document.createElement("script");s.src=file+"?t="+Date.now();s.onload=s.onerror=function(){s.remove();if(done)done()};document.head.appendChild(s)}
-  // a full fetch that never answers must not block the next one for good
-  function full(){loading=true;load(F,function(){setTimeout(function(){loading=false},4000)})}
-  function tick(){if(!loading)load(V)}
+  // One payload fetch at a time, finished only by its own load or error (or given up after 15 s without either); the same
+  // content is asked for again only after 4 s.
+  function full(h){var now=Date.now();if((busy&&now-busy.at<15000)||(h&&h===tried.h&&now-tried.at<4000))return;tried={h:h,at:now};
+    var me=busy={at:now};load(F,function(){if(busy===me)busy=null})}
+  function tick(){load(V)}
   full();tick();setInterval(tick,${Math.max(1, Math.round(tickSeconds)) * 1000});
 })();`;
 }

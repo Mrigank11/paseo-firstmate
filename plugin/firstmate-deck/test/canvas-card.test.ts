@@ -50,8 +50,8 @@ test("the full embed card sits in a collapsed fold (the focus view opens it), an
   assert.match(html, /<details class="cnotes cv-d" id="cvd-ag-1"><summary>Full canvas<\/summary><div class="cv-f acv"><div class="blk">FULL<\/div><\/div><\/details>/);
   assert.equal(r.page.split(".acv .blk{color:red}").length - 1, 1);
   assert.ok(r.page.indexOf(".acv .blk") < r.page.indexOf("<body>"));
-  assert.match(r.page, /body\.tn-focus \.task\.tn-sel \.cv\.has-full \.cv-c\{display:none\}/);
-  assert.match(r.page, /q\(t,"details\.cv-d"\)\.forEach\(function\(x\)\{x\.open=true\}\)/, "the focus view opens the fold");
+  assert.ok(r.page.includes('.cv.has-full .cv-c{display:none}"'), "the focus view's rule for the selected card is written by the navigator (nav-script.ts)");
+  assert.match(r.page, /q\(t,"details\.cv-d,details\.lz"\)\.forEach\(function\(x\)\{x\.open=true\}\)/, "the focus view opens the fold");
   assert.ok(!r.live.includes(".acv .blk{color:red}"), "css is page-level, not per card");
 });
 

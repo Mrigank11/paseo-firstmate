@@ -5,9 +5,13 @@
 //   restart  the plugin process restarted 3 times under the open tab: frame reloads
 //   comment  a comment on an old done card: its body must be on the page
 //   open     a one-line done card opens to its body, and the body is still there after a stretch of live updates
+//   canvas   the fake agent-canvas fails for GATE_OUTAGE_S while crews work: no active card may lose its canvas in any painted frame
+//   correct  folds opened, one running card selected, focus view on; crews write, cards move between groups, counts and comments
+//            change for GATE_CORRECT_S. The selected card and its canvas must be on screen in every painted frame, and at the end
+//            the page must be the same as a fresh load of the same data (the frame reloaded with the same stored state).
 // Exit code 1 when a check in GATE_CHECKS (default all) misses its budget. Results also go to <dir>/gate-<run>.json.
 // Chrome keeps a unix socket under TMPDIR, whose path must stay under 108 characters: PG_CHROME_TMP is a short on-disk dir (default <dir>/../pgt, a symlink to <dir>/tmp).
-// usage: PG_DIR=<scratch> node gate.ts   env: GATE_IDLE_S=300 GATE_BUSY_S=120 GATE_CHECKS=idle,bytes,update,restart,comment,open GATE_CPU=1
+// usage: PG_DIR=<scratch> node gate.ts   env: GATE_IDLE_S=300 GATE_BUSY_S=120 GATE_CORRECT_S=90 GATE_OUTAGE_S=12 GATE_CHECKS=idle,bytes,update,restart,comment,open,canvas,correct GATE_CPU=1
 //        PG_RUN=gate PG_LPORT=4531 PG_MPORT=4532 PG_CPORT=4533
 import { createRequire } from "node:module";
 import { spawn, type ChildProcess } from "node:child_process";
@@ -19,7 +23,8 @@ const here = dirname(fileURLToPath(import.meta.url));
 const DIR = process.env.PG_DIR ?? "/home/mrigank/projects/llm-exp/paseo-firstmate/.isolated/deck-page-firstprinciples-build";
 const RUN = process.env.PG_RUN ?? "gate", LPORT = process.env.PG_LPORT ?? "4531";
 const IDLE_S = +(process.env.GATE_IDLE_S ?? 300), BUSY_S = +(process.env.GATE_BUSY_S ?? 120), CPU = +(process.env.GATE_CPU ?? 1);
-const CHECKS = new Set((process.env.GATE_CHECKS ?? "idle,bytes,update,restart,comment,open").split(","));
+const CHECKS = new Set((process.env.GATE_CHECKS ?? "idle,bytes,update,restart,comment,open,canvas,correct").split(","));
+const CORRECT_S = +(process.env.GATE_CORRECT_S ?? 90), OUTAGE_S = +(process.env.GATE_OUTAGE_S ?? 12);
 const BUDGET = { idleLists: 0, mbPerMin: 0.5, updateP95Ms: 50, restartReloads: 0 };
 const { chromium } = createRequire(import.meta.url)(process.env.PG_PLAYWRIGHT ?? "/home/mrigank/projects/confcall/node_modules/playwright-core");
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -38,7 +43,9 @@ const startServe = async (keep: boolean) => {
   return readFileSync(urlFile, "utf8").trim().replace(/^http:\/\/[^/]+/, `http://127.0.0.1:${LPORT}`);
 };
 const stopServe = async () => { srv?.kill("SIGTERM"); await sleep(1000); srv = null; };
-const setChurn = (on: boolean) => writeFileSync(churnFile, on ? "on" : "off");
+const setChurn = (mode: "on" | "off" | "mixed" | "poke") => writeFileSync(churnFile, mode);
+const setCanvas = (down: boolean) => writeFileSync(join(DIR, `canvas-${RUN}`), down ? "down" : "up");
+const setPoke = (task: string) => writeFileSync(join(DIR, `poke-${RUN}`), task);
 
 const pct = (xs: number[], p: number) => { if (!xs.length) return 0; const s = [...xs].sort((a, b) => a - b); return s[Math.min(s.length - 1, Math.floor(p * s.length))]; };
 const result: Record<string, any> = { run: RUN, cpu: CPU, budget: BUDGET, checks: {} };
@@ -96,13 +103,13 @@ try {
 
   // ---- idle: no crew changes; the deck's own 20 s tick and clocks still run
   if (CHECKS.has("idle")) {
-    setChurn(false); await sleep(25000); // let the last change settle
+    setChurn("off"); await sleep(25000); // let the last change settle
     const w = await win("idle", IDLE_S * 1000);
     verdict("idle", w.lists <= BUDGET.idleLists, `${w.lists} list downloads (${(w.listBytes / 1048576).toFixed(1)} MB) in ${w.seconds} s idle, budget ${BUDGET.idleLists}`);
   }
   // ---- busy: crews change every 1-3 s; real clicks on sidebar titles every 10 s
   if (CHECKS.has("bytes") || CHECKS.has("update")) {
-    setChurn(true); await sleep(5000);
+    setChurn("on"); await sleep(5000);
     const clicks: number[] = []; let k = 0;
     const click = async () => {
       fr = await frame(); await pass();
@@ -110,7 +117,7 @@ try {
       const idx = await fr.evaluate((k: number) => { const f = document.getElementById("tn-fl")?.getBoundingClientRect(); if (!f) return -1; const v = [...document.querySelectorAll("#tn-fl .tn-a")].map((a, i) => [i, a] as const).filter(([, a]: any) => { const b = a.getBoundingClientRect(); return a.offsetParent && b.top > f.top && b.bottom < f.bottom; }); return v.length ? v[k % v.length][0] : -1; }, k++);
       if (idx < 0) return; const el = (await fr.$$("#tn-fl .tn-a"))[idx]; const bb = await el.boundingBox(); if (!bb) return;
       const id = await el.getAttribute("data-t"), t = Date.now(); await page.mouse.click(bb.x + 20, bb.y + bb.height / 2);
-      for (let i = 0; i < 100; i++) { if (await fr.evaluate((i: string | null) => !!i && !!document.querySelector(`#${CSS.escape(i)}.tn-sel, .task.tn-sel#${CSS.escape(i)}`), id).catch(() => false)) { clicks.push(Date.now() - t); return; } await sleep(50); }
+      for (let i = 0; i < 100; i++) { if (await fr.evaluate((i: string | null) => !!i && location.hash === "#" + i && !!document.getElementById(i)?.getClientRects().length, id).catch(() => false)) { clicks.push(Date.now() - t); return; } await sleep(50); }
       clicks.push(5000);
     };
     const w = await win("busy", BUSY_S * 1000, async () => { const end = Date.now() + BUSY_S * 1000; while (Date.now() < end) { await click().catch(() => {}); await sleep(Math.min(10000, Math.max(0, end - Date.now()))); } });
@@ -140,7 +147,7 @@ try {
   }
   // ---- open: a one-line card opens to its body, and keeps it through live updates
   if (CHECKS.has("open")) {
-    setChurn(true); fr = await frame(); await pass();
+    setChurn("on"); fr = await frame(); await pass();
     const lite = await fr.evaluate(() => { const c = document.querySelector("article.task[data-bh]") as HTMLElement | null; if (!c) return null;
       for (let p = c.parentElement; p; p = p.parentElement) { if (p.tagName === "DETAILS") (p as HTMLDetailsElement).open = true; if ((p as HTMLElement).hidden) (p as HTMLElement).hidden = false; }
       c.scrollIntoView({ block: "center" }); return { id: c.id, before: c.innerHTML.length }; });
@@ -151,6 +158,88 @@ try {
       const loadMs = Date.now() - t; await sleep(20000); fr = await frame();
       const after = await fr.evaluate((id: string) => ({ len: document.querySelector(`#${id} .lzb`)?.innerHTML.length ?? 0, open: !!(document.querySelector(`#${id} > details.lz`) as HTMLDetailsElement | null)?.open }), lite.id);
       verdict("open", n > 1000 && after.len === n && after.open, `${lite.id}: body ${n} chars after ${loadMs} ms, ${after.len} chars and ${after.open ? "still open" : "closed"} after 20 s of updates (was ${lite.before} chars as one line; ${docs.length - d1} page reloads)`);
+    }
+  }
+  // ---- helpers for the correctness checks: a per-painted-frame watcher in the page, and a canonical picture of what it shows
+  const watchCards = (ids: string[], onScreen = true) => fr.evaluate(([ids, onScreen]: [string[], boolean]) => {
+    const w = window as any; if (w.__watch) w.__watch.on = false;
+    const m = w.__watch = { on: true, frames: 0, bad: 0, first: "" };
+    const step = () => { if (!m.on) return; m.frames++;
+      for (const id of ids) { const c = document.getElementById(id), cv = c?.querySelector(".cv");
+        const why = !c ? "card not on the page" : onScreen && !c.getClientRects().length ? "card hidden" : !cv ? "canvas gone" : onScreen && !cv.getClientRects().length ? "canvas hidden" : "";
+        if (why) { m.bad++; if (!m.first) m.first = `${id}: ${why} (frame ${m.frames})`; break; } }
+      requestAnimationFrame(step); };
+    requestAnimationFrame(step);
+  }, [ids, onScreen] as [string[], boolean]);
+  const watched = () => fr.evaluate(() => { const m = (window as any).__watch; m.on = false; return { frames: m.frames, bad: m.bad, first: m.first }; });
+  const activeWithCanvas = () => fr.evaluate(() => [...document.querySelectorAll("#live article.task:not([data-bh])")].filter((a) => a.querySelector(".cv")).map((a) => a.id));
+  // ---- canvas: agent-canvas fails for a while under a working crew
+  if (CHECKS.has("canvas")) {
+    setCanvas(false); setPoke(""); setChurn("on"); fr = await frame(); await pass(); await sleep(5000);
+    const ids = await activeWithCanvas();
+    await watchCards(ids, false); setCanvas(true); await sleep(OUTAGE_S * 1000); setCanvas(false); await sleep(15000);
+    const m = await watched();
+    verdict("canvas", ids.length > 5 && m.frames > 100 && m.bad === 0, `${ids.length} active canvases over a ${OUTAGE_S} s canvas outage: one missing in ${m.bad} of ${m.frames} painted frames${m.first ? `; first: ${m.first}` : ""}`);
+  }
+  // ---- correct: the captain's view (folds open, a card selected, focus view) after live updates equals a fresh load
+  if (CHECKS.has("correct")) {
+    setCanvas(false); setPoke(""); setChurn("off"); fr = await frame(); await pass(); await sleep(3000);
+    const sel = (await fr.evaluate(() => [...document.querySelectorAll("#g-running article.task, #g-you article.task, #g-fm article.task")].find((a) => a.querySelector(".cv.has-full"))?.id ?? "")) as string;
+    if (!sel) verdict("correct", false, "no active card with a full canvas to select");
+    else {
+      setPoke(sel.slice(2));
+      const folds = await fr.evaluate(async (sel: string) => {
+        const nap = () => new Promise((r) => setTimeout(r, 60)); let n = 0;
+        const open = async (d: Element | null) => { const s = d?.querySelector(":scope > summary") as HTMLElement | null; if (s && !(d as HTMLDetailsElement).open) { s.click(); n++; await nap(); } };
+        await open(document.getElementById("g-parked")); await open(document.getElementById("g-done"));
+        await open(document.querySelector("#g-parked details.lz")); await open(document.querySelector("#g-done details.lz"));
+        for (const d of [...document.querySelectorAll("#live details.actx:not([open]), #live details.cnotes:not([open])")].filter((d) => !d.closest("article[data-bh]")).slice(0, 4)) await open(d);
+        (document.querySelector(`#tn-fl .tn-a[data-t="${sel}"]`) as HTMLElement).click(); await nap();
+        if (!document.body.classList.contains("tn-focus")) (document.querySelector(".tn-fx") as HTMLElement).click();
+        await nap(); for (const d of [...document.getElementById(sel)!.querySelectorAll("details:not([open])")]) await open(d);
+        return n;
+      }, sel);
+      await sleep(3000);
+      // what the run really did: updates applied, cards that changed group, group counts that moved, comments that arrived
+      const shape = () => fr.evaluate(() => ({ where: Object.fromEntries([...document.querySelectorAll("#live article.task")].map((a) => [a.id, a.closest(".grp")?.id ?? ""])), counts: [...document.querySelectorAll("#live .grp h3")].map((h) => h.textContent).join("|"), comments: document.querySelectorAll("#live .trail").length }));
+      const before = await shape(); await fr.evaluate(() => { (window as any).__pg.upd = []; });
+      const moved = new Set<string>(); let countChanges = 0, prev = before;
+      await watchCards([sel]); setChurn("mixed");
+      for (const end = Date.now() + CORRECT_S * 1000; Date.now() < end; ) { await sleep(3000); const now = await shape(); for (const [id, g] of Object.entries(now.where)) if (prev.where[id] !== undefined && prev.where[id] !== g) moved.add(id); if (now.counts !== prev.counts) countChanges++; prev = now; }
+      const newComments = prev.comments - before.comments;
+      setChurn("poke"); await sleep(9000); // the last changes touch only the selected card
+      const m = await watched(), updates = (await fr.evaluate(() => (window as any).__pg.upd.length)) as number; setChurn("off"); setPoke(""); await sleep(8000);
+      const snap = () => fr.evaluate(() => {
+        const canon = (n: Node): string => {
+          if (n.nodeType === 3) return (n.textContent ?? "").replace(/\s+/g, " ").trim();
+          if (n.nodeType !== 1) return "";
+          const e = n as Element, tag = e.tagName.toLowerCase();
+          const attrs = [...e.attributes].filter((a) => a.name !== "aria-current").map((a) => a.name === "class" ? `class="${a.value.split(/\s+/).filter((c) => c && c !== "st-late").sort().join(" ")}"` : `${a.name}="${a.value}"`).sort().join(" ");
+          const ticking = e.matches(".ck, [data-chg]");
+          return `<${tag} ${attrs}>${ticking ? "" : [...e.childNodes].map(canon).filter(Boolean).join("\n")}</${tag}>`;
+        };
+        const shown = (e: Element | null) => !!e && e.getClientRects().length > 0;
+        const out: Record<string, string> = { "page mode": [...document.body.classList].sort().join(" "), "focus bar": document.getElementById("tn-fbar")!.textContent ?? "", navigator: canon(document.getElementById("tn-fl")!) };
+        for (const a of document.querySelectorAll("#live article.task")) {
+          out[`${a.id} shown`] = `group ${a.closest(".grp")?.id} card ${shown(a)} canvas ${shown(a.querySelector(".cv"))} full ${shown(a.querySelector(".cv-f"))} compact ${shown(a.querySelector(".cv-c"))} open ${[...a.querySelectorAll("details")].filter((d) => d.open).map((d) => d.id).join(",")}`;
+          out[`${a.id} content`] = canon(a);
+        }
+        for (const g of document.querySelectorAll("#live .grp")) out[`${g.id} group`] = `${shown(g)} open ${(g as HTMLDetailsElement).open ?? ""} ${g.querySelector("h3")?.textContent} order ${[...g.querySelectorAll("article.task")].map((a) => a.id).join(",")}`;
+        out["summary"] = canon(document.querySelector("#live .summary")!);
+        document.querySelectorAll('[data-trail-slot], [data-slot="banner"]').forEach((e, i) => { out[`slot ${i}`] = canon(e); });
+        out["whole list"] = canon(document.getElementById("live")!);
+        return out;
+      }) as Promise<Record<string, string>>;
+      const loaded = async () => { for (let i = 0; i < 100; i++) { if (await fr.evaluate(() => ![...document.querySelectorAll("details.lz[open] > .lzb")].some((z) => !z.firstChild)).catch(() => false)) return; await sleep(100); } };
+      await loaded(); const live = await snap();
+      const d0 = docs.length; await fr.evaluate(() => location.reload()); for (let i = 0; i < 100 && docs.length === d0; i++) await sleep(100);
+      await sleep(1000); fr = await frame(); await pass(); await loaded(); await sleep(6000); await loaded(); const fresh = await snap();
+      const diffs = [...new Set([...Object.keys(fresh), ...Object.keys(live)])].filter((k) => fresh[k] !== live[k]);
+      const show = (k: string) => { const a = live[k] ?? "(missing)", b = fresh[k] ?? "(missing)"; let i = 0; while (i < a.length && a[i] === b[i]) i++; return `${k}: live …${a.slice(Math.max(0, i - 40), i + 80)}… fresh …${b.slice(Math.max(0, i - 40), i + 80)}…`.replace(/\n/g, " "); };
+      writeFileSync(join(DIR, `correct-${RUN}.json`), JSON.stringify({ sel, live, fresh, diffs }, null, 1));
+      result.correct = { sel, folds, updates, cardsMoved: moved.size, countChanges, newComments, frames: m.frames, badFrames: m.bad, first: m.first, compared: Object.keys(fresh).length, diffs: diffs.length, examples: diffs.slice(0, 6).map(show) };
+      log("correct", result.correct);
+      verdict("correct", folds > 0 && updates > CORRECT_S / 5 && moved.size > 0 && m.frames > 100 && m.bad === 0 && diffs.length === 0, `${sel} in focus view, ${folds} folds opened, ${updates} live updates (${moved.size} cards changed group, ${newComments} new comment trails): hidden or without its canvas in ${m.bad} of ${m.frames} painted frames${m.first ? ` (first: ${m.first})` : ""}; ${diffs.length} of ${Object.keys(fresh).length} parts differ from a fresh load`);
     }
   }
 } catch (e: any) { log("GATE ERROR", String(e?.stack ?? e).slice(0, 600)); result.error = String(e); process.exitCode = 2; }
