@@ -16,7 +16,7 @@ import { NO_CLAIM_MESSAGE, NoFirstMateError, PortSelector, resolveFirstMate, sen
 import { Relay, newEntries, parseTarget, type AskLookup, type TargetInfo } from "./relay.ts";
 import type { Known } from "./target.ts";
 import { CanvasPort, type FmSummary } from "./canvas-port.ts";
-import { liveJs, liveVersionJs, liveVersionFileOf, renderProject, stageOf, stagesOf, type AgentView, type Banner } from "./render.ts";
+import { liveJs, liveVersionJs, liveVersionFileOf, renderProject, stampLive, stageOf, stagesOf, type AgentView, type Banner } from "./render.ts";
 import { currentAgent, type LabeledAgent } from "./stage.ts";
 import { inputsMtimeMs, readSnapshot, writeSnapshot, type Snapshot, type StageRow } from "./stages-file.ts";
 import { ownerOf } from "./gate.ts";
@@ -48,6 +48,8 @@ export type DeckOpts = {
   readConfig: () => Promise<DeckConfig>;
   batchMs?: number;
   tickMs?: number;
+  /** How often each page is fully re-rendered when nothing changed. Default 5 min. */
+  renderMs?: number;
   rescanMs?: number;
   /** The host's Tailscale IPv4 address ("" when there is none). Defaults to `tailscale ip -4`. */
   tailnetIp?: () => Promise<string>;
@@ -69,6 +71,8 @@ function detectTailnetIp(): Promise<string> {
 }
 
 const TICK_MS = 20_000;
+/** A full re-render with nothing else to trigger it. */
+const RENDER_MS = 300_000;
 const RESCAN_MS = 30_000;
 const DEBOUNCE_MS = 150;
 /** A poll still running after this long has registered as Lavish's listener. */
@@ -236,7 +240,10 @@ export class Deck {
   async start(): Promise<void> {
     await this.configure();
     this.timers.push(setInterval(() => void this.configure().catch((e) => this.log(`rescan failed: ${e}`)), this.o.rescanMs ?? RESCAN_MS));
-    this.timers.push(setInterval(() => { this.scheduleAll("tick", 0); this.scheduleStages(0); }, this.o.tickMs ?? TICK_MS));
+    // Idle cost: every tickMs only the tiny version file moves (the page's "still alive" watch), with no render; the whole page is
+    // re-rendered every renderMs, for the things that change by the clock alone (a stage that goes quiet, a day-old answered comment).
+    this.timers.push(setInterval(() => { this.heartbeat(); this.scheduleStages(0); }, this.o.tickMs ?? TICK_MS));
+    this.timers.push(setInterval(() => this.scheduleAll("tick", 0), this.o.renderMs ?? RENDER_MS));
     this.scheduleStages(500);
   }
 
@@ -705,6 +712,15 @@ export class Deck {
     }
   }
 
+  /** The page's "still alive" signal without a render: a new sequence number in the tiny version file, content hash unchanged. */
+  private heartbeat(): void {
+    for (const project of this.projectNames()) {
+      const hash = this.liveHashes.get(project);
+      if (!hash || this.stopped || this.pageHalted(project)) continue;
+      try { writeAtomic(liveVersionFileOf(this.pagePath(project)), liveVersionJs(hash, new Date().toISOString(), ++this.liveSeq)); } catch { /* the next tick tries again */ }
+    }
+  }
+
   /** Has `bin/page stop` stopped this page? Remembers it, so the resume is noticed. */
   private pageHalted(project: string): boolean {
     if (readPageJson(pageJsonPath(this.cfg.root, project)).session === "stopped") { this.haltedPages.add(project); return true; }
@@ -802,8 +818,6 @@ export class Deck {
     r.page = resolveAssets(r.page, abase, adir);
     r.live = resolveAssets(r.live, abase, adir);
     if (!model.seen && !readUi(this.cfg.root, project).s) updateUi(this.cfg.root, project, { o: {}, r: {}, s: { at: now.toISOString(), keys: r.attention.keys } });
-    const p2 = (n: number) => String(n).padStart(2, "0");
-    const ts = `${p2(now.getHours())}:${p2(now.getMinutes())}:${p2(now.getSeconds())}`;
     let rewrote = false;
     // also rewrite when the file is not the one we wrote (`bin/page start` re-renders it without the canvas stylesheet)
     if (r.signature !== this.sigs.get(project) || this.pageStamp(target) !== this.stamps.get(project)) {
@@ -818,7 +832,7 @@ export class Deck {
     const liveFile = target.replace(/\.[^./]*$/, "") + ".live.js";
     const seq = ++this.liveSeq;
     if (hash !== this.liveHashes.get(project) || !existsSync(liveFile)) {
-      writeAtomic(liveFile, liveJs(r.live.replace(/\{TS\}/g, ts), now.toISOString(), seq, hash));
+      writeAtomic(liveFile, liveJs(stampLive(r.live, now), now.toISOString(), seq, hash));
       this.liveHashes.set(project, hash);
     }
     writeAtomic(liveVersionFileOf(target), liveVersionJs(hash, now.toISOString(), seq));

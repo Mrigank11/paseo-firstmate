@@ -114,7 +114,16 @@ export function pageScript(project: string, liveFile: string, tickSeconds: numbe
       data:{kind:"ask-choice",task:b.getAttribute("data-task"),ask:b.getAttribute("data-ask"),option:opt}});
       if(lv.sendQueuedPrompts)lv.sendQueuedPrompts()}
     catch(err){delete Q[k];box.querySelectorAll("button.opt").forEach(function(x){x.disabled=false;x.classList.remove("on");x.setAttribute("aria-pressed","false")});if(l){l.hidden=false;l.textContent="could not send, comment on the card instead"}}});
-  restore(document);arrange();pull();reveal(location.hash.slice(1));fill();
+  // ---- clocks. The payload never changes as time passes (that would re-send the whole list every minute): it carries only
+  // timestamps, and the browser writes the words. data-so = when a running agent started ("N min so far"); data-late = how long a
+  // comment may sit as "sending" on this screen before it shows as late (this browser's clock only, never compared with the daemon's).
+  function dur(sec){var m=Math.floor(sec/60);return m<60?m+" min":m<1440?Math.floor(m/60)+" h "+(m%60<10?"0":"")+m%60+" min":Math.floor(m/1440)+" d"}
+  function clocks(root){root=root||document;var now=Date.now();
+    [].slice.call(root.querySelectorAll("[data-so]")).forEach(function(e){var t=dur(Math.max(0,(now-Number(e.getAttribute("data-so")))/1000))+" so far";if(e.textContent!==t)e.textContent=t});
+    if(root!==document)return;
+    [].slice.call(root.querySelectorAll(".st-send[data-late]")).forEach(function(e){if(!e.__t)e.__t=now;if(now-e.__t>Number(e.getAttribute("data-late")))e.classList.add("st-late")})}
+  setInterval(function(){clocks()},15000);
+  restore(document);arrange();clocks();pull();reveal(location.hash.slice(1));fill();
   // Keyboard focus survives a live swap: remember the focused element's id (or its <details> id, for a summary) and put focus back.
   function fkey(){var a=document.activeElement,el=live();if(!a||!el||!el.contains||!el.contains(a))return null;
     if(a.id)return a.id;var p=a.parentElement;return a.tagName==="SUMMARY"&&p&&p.id?"sum:"+p.id:null}
@@ -141,12 +150,12 @@ export function pageScript(project: string, liveFile: string, tickSeconds: numbe
       // Morph, do not replace: build the new block off-screen, bring it in line with what this browser has done to the
       // page (open folds, read marks, picked options), then let the morph touch only the nodes that differ. Nothing
       // unchanged is re-created or moved, so embedded canvas frames do not reload and scroll, hover and selection stay.
-      var nx=document.createElement("div");nx.innerHTML=html;restore(nx);arrange(nx);reapply(nx);anchorIds(nx);
+      var nx=document.createElement("div");nx.innerHTML=html;restore(nx);arrange(nx);reapply(nx);clocks(nx);anchorIds(nx);
       I.morph(el,nx,{morphStyle:"innerHTML",restoreFocus:true,callbacks:{
         beforeAttributeUpdated:function(a,n){if(a==="open"&&n.id&&n.id in S)return false},
         beforeNodeMorphed:function(n,m){if(n.nodeName==="IFRAME"&&m.nodeName==="IFRAME"&&n.getAttribute("srcdoc")===m.getAttribute("srcdoc"))return false}}});
-      arrange();fill();refocus(fk);if(window.scrollY!==y)window.scrollTo(0,y);return}
-    el.innerHTML=M+"START-->"+html+M+"END-->";restore(el);arrange();reapply(el);anchorIds(el);fill();refocus(fk);window.scrollTo(0,y)};
+      arrange();clocks();fill();refocus(fk);if(window.scrollY!==y)window.scrollTo(0,y);return}
+    el.innerHTML=M+"START-->"+html+M+"END-->";restore(el);arrange();reapply(el);clocks();anchorIds(el);fill();refocus(fk);window.scrollTo(0,y)};
   function load(file,done){var s=document.createElement("script");s.src=file+"?t="+Date.now();s.onload=s.onerror=function(){s.remove();if(done)done()};document.head.appendChild(s)}
   // a full fetch that never answers must not block the next one for good
   function full(){loading=true;load(F,function(){setTimeout(function(){loading=false},4000)})}

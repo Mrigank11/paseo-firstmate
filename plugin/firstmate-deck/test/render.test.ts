@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { loadProject } from "../server/state.ts";
-import { groupOf, liveJs, renderProject } from "../server/render.ts";
+import { groupOf, liveJs, renderProject, stampLive } from "../server/render.ts";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const root = join(here, "fixtures", "root");
@@ -91,11 +91,12 @@ test("failed marker, done collapsed, dependency across the archive", () => {
 test("live block shape", () => {
   assert.ok(r.live.includes("{TS}"));
   assert.ok(!r.page.includes("{TS}"));
-  assert.ok(r.page.includes("<div id=\"live\"><!--LIVE-START-->" + r.live.replace("{TS}", "10:15:30") + "<!--LIVE-END--></div>"));
+  assert.ok(r.page.includes("<div id=\"live\"><!--LIVE-START-->" + r.live.replace("{TS}", "10:15:30").replace("{STAMP}", "2026-10-21 10:15 UTC") + "<!--LIVE-END--></div>"));
   assert.match(liveJs("a\"b"), /^window\.__fdLive&&window\.__fdLive\("a\\"b"\);\n$/);
   assert.match(r.page, /page\.live\.js/);
   assert.match(r.page, /last update <b data-slot="stamp">2026-10-21 10:15 UTC<\/b>/);
-  assert.match(r.live, /<div data-slot-for="stamp">2026-10-21 10:15 UTC<\/div>/, "the stamp rides in the live payload");
+  assert.match(r.live, /<div data-slot-for="stamp">\{STAMP\}<\/div>/, "the stamp rides in the live payload, filled at write time so it stays out of the content hash");
+  assert.match(stampLive(r.live, opts.now), /<div data-slot-for="stamp">2026-10-21 10:15 UTC<\/div>/);
   assert.match(r.live, /<div data-slot-for="banner"><\/div>/);
 });
 
@@ -229,4 +230,11 @@ test("blocked task: its own Blocked group between Running and Next up, with what
   assert.ok(g.includes('id="t-await-key"') && g.includes("Blocked on:</b> Nemath: Trigger Prod API key"));
   assert.ok(r.live.includes('href="#g-blocked" class="sum c-blocked">1 blocked'));
   assert.ok(!r.live.slice(r.live.indexOf('id="g-parked"'), r.live.indexOf("<div hidden data-tn>")).includes("await-key"));
+});
+
+test("the payload does not depend on the clock: same data, two hours later, byte-identical (idle pages download nothing)", () => {
+  const later = renderProject(model, agents, { ...opts, now: new Date(opts.now.getTime() + 2 * 3600_000 + 17_000) });
+  assert.equal(later.live, r.live);
+  assert.match(r.live, /<span class="ck" data-so="\d+"><\/span>/, "a running agent carries when it started; the browser writes the elapsed time");
+  assert.ok(!/ so far/.test(r.live), "no elapsed-time words in the payload");
 });

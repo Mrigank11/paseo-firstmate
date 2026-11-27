@@ -106,6 +106,9 @@ function stampLong(d: Date): string {
 
 const stampShort = (d: Date) => `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
 
+/** Fill the two clock placeholders of a live payload ({TS}, {STAMP}) at write time: they are outside the content hash, so they show the last real change. */
+export const stampLive = (live: string, now: Date): string => live.replace(/\{TS\}/g, stampShort(now)).replace(/\{STAMP\}/g, esc(stampLong(now)));
+
 const titleCase = (s: string) => s.replace(/[-_]+/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
 
 /** The task's computed stage (stage.ts): from the registry's intent, its asks, and the Paseo agents carrying its label. */
@@ -151,17 +154,19 @@ function agentBlock(t: Task, group: GroupKey, view: AgentView | undefined, o: Re
   const c = a.createdAt ? new Date(a.createdAt) : null;
   const u = a.updatedAt ? new Date(a.updatedAt) : null;
   const ok = (d: Date | null): d is Date => !!d && !isNaN(d.getTime());
+  // a running agent's elapsed time moves with the clock, so the payload carries only when it started (data-so) and the browser
+  // writes "N min so far" (page-script.ts clocks); a finished one's duration is fixed text
   const el = !a.stale && ok(c) && ok(u)
-    ? ACTIVE.has(ast) ? `${dur((o.now.getTime() - c.getTime()) / 1000)} so far` : `took ${dur((u.getTime() - c.getTime()) / 1000)}`
+    ? ACTIVE.has(ast) ? `<span class="ck" data-so="${c.getTime()}"></span>` : esc(`took ${dur((u.getTime() - c.getTime()) / 1000)}`)
     : "";
   // Paseo has no record of the agent (or none yet): fall back to the provider/model the task itself names
   const model = [a.model || t.provider, a.thinking].filter(Boolean).join(" ");
-  const facts = [a.stepCount ? `${a.stepCount}${a.stepsAtLeast ? "+" : ""} steps` : "", el, model, ast === "archived" ? "archived" : ""].filter(Boolean).join(" · ");
+  const facts = [a.stepCount ? esc(`${a.stepCount}${a.stepsAtLeast ? "+" : ""} steps`) : "", el, esc(model), ast === "archived" ? "archived" : ""].filter(Boolean).join(" · ");
   const cur = ACTIVE.has(ast) && a.recent.length ? a.recent[a.recent.length - 1] : a.final || a.recent[a.recent.length - 1] || "";
   // with a canvas fragment the links move below it (cvLinks) and the canvas's BLUF/steps/Now replace the recent-steps block
   const head =
     `<div class="ag"><span class="pill p-${cls}"><span class="dot"></span>${esc(label)}</span>` +
-    `<span class="stg">${esc(st.stage)}</span>${flagBadges(st.flags)}<span class="facts">${esc(facts)}</span>${withCanvas ? "" : `<a class="open" href="${url}">Open in Paseo</a>`}</div>`;
+    `<span class="stg">${esc(st.stage)}</span>${flagBadges(st.flags)}<span class="facts">${facts}</span>${withCanvas ? "" : `<a class="open" href="${url}">Open in Paseo</a>`}</div>`;
   if (withCanvas || !cur) return head;
   if (!a.recent.length) return head + `<div class="cur">${esc(cut(cur, 160))}</div>`;
   const lis = a.recent.map((s) => `<li>${esc(s)}</li>`).join("");
@@ -239,7 +244,8 @@ const LATE_MS = 10_000;
 export function chipHtml(c: { at: string; delivered: boolean; answered: boolean }, now: Date): string {
   if (c.answered) return `<span class="st st-answered">answered</span>`;
   if (c.delivered) return `<span class="st st-has">first mate has it</span>`;
-  return `<span class="st ${now.getTime() - Date.parse(c.at) > LATE_MS ? "st-late" : "st-send"}">sending…</span>`;
+  // "late" is the browser's call (page-script.ts clocks, after LATE_MS on screen): the payload must not change as time passes
+  return `<span class="st st-send" data-late="${LATE_MS}">sending…</span>`;
 }
 
 /**
@@ -554,7 +560,7 @@ function renderLive(model: ProjectModel, agents: Record<string, AgentView>, o: R
   if (failedN) summary += `<a href="#g-done" class="sum c-fail">${failedN} failed</a>`;
   if (busy) summary += `<span class="sum c-running">${busy} agent${busy > 1 ? "s" : ""} working</span>`;
   if (o.canvas?.status === "down") summary += `<span class="fl cv-down" title="agent-canvas could not be reached from the deck">canvas unavailable</span>`;
-  const parts = [`<div class="summary">${summary}<span class="m">live: the page checks ${o.tickSeconds === 1 ? "every second" : `every ${o.tickSeconds} s`}; the plugin refreshes it on every change and at least every ${o.refreshSeconds ?? 20} s (last refresh {TS})</span></div>`];
+  const parts = [`<div class="summary">${summary}<span class="m">live: the page checks ${o.tickSeconds === 1 ? "every second" : `every ${o.tickSeconds} s`}; the plugin refreshes it on every change (last change {TS})</span></div>`];
   for (const [k, n] of GROUPS) {
     const items = buckets[k];
     if (!items.length) continue;
@@ -581,7 +587,7 @@ function renderLive(model: ProjectModel, agents: Record<string, AgentView>, o: R
     .map(([k, h]) => `<div data-trail-for="${esc(k)}">${h}</div>`).join("");
   parts.push(`<div hidden data-trails>${slots}</div>`);
   // The two time-varying bits of the shell travel here too, so page.html stays still while the page is live.
-  parts.push(`<div hidden data-slots><div data-slot-for="stamp">${esc(stampLong(o.now))}</div><div data-slot-for="banner">${bannerHtml(o.banner)}</div></div>`);
+  parts.push(`<div hidden data-slots><div data-slot-for="stamp">{STAMP}</div><div data-slot-for="banner">${bannerHtml(o.banner)}</div></div>`);
   parts.push(`<div hidden data-tn>${navHtml(buckets)}</div>`);
   // What the browser tab says: the Needs-you count, the attention keys, and the keys the captain last saw (see attention.ts).
   // No stored "seen" yet (first render) means nothing is new: the runtime seeds it from these keys.
@@ -675,6 +681,6 @@ ${pageScript(model.project, liveFile, opts.tickSeconds, opts.marksUrl)}
   // scripts, marks url) moves it and a task, agent or stage change does not: Lavish reloads the page when page.html is
   // rewritten, so that file must stay still while crews work.
   const signature = createHash("sha1").update(shell("", "", "")).digest("hex");
-  const page = shell(live.replace(/\{TS\}/g, stampShort(opts.now)), esc(stampLong(opts.now)), bannerHtml(opts.banner));
+  const page = shell(stampLive(live, opts.now), esc(stampLong(opts.now)), bannerHtml(opts.banner));
   return { page, live, signature, attention };
 }

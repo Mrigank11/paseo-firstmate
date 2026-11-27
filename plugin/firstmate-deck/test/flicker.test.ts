@@ -12,7 +12,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { chromium, type Browser } from "playwright-core";
 import { loadProject } from "../server/state.ts";
-import { renderProject } from "../server/render.ts";
+import { renderProject, stampLive } from "../server/render.ts";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const agents = JSON.parse(readFileSync(join(here, "fixtures", "agents.json"), "utf8"));
@@ -21,9 +21,11 @@ const base = { now: new Date("2026-10-21T10:15:30Z"), paseoAgentUrl: (id: string
 
 // a done card carries an embedded canvas frame, as the live deck's "Final canvas" does
 const PROBE = `<iframe id="probe" class="cv-final" srcdoc="&lt;p&gt;final canvas&lt;/p&gt;"></iframe>`;
-const withProbe = (live: string) => live.replace(/(<article class="task s-done" id="t-done-live"[^>]*>)/, `$1${PROBE}`);
+// ...and the clock elements the browser fills: a running agent's start stamp (data-so) and a comment still "sending" (data-late)
+const CLOCKS = () => `<span id="ck1" class="ck" data-so="${Date.now() - 95 * 60_000}"></span><span id="late1" class="st st-send" data-late="10000">sending…</span>`;
+const withProbe = (live: string) => live.replace(/(<article class="task s-done" id="t-done-live"[^>]*>)/, `$1${PROBE}${CLOCKS()}`);
 const payload = (m = model, now = base.now, edit = (s: string) => s) =>
-  edit(withProbe(renderProject(m, agents, { ...base, now }).live.replace(/\{TS\}/g, "10:15:30")));
+  edit(withProbe(stampLive(renderProject(m, agents, { ...base, now }).live, now)));
 
 // Playwright's own browser revision may not be the one installed; any cached Chrome for Testing build will do.
 function chromeForTesting(): string | undefined {
@@ -92,7 +94,7 @@ test("a live update morphs in place: frames, folds, scroll, focus and selection 
         scroll: window.scrollY, focus: document.activeElement === w.__sum, sel: getSelection()!.toString(), selKept: getSelection()!.toString() === w.__sel,
         touchedProbe: touched.length, removedProbe, muts: w.__muts.length, note: document.getElementById("live")!.textContent!.includes("Freshly renamed task"),
         kids: w.__kids.filter((k: Element) => k.isConnected).length >= w.__kids.length - 1,
-        stamp: document.querySelector('[data-slot="stamp"]')!.textContent, gone: !document.getElementById("t-write-docs"),
+        stamp: document.querySelector('[data-slot="stamp"]')!.textContent, so: document.getElementById("ck1")?.textContent ?? null, lateNow: document.getElementById("late1")?.classList.contains("st-late"), gone: !document.getElementById("t-write-docs"),
       };
     });
     assert.equal(after.sameFrame, true, "the canvas frame element is the same node");
@@ -106,6 +108,8 @@ test("a live update morphs in place: frames, folds, scroll, focus and selection 
     assert.equal(after.note, true, "the change did arrive");
     assert.equal(after.gone, true, "a removed task left the page");
     assert.match(after.stamp ?? "", /2026-10-21 10:16 UTC/, "the shell stamp follows the payload");
+    assert.match(after.so ?? "", /^1 h 3[5-7] min so far$/, "the browser writes a running agent's elapsed time from its start stamp");
+    assert.equal(after.lateNow, false, "a comment that was just shown is not late yet (the browser flips it after data-late ms on screen)");
     assert.ok(after.muts > 0, "something changed");
     assert.equal(after.kids, true, "the groups of the task list are the same nodes (a swap would have replaced them all)");
 
@@ -113,7 +117,7 @@ test("a live update morphs in place: frames, folds, scroll, focus and selection 
     await page.evaluate(() => (document.querySelector("#t-done-live button.mr") as HTMLElement).click());
     await page.waitForTimeout(300);
     await page.evaluate(() => { (window as any).__loads = 0; });
-    await push(payload(m3, later, (s) => s.replace(/10:15:30/g, "10:17:00")), 4);
+    await push(payload(m3, later, (s) => s.replace(/10:16:05/g, "10:17:00")), 4);
     const read = await page.evaluate(() => {
       const w = window as any;
       return { sameFrame: document.getElementById("probe") === w.__probe, loads: w.__loads, inDone: !!document.querySelector("#g-done #t-done-live"), inUnread: !!document.querySelector("#g-doneu #t-done-live") };
