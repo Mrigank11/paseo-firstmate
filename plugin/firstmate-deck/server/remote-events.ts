@@ -13,9 +13,14 @@
 //   status closed / archivedAt  agent.closed / agent.archived
 // A first sighting is a baseline and emits nothing, except a permission already pending (nothing else would ever answer it;
 // the permission hook dedups on its own log). An offline host is unknown, not closed: its subscription is dropped and nothing is
-// emitted, but its last-known state is kept, so on reconnect a turn that ended meanwhile still produces exactly one turn_ended
-// (also a whole turn that started and ended while offline: idle -> idle with a newer lastUserMessageAt). A failed subscription is
-// released and recreated with backoff from a fresh host handle, and a periodic re-list catches anything the stream missed.
+// emitted, but its last-known state is kept (and saved in state/remote-turns.json, so a plugin restart keeps it too): on reconnect
+// a turn that ended meanwhile still produces exactly one turn_ended, for the latest such turn (also a whole turn that started and
+// ended while offline: idle -> idle with a newer lastUserMessageAt). A failed subscription is released, its host client dropped,
+// and both are rebuilt with backoff; a periodic re-list catches anything the stream missed.
+import { mkdirSync, readFileSync } from "node:fs";
+import { join } from "node:path";
+import type { Hosts } from "./hosts.ts";
+import { writeAtomic } from "./store.ts";
 
 export type HookName =
   | "agent.turn_started"
@@ -49,7 +54,7 @@ export type RemoteAgent = {
 
 type Observer = { snapshot(s: any): void; update(m: any): void; error?(e: unknown): void };
 type RemoteSubscription = { readonly ready: Promise<unknown>; subscribe(o: Observer): () => void; release(): Promise<void> };
-type ListResult = { entries: readonly { agent: RemoteAgent }[]; pageInfo: { hasMore: boolean }; subscription?: RemoteSubscription };
+type ListResult = { entries: readonly { agent: RemoteAgent }[]; pageInfo: { hasMore: boolean; nextCursor?: string | null }; subscription?: RemoteSubscription };
 type TimelineEntry = { seqStart: number; turnId?: string | null; item: { type: string; text?: string } };
 
 /** The slice of a host's PaseoApi (`hosts.client(serverId)`) used here. */
@@ -64,7 +69,48 @@ export type RemoteApi = {
 };
 
 export type HostClient = { serverId: string; label: string; api: RemoteApi };
-export type HostSource = { clients(): Promise<HostClient[]>; onChange(cb: () => void): () => void };
+export type HostSource = {
+  clients(): Promise<HostClient[]>;
+  onChange(cb: () => void): () => void;
+  /** Forget a client whose link failed: the next `clients()` builds a new one. */
+  drop?(serverId: string, api?: unknown): void;
+};
+
+/** What is remembered of one agent between runs. */
+export type SavedAgent = {
+  status: string;
+  turnId: string | null;
+  lastUserMessageAt: string | null;
+  updatedAt: string | null;
+  closed: boolean;
+  archived: boolean;
+  /** Turn ids already reported. */
+  ended: string[];
+};
+export type SavedState = { version: 1; hosts: Record<string, Record<string, SavedAgent>> };
+/** `load`: null = nothing saved yet; undefined = cannot tell yet (asked again shortly). */
+export type StateStore = { load(): SavedState | null | undefined; save(s: SavedState): void };
+
+/** state/remote-turns.json of the first-mate checkout. Derived data: deleting it only makes the next sighting a baseline. */
+export function fileStore(root: () => string): StateStore {
+  const path = () => join(root(), "state", "remote-turns.json");
+  return {
+    load() {
+      if (!root()) return undefined;
+      try {
+        const s = JSON.parse(readFileSync(path(), "utf8"));
+        return s?.version === 1 && s.hosts && typeof s.hosts === "object" ? (s as SavedState) : null;
+      } catch {
+        return null;
+      }
+    },
+    save(s) {
+      if (!root()) return;
+      mkdirSync(join(root(), "state"), { recursive: true });
+      writeAtomic(path(), JSON.stringify(s));
+    },
+  };
+}
 
 /** What the synthesized events carry as `agent`: the hook's PluginHookAgent plus the labels and the owning host. */
 export type RemoteHookAgent = {
@@ -85,6 +131,10 @@ export type RemoteEventsOptions = {
   hosts: HostSource;
   emit: (name: HookName, event: unknown) => void;
   log: (m: string) => void;
+  /** Where the last-known state survives a restart. Without one a restart starts from a new baseline. */
+  store?: StateStore;
+  /** How often the host list is asked again (a reconnect nothing announced). */
+  syncMs?: number;
   /** Which agents matter. Default: those carrying an `fm.task` label. */
   filter?: (agent: RemoteAgent) => boolean;
   /** Timer seam (tests). Returns a cancel function. */
@@ -102,17 +152,14 @@ export type RemoteEventsOptions = {
 
 const PARENT_LABEL = "paseo.parent-agent-id";
 const LIST_LIMIT = 200;
+const MAX_PAGES = 10;
 const ENDED_KEEP = 20;
+/** How often an unreadable tail is asked again before the turn is reported without it. */
+const TAIL_TRIES = 3;
+/** Timeline rows that say nothing about whether a message was answered. */
+const NOT_A_REPLY = new Set(["plugin", "notification"]);
 
-type Known = {
-  status: string;
-  turnId: string | null;
-  lastUserMessageAt: string | null;
-  pending: Set<string>;
-  closed: boolean;
-  archived: boolean;
-  ended: string[];
-};
+type Known = SavedAgent & { pending: Set<string>; tailFails: number };
 
 type Conn = {
   serverId: string;
@@ -123,6 +170,8 @@ type Conn = {
   unobserve: (() => void) | null;
   cancelResync: (() => void) | null;
   cancelRetry: (() => void) | null;
+  /** A short re-list asked for by an unreadable tail. */
+  cancelSoon: (() => void) | null;
   attempt: number;
 };
 
@@ -138,6 +187,7 @@ export function startRemoteEvents(o: RemoteEventsOptions): { stop(): void; flush
   const retryMs = o.retryMs ?? 2000;
   const maxRetryMs = o.maxRetryMs ?? 60_000;
   const resyncMs = o.resyncMs ?? 5 * 60_000;
+  const syncMs = o.syncMs ?? 30_000;
   const callTimeoutMs = o.callTimeoutMs ?? 20_000;
   const tailLimit = o.tailLimit ?? 60;
 
@@ -149,8 +199,36 @@ export function startRemoteEvents(o: RemoteEventsOptions): { stop(): void; flush
   let syncChain: Promise<unknown> = Promise.resolve();
 
   const enqueue = (serverId: string, fn: () => Promise<void>): void => {
-    const run = (chains.get(serverId) ?? Promise.resolve()).then(fn).catch((e) => o.log(`remote events (${serverId}): ${(e as Error)?.stack ?? e}`));
+    const run = (chains.get(serverId) ?? Promise.resolve()).then(fn).catch((e) => o.log(`remote events (${serverId}): ${(e as Error)?.stack ?? e}`)).then(save);
     chains.set(serverId, run);
+  };
+
+  // ---------- the saved state ----------
+
+  let loaded = !o.store;
+  let saved = "";
+  let cancelWait: (() => void) | null = null;
+
+  const load = (): boolean => {
+    if (loaded) return true;
+    const s = o.store!.load();
+    if (s === undefined) return false;
+    for (const [serverId, agents] of Object.entries(s?.hosts ?? {})) {
+      known.set(serverId, new Map(Object.entries(agents).map(([id, a]) => [id, { ...a, ended: a.ended ?? [], pending: new Set<string>(), tailFails: 0 }])));
+    }
+    return (loaded = true);
+  };
+
+  const save = (): void => {
+    if (stopped || !o.store || !loaded) return;
+    const hosts: SavedState["hosts"] = {};
+    for (const [serverId, agents] of known) {
+      hosts[serverId] = Object.fromEntries([...agents].map(([id, { pending: _p, tailFails: _t, ...a }]) => [id, a]));
+    }
+    const body = JSON.stringify(hosts);
+    if (body === saved) return;
+    try { o.store.save({ version: 1, hosts }); saved = body; }
+    catch (e) { o.log(`remote events: could not save state: ${(e as Error).message}`); }
   };
 
   const timed = <T>(p: Promise<T>, what: string): Promise<T> =>
@@ -166,13 +244,18 @@ export function startRemoteEvents(o: RemoteEventsOptions): { stop(): void; flush
   const sync = (): void => {
     syncChain = syncChain.then(async () => {
       if (stopped) return;
+      if (!load()) {
+        cancelWait?.();
+        cancelWait = schedule(() => { cancelWait = null; sync(); }, retryMs);
+        return;
+      }
       const clients = await o.hosts.clients().catch((e) => { o.log(`remote events: host list failed: ${e}`); return null; });
       if (!clients || stopped) return;
       const online = new Map(clients.map((c) => [c.serverId, c]));
       for (const [id, c] of conns) if (!online.has(id)) { o.log(`remote events: host ${c.label} offline, subscription dropped`); disconnect(c); }
       for (const c of clients) {
         const cur = conns.get(c.serverId);
-        if (cur && cur.api === c.api) continue;
+        if (cur && (cur.api === c.api || cur.cancelRetry)) continue; // a pending retry keeps its backoff
         if (cur) disconnect(cur);
         connect(c);
       }
@@ -187,6 +270,8 @@ export function startRemoteEvents(o: RemoteEventsOptions): { stop(): void; flush
     if (s) void s.release().catch(() => {});
     c.cancelResync?.();
     c.cancelResync = null;
+    c.cancelSoon?.();
+    c.cancelSoon = null;
   };
 
   const disconnect = (c: Conn): void => {
@@ -196,56 +281,87 @@ export function startRemoteEvents(o: RemoteEventsOptions): { stop(): void; flush
     if (conns.get(c.serverId) === c) conns.delete(c.serverId);
   };
 
+  const query = (extra: object = {}, cursor?: string) => ({ filter: { includeBackground: true }, page: { limit: LIST_LIMIT, ...(cursor ? { cursor } : {}) }, ...extra });
+
+  /** The pages after `first`. `complete` is false when the walk stopped early. */
+  const rest = async (c: Conn, first: ListResult): Promise<{ entries: { agent: RemoteAgent }[]; complete: boolean }> => {
+    const entries = [...first.entries];
+    let page = first.pageInfo;
+    for (let n = 1; n < MAX_PAGES && page?.hasMore && page.nextCursor; n++) {
+      const r = await timed(c.api.agents.list(query({}, page.nextCursor)), "agent list");
+      entries.push(...r.entries);
+      page = r.pageInfo;
+    }
+    return { entries, complete: !page?.hasMore };
+  };
+
   const connect = (h: HostClient, attempt = 0): void => {
-    const c: Conn = { serverId: h.serverId, label: h.label, api: h.api, gen: ++gen, sub: null, unobserve: null, cancelResync: null, cancelRetry: null, attempt };
+    const c: Conn = { serverId: h.serverId, label: h.label, api: h.api, gen: ++gen, sub: null, unobserve: null, cancelResync: null, cancelRetry: null, cancelSoon: null, attempt };
     conns.set(h.serverId, c);
     enqueue(c.serverId, async () => {
       if (!live(c)) return;
       let r: ListResult;
+      const asked = Promise.resolve().then(() => c.api.agents.list(query({ subscribe: {} })));
       try {
-        r = await timed(c.api.agents.list({ filter: { includeBackground: true }, page: { limit: LIST_LIMIT }, subscribe: {} }), "agent list");
+        r = await timed(asked, "agent list");
       } catch (e) {
+        void asked.then((late) => late.subscription?.release()).catch(() => {}); // answered too late: do not keep it
         return fail(c, e);
       }
       if (!live(c)) { void r.subscription?.release().catch(() => {}); return; }
       c.sub = r.subscription ?? null;
       c.unobserve = c.sub?.subscribe({
-        snapshot: (s) => { if (live(c) && Array.isArray(s?.entries)) enqueue(c.serverId, () => diffAll(c, s.entries, !s.pageInfo?.hasMore)); },
+        snapshot: (s) => {
+          if (!live(c) || !Array.isArray(s?.entries)) return;
+          enqueue(c.serverId, () => diffAll(c, s.entries, !s.pageInfo?.hasMore));
+          if (s.pageInfo?.hasMore) enqueue(c.serverId, () => resync(c));
+        },
         update: (m) => { if (live(c)) enqueue(c.serverId, () => onUpdate(c, m)); },
         error: (e) => { if (live(c)) fail(c, e); },
       }) ?? null;
       if (!c.sub) o.log(`remote events: host ${c.label} gave no subscription; relying on the re-list every ${resyncMs} ms`);
-      if (r.pageInfo?.hasMore) o.log(`remote events: host ${c.label} lists more than ${LIST_LIMIT} agents; only the first page is watched`);
+      let all: { entries: { agent: RemoteAgent }[]; complete: boolean };
+      try { all = await rest(c, r); } catch (e) { return fail(c, e); }
+      if (!live(c)) return;
       c.attempt = 0;
       armResync(c);
-      await diffAll(c, r.entries, !r.pageInfo?.hasMore);
+      await diffAll(c, all.entries, all.complete);
     });
+  };
+
+  const resync = async (c: Conn): Promise<void> => {
+    if (!live(c)) return;
+    let all: { entries: { agent: RemoteAgent }[]; complete: boolean };
+    try {
+      all = await rest(c, await timed(c.api.agents.list(query()), "agent re-list"));
+    } catch (e) {
+      return fail(c, e);
+    }
+    if (!live(c)) return;
+    armResync(c);
+    await diffAll(c, all.entries, all.complete);
   };
 
   const armResync = (c: Conn): void => {
     c.cancelResync?.();
     c.cancelResync = schedule(() => {
       c.cancelResync = null;
-      if (!live(c)) return;
-      enqueue(c.serverId, async () => {
-        if (!live(c)) return;
-        let r: ListResult;
-        try {
-          r = await timed(c.api.agents.list({ filter: { includeBackground: true }, page: { limit: LIST_LIMIT } }), "agent re-list");
-        } catch (e) {
-          return fail(c, e);
-        }
-        if (!live(c)) return;
-        armResync(c);
-        await diffAll(c, r.entries, !r.pageInfo?.hasMore);
-      });
+      if (live(c)) enqueue(c.serverId, () => resync(c));
     }, resyncMs);
   };
 
-  /** Drop the subscription and recreate it later from a fresh handle, if the host is still online then. */
+  const soon = (c: Conn): void => {
+    c.cancelSoon ??= schedule(() => {
+      c.cancelSoon = null;
+      if (live(c)) enqueue(c.serverId, () => resync(c));
+    }, retryMs);
+  };
+
+  /** Drop the subscription and the client, and recreate both later, if the host is still online then. */
   const fail = (c: Conn, e: unknown): void => {
     if (!live(c)) return;
     release(c);
+    o.hosts.drop?.(c.serverId, c.api);
     const delay = Math.min(maxRetryMs, retryMs * 2 ** c.attempt);
     o.log(`remote events: host ${c.label} subscription failed (${(e as Error)?.message ?? e}); retry in ${delay} ms`);
     c.cancelRetry?.();
@@ -256,7 +372,7 @@ export function startRemoteEvents(o: RemoteEventsOptions): { stop(): void; flush
         if (!live(c)) return;
         const fresh = (await o.hosts.clients().catch(() => [] as HostClient[])).find((x) => x.serverId === c.serverId);
         if (!live(c)) return;
-        if (!fresh) { disconnect(c); return; } // offline: onChange reconnects when it is back
+        if (!fresh) { disconnect(c); return; } // offline: onChange or the periodic sync reconnects when it is back
         connect(fresh, c.attempt + 1);
       }).catch((err) => o.log(`remote events: retry failed: ${err}`));
     }, delay);
@@ -333,25 +449,31 @@ export function startRemoteEvents(o: RemoteEventsOptions): { stop(): void; flush
     const agent = hookAgent(c, a);
 
     if (!prev) {
-      const base: Known = { status: a.status, turnId, lastUserMessageAt: a.lastUserMessageAt ?? null, pending: new Set(), closed, archived, ended: [] };
+      const base: Known = { status: a.status, turnId, lastUserMessageAt: a.lastUserMessageAt ?? null, updatedAt: a.updatedAt ?? null, pending: new Set(), closed, archived, ended: [], tailFails: 0 };
       k.set(a.id, base);
       for (const [id, req] of pendingNow) { base.pending.add(id); emit(c, "agent.permission_requested", { agent, request: req }); }
       return;
     }
+    // the stream and a re-list can overtake each other: never step back
+    if (prev.updatedAt && a.updatedAt && Date.parse(a.updatedAt) < Date.parse(prev.updatedAt)) return;
 
     const wasRunning = prev.status === "running";
     const nowRunning = a.status === "running";
+    const newMessage = !!a.lastUserMessageAt && a.lastUserMessageAt !== prev.lastUserMessageAt;
+    const outcome = a.status === "error" ? { kind: "failed", error: { message: a.lastError || "agent error" } } : { kind: "completed" };
+    const started = () => emit(c, "agent.turn_started", { agent, turnId, startedAt: a.activeTurn?.startedAt ?? undefined });
+    // false: the turn's end could not be told yet, so the turn state is not moved on and this is looked at again
+    let told = true;
     if (wasRunning && nowRunning && prev.turnId && turnId && turnId !== prev.turnId) {
-      await endTurn(c, a, prev, prev.turnId, { kind: "completed" });
-      emit(c, "agent.turn_started", { agent, turnId });
+      told = await endTurn(c, a, prev, { turnId: prev.turnId, outcome: { kind: "completed" }, newMessage });
+      if (told) started();
     } else if (wasRunning && !nowRunning) {
-      if (a.status === "error") await endTurn(c, a, prev, prev.turnId, { kind: "failed", error: { message: a.lastError || "agent error" } });
-      else if (!closed) await endTurn(c, a, prev, prev.turnId, { kind: "completed" });
+      if (!closed) told = await endTurn(c, a, prev, { turnId: prev.turnId, outcome, newMessage });
     } else if (!wasRunning && nowRunning) {
-      emit(c, "agent.turn_started", { agent, turnId });
-    } else if (full && !wasRunning && a.status === "idle" && a.lastUserMessageAt && a.lastUserMessageAt !== prev.lastUserMessageAt) {
+      started();
+    } else if (full && newMessage && (a.status === "idle" || (a.status === "error" && prev.status !== "error"))) {
       // a whole turn while we were not watching (host offline, or updates missed): the tail names it
-      await endTurn(c, a, prev, null, { kind: "completed" });
+      told = await endTurn(c, a, prev, { turnId: null, outcome, newMessage, missed: true });
     }
     if (!live(c)) return;
 
@@ -360,43 +482,69 @@ export function startRemoteEvents(o: RemoteEventsOptions): { stop(): void; flush
     if (closed && !prev.closed) emit(c, "agent.closed", { agent });
     if (archived && !prev.archived) emit(c, "agent.archived", { agent, archivedAt: a.archivedAt });
 
-    prev.status = a.status;
-    prev.turnId = turnId ?? (nowRunning ? prev.turnId : null);
-    prev.lastUserMessageAt = a.lastUserMessageAt ?? prev.lastUserMessageAt;
     prev.pending = new Set(pendingNow.keys());
     prev.closed = closed;
     prev.archived = archived;
+    if (!told) return;
+    prev.status = a.status;
+    prev.turnId = turnId ?? (nowRunning ? prev.turnId : null);
+    prev.lastUserMessageAt = a.lastUserMessageAt ?? prev.lastUserMessageAt;
+    prev.updatedAt = a.updatedAt ?? prev.updatedAt;
+    prev.tailFails = 0;
   };
 
-  /** One turn_ended per turn id. `timeline` is the turn's own tail, read over the host link (the gate reads it from there). */
-  const endTurn = async (c: Conn, a: RemoteAgent, prev: Known, turnId: string | null, outcome: unknown): Promise<void> => {
-    if (turnId && prev.ended.includes(turnId)) return;
+  /**
+   * One turn_ended per turn. `timeline` is the turn's own tail, read over the host link (the gate reads it from there). When the
+   * agent has stopped and a later turn than the one we saw is in the tail, that later turn is the one reported. False = not now.
+   */
+  const endTurn = async (c: Conn, a: RemoteAgent, prev: Known, t: { turnId: string | null; outcome: unknown; newMessage: boolean; missed?: boolean }): Promise<boolean> => {
     let entries: TimelineEntry[] = [];
     try {
       const page = await timed(c.api.agents.ref(a.id).timeline.refetch({ direction: "tail", limit: tailLimit, projection: "projected" }), "timeline tail");
       entries = [...page.entries].sort((x, y) => x.seqStart - y.seqStart);
     } catch (e) {
-      o.log(`remote events: tail of ${a.id} unreadable (${(e as Error)?.message ?? e}); turn_ended without a timeline`);
+      if (!live(c)) return false;
+      o.log(`remote events: tail of ${a.id} unreadable (${(e as Error)?.message ?? e})`);
+      if (++prev.tailFails < TAIL_TRIES) { soon(c); return false; }
+      if (t.missed && !t.turnId) o.log(`remote events: reporting ${a.id}'s turn without a timeline`);
     }
-    if (!live(c)) return;
-    const tid = turnId ?? entries.at(-1)?.turnId ?? null;
-    if (!turnId && (!tid || prev.ended.includes(tid))) return; // a missed turn we cannot name, or one already reported
+    if (!live(c)) return false;
+    const unread = prev.tailFails >= TAIL_TRIES;
+    // a message nobody answered yet is not a finished turn
+    if (t.missed && !unread && (entries.filter((e) => !NOT_A_REPLY.has(e.item.type)).at(-1)?.item.type ?? "user_message") === "user_message") return false;
+    const named = [...entries].reverse().find((e) => e.turnId)?.turnId ?? null;
+    let tid = t.turnId;
+    const over = a.status !== "running" && a.status !== "initializing";
+    if (!tid) tid = named;
+    else if (over && named && named !== tid && (t.newMessage || entries.some((e) => e.turnId === tid))) tid = named;
+    if (tid && prev.ended.includes(tid)) {
+      if (t.missed || tid === t.turnId) return true; // already reported
+      tid = null;
+    }
     const own = tid ? entries.filter((e) => e.turnId === tid) : [];
-    const timeline = (own.length ? own : entries).map((e) => e.item);
-    if (tid) { prev.ended.push(tid); if (prev.ended.length > ENDED_KEEP) prev.ended.shift(); }
-    emit(c, "agent.turn_ended", { agent: hookAgent(c, a), turnId: tid, outcome, timeline });
+    const timeline = (own.length ? own : named && tid ? [] : entries).map((e) => e.item);
+    for (const id of new Set([t.turnId, tid])) if (id && !prev.ended.includes(id)) prev.ended.push(id);
+    while (prev.ended.length > ENDED_KEEP) prev.ended.shift();
+    emit(c, "agent.turn_ended", { agent: hookAgent(c, a), turnId: tid, outcome: t.outcome, timeline });
+    return true;
   };
 
   // ---------- lifecycle ----------
 
   const offChange = o.hosts.onChange(() => sync());
+  let cancelSync: (() => void) | null = null;
+  const armSync = (): void => { cancelSync = schedule(() => { if (stopped) return; sync(); armSync(); }, syncMs); };
   sync();
+  armSync();
 
   return {
     stop(): void {
       if (stopped) return;
       offChange();
+      cancelSync?.();
+      cancelWait?.();
       for (const c of [...conns.values()]) disconnect(c);
+      save();
       stopped = true;
     },
     /** Resolves once every queued sync and snapshot diff has run (tests; also a clean shutdown). */
@@ -408,5 +556,40 @@ export function startRemoteEvents(o: RemoteEventsOptions): { stop(): void; flush
         if (after.length === before.length && after.every((p, i) => p === before[i])) return;
       }
     },
+  };
+}
+
+type Followed = {
+  /** The selector's current SDK port, whose `hosts` is what is watched. */
+  sdkPort(): { hosts: Hosts | null } | null;
+  onHandle?: () => void;
+};
+
+/** `startRemoteEvents` on whichever SDK handle the deck holds: it starts with the first one and moves to every new one. */
+export function followRemoteEvents(ports: Followed, o: Omit<RemoteEventsOptions, "hosts">): { stop(): void; flush(): Promise<void> } {
+  let current: ReturnType<typeof startRemoteEvents> | null = null;
+  let on: Hosts | null = null;
+  let stopped = false;
+  const follow = (): void => {
+    const hosts = ports.sdkPort()?.hosts ?? null;
+    if (stopped || hosts === on) return;
+    current?.stop();
+    on = hosts;
+    current = hosts && hosts.supported ? startRemoteEvents({
+      ...o,
+      hosts: hosts as unknown as HostSource,
+      emit: (name, event) => {
+        const a = (event as { agent: RemoteHookAgent }).agent;
+        hosts.note(a.id, a.serverId, a.hostLabel); // so the handlers' calls go to its host
+        o.emit(name, event);
+      },
+    }) : null;
+  };
+  const before = ports.onHandle;
+  ports.onHandle = () => { before?.(); follow(); };
+  follow();
+  return {
+    stop(): void { stopped = true; current?.stop(); current = null; },
+    flush: () => current?.flush() ?? Promise.resolve(),
   };
 }
