@@ -197,7 +197,7 @@ test("state/enforcer.json records the count so the next run knows", async () => 
 
 // ---------- crews on other Paseo hosts ----------
 
-const away = (id: string) => row(id, { host: "mac", group: "running", owner: "crew", stage: "Unknown · mac offline", fp: `Unknown|${id}`, flags: [{ key: "host-offline", text: "mac offline since 2026-10-24T11:00:00Z" }] });
+const away = (id: string) => row(id, { host: "mac", group: "running", owner: "crew", stage: "Unknown · mac offline", fp: `Unknown|${id}`, flags: [{ key: "host-offline", text: "mac offline since 2026-10-24T11:00:00Z", drift: false }] });
 
 test("a host going offline does not reset a task's reminder count", async () => {
   const s = setup();

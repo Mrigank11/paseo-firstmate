@@ -12,11 +12,11 @@ import type { Prompt } from "./toon.ts";
 import { AgentViews } from "./agent-views.ts";
 import { coldLabelled } from "./cold-agents.ts";
 import { CliPort, type Exec } from "./paseo-cli.ts";
-import { NO_CLAIM_MESSAGE, NoFirstMateError, PortSelector, resolveFirstMate, sendToFirstMate, type CommentRowData, type FirstMate, type PortAgent } from "./paseo-port.ts";
+import { NO_CLAIM_MESSAGE, NoFirstMateError, PortSelector, resolveFirstMate, sendToFirstMate, type CommentRowData, type FirstMate, type PortAgent, type SdkPort } from "./paseo-port.ts";
 import { Relay, newEntries, parseTarget, type AskLookup, type TargetInfo } from "./relay.ts";
 import type { Known } from "./target.ts";
 import { CanvasPort, type FmSummary } from "./canvas-port.ts";
-import { liveJs, liveVersionJs, liveVersionFileOf, renderProject, stageOf, stagesOf, type AgentView, type Banner } from "./render.ts";
+import { liveJs, liveVersionJs, liveVersionFileOf, offlineText, renderProject, stageOf, stagesOf, type AgentView, type Banner } from "./render.ts";
 import { currentAgent, type LabeledAgent } from "./stage.ts";
 import { inputsMtimeMs, readSnapshot, writeSnapshot, type Snapshot, type StageRow } from "./stages-file.ts";
 import { ownerOf } from "./gate.ts";
@@ -28,7 +28,7 @@ import { appendInbox, inboxPath, pageJsonPath, patchPageJson, pidPath, projectDi
 export type Summary = {
   project: string; title: string; repo: string | null; pageUrl: string | null; session: "open" | "ended" | "stopped" | "unknown";
   needsYou: { taskId: string; askId: string | null; taskTitle: string; text: string; since: string }[];
-  running: { taskId: string; taskTitle: string; agentId: string | null; agentStatus: string; current: string; startedAt: string | null }[];
+  running: { taskId: string; taskTitle: string; agentId: string | null; agentStatus: string; current: string; startedAt: string | null; host?: string }[];
   counts: { needsYou: number; withFirstMate: number; running: number; blocked: number; next: number; parked: number; done: number; failed: number };
   undelivered: number;
   banner: string | null;
@@ -81,6 +81,8 @@ const MIN_GAP_MS = 1000;
 const INSTANT_MS = 30;
 /** An undelivered comment turns amber on the page after this long. */
 const LATE_MS = 10_500;
+/** How long a render waits for another host's agent views before drawing with what it has. */
+const REMOTE_VIEW_PATIENCE_MS = 1000;
 const IGNORED = /(^|\/)(\.[^/]*|[^/]*\.tmp|[^/]*\.lock|page\.html|[^/]*\.live\.js|inbox\.jsonl)$/;
 
 /** Shown for an agent nothing is known about yet (no SDK handle and nothing remembered). */
@@ -157,6 +159,10 @@ export class Deck {
   private labeled = new Map<string, PortAgent[]>();
   /** Ids of the live agents, read only while some crew carries a `canvas.relay` label (null = not read). */
   private relayLive: Set<string> | null = null;
+  /** The labelled agents that live on another Paseo host, as last listed. */
+  private remote = new Map<string, { serverId: string; offline: boolean; seen: string }>();
+  /** Remote agents whose view is being read right now (a slow host is not asked twice). */
+  private farViews = new Set<string>();
   private labeledKey = "";
   private labeledFlight: { at: number; p: Promise<boolean> } | null = null;
   /** When each agent's latest turn started (the `agent.turn_started` hook), in this process lifetime: what "the crew worked after the captain clicked" is measured against. */
@@ -199,7 +205,8 @@ export class Deck {
     this.log = o.log ?? (() => {});
     this.agents = new AgentViews((m) => this.log(m));
     this.marks = new MarksServer(() => this.cfg.root, (m) => this.log(m));
-    this.ports = o.ports ?? new PortSelector(new CliPort(o.exec), (m) => this.log(m));
+    this.ports = o.ports ?? new PortSelector(new CliPort(o.exec, { root: () => this.cfg.root }), (m) => this.log(m));
+    this.ports.root ??= () => this.cfg.root; // where the port remembers other hosts' crews
     // the first handle: everything on the pages was last-known until now, so ask about it all
     this.ports.onFirstHandle = () => this.scheduleAll("handle", 0);
     this.relay = new Relay({
@@ -357,7 +364,12 @@ export class Deck {
     }
   }
 
-  private agentUrl = (id: string) => `${this.webBase || "http://localhost:6767"}/agent/${id}`;
+  /** The agent's page in the Paseo app: `webBase` is this daemon's (`…/h/<serverId>`), another host's crew has its own id there. */
+  private agentUrl = (id: string) => {
+    const there = this.remote.get(id)?.serverId ?? this.ports.sdkPort()?.hostOf(id)?.serverId;
+    if (!there) return `${this.webBase || "http://localhost:6767"}/agent/${id}`;
+    return `${this.webBase.replace(/\/h\/[^/]+$/, "") || "http://localhost:6767"}/h/${there}/agent/${id}`;
+  };
 
   // ---------- discovery + watching ----------
 
@@ -474,12 +486,13 @@ export class Deck {
   }
 
   /** `agent.turn_started`: remember when, unlike Paseo's updatedAt this does not move on a label change or a steer. */
-  onTurnStarted(agentId: string): void {
-    this.turnStarts.set(agentId, new Date().toISOString());
+  onTurnStarted(agentId: string, at: string = new Date().toISOString()): void {
+    this.turnStarts.set(agentId, at);
   }
 
   /** Agent lifecycle event: that agent's view is refreshed (SDK) by the next render, which these projects get now. Re-render the projects whose tasks use that agent. */
-  onAgentEvent(agentId: string): void {
+  onAgentEvent(agentId: string, serverId?: string): void {
+    if (serverId) this.ports.sdkPort()?.invalidate(serverId); // its host's listing is cached
     this.agents.markDirty(agentId);
     this.labeledFlight = null; // something moved: the next render asks Paseo again
     const projects = this.agentProjects.get(agentId);
@@ -498,16 +511,25 @@ export class Deck {
     if (this.labeledFlight && Date.now() - this.labeledFlight.at < 500) return this.labeledFlight.p;
     const p = (async () => {
       let list: PortAgent[];
-      try { list = sdk ? await sdk.listAgents({ label: "fm.task", includeArchived: true }) : await coldLabelled(this.o.agentsDir!, "fm.task", this.o.exec); }
+      try { list = sdk ? await sdk.listAgents({ label: "fm.task", includeArchived: true }) : await coldLabelled(this.o.agentsDir!, "fm.task", this.o.exec, this.cfg.root); }
       catch (e) { this.log(`listing agents by fm.task label failed: ${(e as Error).message}`); return false; }
+      for (const a of list) {
+        if (!a.serverId) continue;
+        const now = { serverId: a.serverId, offline: !!a.hostOffline, seen: `${a.status}|${a.updatedAt}` };
+        const was = this.remote.get(a.id);
+        // no event may have told us: a view from before the change (or the outage) is asked for again
+        if (was && (was.offline || was.seen !== now.seen)) this.agents.markDirty(a.id);
+        this.remote.set(a.id, now);
+      }
       const by = new Map<string, PortAgent[]>();
       for (const a of list) { const t = a.labels["fm.task"]; if (t) by.set(t, [...(by.get(t) ?? []), a]); }
-      const key = JSON.stringify([...by].sort(([x], [y]) => x.localeCompare(y)).map(([t, as]) => [t, as.map((a) => [a.id, a.status, a.archived, a.createdAt, a.pendingPermissions])]));
+      const key = JSON.stringify([...by].sort(([x], [y]) => x.localeCompare(y)).map(([t, as]) => [t, as.map((a) => [a.id, a.status, a.archived, a.createdAt, a.pendingPermissions, a.serverId, a.hostOffline?.since])]));
       this.labeled = by;
       // only worth a second read when some live crew carries a relay label
       this.relayLive = null;
       if (list.some((a) => !a.archived && a.labels["canvas.relay"])) {
-        try { this.relayLive = new Set((await (sdk ?? this.ports.current()).listAgents()).map((a) => a.id)); }
+        // the relay target is a first mate here; crews listed on other hosts count as alive too
+        try { this.relayLive = new Set([...(await (sdk ?? this.ports.current()).listAgents({ local: true })), ...list.filter((a) => a.serverId)].map((a) => a.id)); }
         catch (e) { this.log(`listing live agents for canvas.relay failed: ${(e as Error).message}`); }
       }
       const key2 = key + JSON.stringify(this.relayLive ? list.filter((a) => a.labels["canvas.relay"] && !this.relayLive!.has(a.labels["canvas.relay"])).map((a) => a.id).sort() : null);
@@ -606,9 +628,10 @@ export class Deck {
       const owedSince = prev && prev.key === key ? prev.since : now.toISOString();
       this.owed.set(t.id, { key, since: owedSince });
       const sum = st.agentId ? canvas.summaries[st.agentId] : undefined;
+      const host = labeled[t.id]?.find((a) => a.id === st.agentId)?.host;
       return {
         id: t.id, project: t.project ?? null, state: t.state, stage: st.stage, group: st.group, agentId: st.agentId, flags: st.flags,
-        owner: st.owner, reason: st.reason, clears: st.clears, fp: st.fp, owedSince,
+        owner: st.owner, reason: st.reason, clears: st.clears, fp: st.fp, owedSince, ...(host ? { host } : {}),
         ...(sum ? { canvas: { verdict: sum.verdict.label, bluf: sum.bluf.replace(/\s+/g, " ").slice(0, 80), asks: sum.openAsks.length } } : {}),
       };
     });
@@ -695,7 +718,7 @@ export class Deck {
         await this.refreshLabeled(); // who is working on which task, straight from Paseo
         const ids2 = this.trackedAgents(project, this.load(project) ?? model);
         const sdk = this.ports.sdkPort();
-        if (sdk) await this.agents.refresh(ids2, sdk); // only the agents that are running, dirty or unseen
+        if (sdk) await this.refreshViews(project, ids2, sdk);
         const key = this.viewsKey(project, ids2);
         if (key !== this.usedViews.get(project)) this.writePage(project, this.load(project) ?? model);
       } while (state.again && !this.stopped);
@@ -703,6 +726,30 @@ export class Deck {
       this.rendering.delete(project);
       this.scheduleStages();
     }
+  }
+
+  /**
+   * Refresh the views of the agents that are running, dirty or unseen. This daemon's are waited for; another host's only
+   * briefly (the page is drawn when they arrive), and an offline host's not at all.
+   */
+  private async refreshViews(project: string, ids: string[], sdk: SdkPort): Promise<void> {
+    const here = this.agents.refresh(ids.filter((id) => !this.remote.has(id)), sdk);
+    const far = ids.filter((id) => this.remote.get(id)?.offline === false && !this.farViews.has(id));
+    if (far.length) {
+      for (const id of far) this.farViews.add(id);
+      let late = false;
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      const there = this.agents.refresh(far, sdk).then(() => {
+        for (const id of far) this.farViews.delete(id);
+        if (!late || this.stopped) return;
+        const model = this.load(project);
+        if (model && this.viewsKey(project, this.trackedAgents(project, model)) !== this.usedViews.get(project)) this.writePage(project, model);
+        this.scheduleStages();
+      }).catch((e) => this.log(`render ${project} failed: ${e}`));
+      await Promise.race([there, new Promise<void>((resolve) => { timer = setTimeout(() => { late = true; resolve(); }, REMOTE_VIEW_PATIENCE_MS); })]);
+      clearTimeout(timer);
+    }
+    await here;
   }
 
   /** Has `bin/page stop` stopped this page? Remembers it, so the resume is noticed. */
@@ -713,7 +760,7 @@ export class Deck {
 
   private viewsKey(project: string, ids: string[]): string {
     const model = this.lastGood.get(project);
-    return JSON.stringify([ids.map((id) => this.agents.peek(id) ?? null), model ? Object.entries(this.labeledFor(model)).map(([t, as]) => [t, as.map((a) => [a.id, a.status, a.archived, a.pendingPermissions, a.relayGone, a.turnStartedAt, a.nudged])]) : null]);
+    return JSON.stringify([ids.map((id) => this.agents.peek(id) ?? null), model ? Object.entries(this.labeledFor(model)).map(([t, as]) => [t, as.map((a) => [a.id, a.status, a.archived, a.pendingPermissions, a.relayGone, a.turnStartedAt, a.nudged, a.hostOffline?.since])]) : null]);
   }
 
   /**
@@ -1164,10 +1211,13 @@ export class Deck {
           counts.running++;
           const aid = st.agentId;
           const v = aid ? this.agents.peek(aid) : undefined;
+          const crew = this.labeled.get(t.id)?.find((a) => a.id === aid);
+          const away = crew?.hostOffline;
           running.push({
             taskId: t.id, taskTitle: plainTitle(t), agentId: aid ?? null,
-            agentStatus: aid ? (this.agents.status(aid)) : st.stage.toLowerCase(),
-            current: v ? (v.recent[v.recent.length - 1] ?? v.final ?? "") : "", startedAt: v?.createdAt ?? null,
+            agentStatus: away ? "unknown" : aid ? (this.agents.status(aid)) : st.stage.toLowerCase(),
+            current: away ? offlineText(away, new Date()) : v ? (v.recent[v.recent.length - 1] ?? v.final ?? "") : "", startedAt: v?.createdAt ?? null,
+            ...(crew?.host ? { host: crew.host } : {}),
           });
         } else if (g === "done") { if (st.failed) counts.failed++; else counts.done++; }
         else if (g === "parked") counts.parked++;

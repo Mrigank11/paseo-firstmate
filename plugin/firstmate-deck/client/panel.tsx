@@ -71,7 +71,7 @@ function ProjectView({ p, props }: { p: ProjectSummary; props: PluginWorkspacePa
             <View key={r.taskId} style={{ flexDirection: "row", gap: 10 }}>
               <Dot color={statusColor(theme, r.agentStatus)} />
               <View style={{ flex: 1, gap: 2 }}>
-                <Text style={{ color: theme.colors.foreground, fontSize: 14, fontWeight: "600" }}>{r.taskTitle}</Text>
+                <Text style={{ color: theme.colors.foreground, fontSize: 14, fontWeight: "600" }}>{r.host ? `${r.taskTitle} · on ${r.host}` : r.taskTitle}</Text>
                 {r.current ? <Muted theme={theme}>{r.current}</Muted> : <Muted theme={theme}>{r.agentStatus}</Muted>}
               </View>
             </View>

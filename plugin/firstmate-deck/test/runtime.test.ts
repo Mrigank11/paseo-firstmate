@@ -5,7 +5,7 @@ import assert from "node:assert/strict";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { Deck } from "../server/runtime.ts";
+import { Deck, type DeckOpts } from "../server/runtime.ts";
 import { hasLivePoll } from "../server/lavish.ts";
 import { readInbox, readPageJson } from "../server/store.ts";
 
@@ -16,14 +16,14 @@ async function until(cond: () => boolean, ms = 3000) {
 }
 
 import { CliPort } from "../server/paseo-cli.ts";
-import { PortSelector } from "../server/paseo-port.ts";
-import { FakeWorld, fakePaseo, shell } from "./fake-paseo.ts";
+import { PortSelector, SdkPort } from "../server/paseo-port.ts";
+import { FakeHosts, FakeWorld, fakePaseo, shell, type FakeHost } from "./fake-paseo.ts";
 
 /**
  * A daemon with two agents (ag-1 running, fm-1 the labelled first mate), reachable through a fake `paseo` CLI
  * (exec) and, once `sdk` is on (the default), through a fake SDK handle that is already captured.
  */
-function rig(fleet: object, o: { sdk?: boolean } = {}) {
+function rig(fleet: object, o: { sdk?: boolean; hosts?: FakeHosts; ttlMs?: number; deck?: Partial<DeckOpts> } = {}) {
   const root = mkdtempSync(join(tmpdir(), "deck-rt-"));
   const pdir = join(root, "state", "projects", "demo");
   mkdirSync(join(pdir, "sections"), { recursive: true });
@@ -51,8 +51,8 @@ function rig(fleet: object, o: { sdk?: boolean } = {}) {
     }
     throw new Error("unexpected " + args.join(" "));
   };
-  const ports = new PortSelector(new CliPort(exec));
-  if (o.sdk ?? true) ports.capture({ paseo: fakePaseo(fw) }, "test");
+  const ports = new PortSelector(new CliPort(exec), () => {}, o.ttlMs === undefined ? undefined : (api) => new SdkPort(api, { root: () => root, ttlMs: o.ttlMs, patienceMs: 100 }));
+  if (o.sdk ?? true) ports.capture({ paseo: fakePaseo(fw, o.hosts) }, "test");
   const world = {
     set status(v: string) { fw.agents.get("ag-1")!.status = v as any; },
     set sendFails(v: boolean) { fw.sendFails = v; },
@@ -60,7 +60,7 @@ function rig(fleet: object, o: { sdk?: boolean } = {}) {
     set labelled(l: unknown[]) { if (!l.length) fw.agents.get("fm-1")!.labels = {}; },
     set all(l: { id: string; status: string }[]) { for (const a of l) fw.add({ id: a.id, status: a.status as any }); },
   };
-  const mkDeck = (cfg: Record<string, string> = {}) => new Deck({ exec, ports, batchMs: 30, readConfig: async () => ({ root, firstmateLabel: "firstmate=true", ...cfg }) });
+  const mkDeck = (cfg: Record<string, string> = {}) => new Deck({ exec, ports, batchMs: 30, readConfig: async () => ({ root, firstmateLabel: "firstmate=true", ...cfg }), ...o.deck });
   const deck = mkDeck();
   return {
     root, pdir, world, fw, cliCalls, ports, deck, mkDeck, page: join(pdir, "page.html"), live: join(pdir, "page.live.js"),
@@ -1055,5 +1055,94 @@ test("enforcement reaches the page and stages.json together: a stalled task move
   r.deck.setEnforcement([], { l1: { fp: "old", why: "x" } });
   await r.deck.publishStages();
   assert.equal(l1().group, "fm");
+  r.deck.stop();
+});
+
+// ---------- crews on other Paseo hosts ----------
+
+const MACTASK = { tasks: [{ id: "demo-ux-task", intent: "ux", state: "active", project: "demo", shape: "ship" }] };
+const macLabels = { "fm.task": "demo-ux-task", "fm.project": "demo" };
+
+/** One task with three crews: an old one here, an older and the newest on the Mac. */
+function macRig(o: { ttlMs?: number } = {}) {
+  const crew = (id: string, createdAt: string, status: "running" | "idle") => ({ id, status, createdAt, updatedAt: createdAt, labels: macLabels, items: [assistant(`working in ${id}`)] });
+  const mac: FakeHost = {
+    serverId: "srv_mac", label: "mac", lastOnlineAt: "2026-10-22T14:03:00Z",
+    world: new FakeWorld().add(crew("mac-older", "2026-10-21T09:00:00Z", "idle"), crew("mac-new", "2026-10-22T09:00:00Z", "running")),
+  };
+  const r = rig(MACTASK, { hosts: new FakeHosts(mac), ttlMs: o.ttlMs ?? 0 });
+  r.fw.add(crew("old-local", "2026-10-20T09:00:00Z", "idle"));
+  const row = () => r.deck.snapshot()?.rows.find((x) => x.id === "demo-ux-task");
+  const show = async () => { await r.deck.configure(); await r.deck.render("demo"); await r.deck.publishStages(); return readFileSync(r.live, "utf8"); };
+  return { ...r, mac, row, show };
+}
+
+test("a task with an old local crew and two on the Mac shows the newest Mac crew, named and linked to its host", async () => {
+  const r = macRig();
+  const live = await r.show();
+  assert.match(live, /\/h\/srv_mac\/agent\/mac-new/);
+  assert.match(live, /on mac/);
+  assert.doesNotMatch(live, /agent\/(old-local|mac-older)/);
+  assert.deepEqual([r.row()?.agentId, r.row()?.host, r.row()?.stage], ["mac-new", "mac", "Running"]);
+  const s = (await r.deck.summary()).projects[0];
+  assert.deepEqual(s.running.map((x) => [x.agentId, x.agentStatus, x.host]), [["mac-new", "running", "mac"]]);
+  r.deck.stop();
+});
+
+test("while the Mac is offline its crew is unknown since then: never the old local one, never asked", async () => {
+  const r = macRig();
+  await r.show();
+  r.mac.status = "offline";
+  r.mac.world.calls.length = 0;
+  r.deck.onAgentEvent("mac-new", "srv_mac");
+  await sleep(600); // past the shared label read
+  const live = await r.show();
+  assert.match(live, /unknown · mac offline since (22 Oct )?14:03/);
+  assert.match(live, /\/h\/srv_mac\/agent\/mac-new/);
+  assert.doesNotMatch(live, /agent\/old-local|so far|mac offline since 2026|1 agent working/);
+  assert.deepEqual([r.row()?.agentId, r.row()?.host, r.row()?.stage], ["mac-new", "mac", "Unknown · mac offline"]);
+  assert.deepEqual(r.mac.world.calls, []);
+  const run = (await r.deck.summary()).projects[0].running[0];
+  assert.deepEqual([run.agentStatus, run.host], ["unknown", "mac"]);
+  assert.match(run.current, /^mac offline since (22 Oct )?14:03$/);
+  r.deck.stop();
+});
+
+test("a hung host does not hold up a page", async () => {
+  const r = macRig();
+  await r.show();
+  r.mac.world.hang = true;
+  await sleep(600);
+  const t0 = Date.now();
+  await r.deck.render("demo");
+  await r.deck.publishStages();
+  assert.ok(Date.now() - t0 < 2500, `took ${Date.now() - t0} ms`);
+  assert.equal(r.row()?.agentId, "mac-new");
+  r.deck.stop();
+  r.ports.sdkPort()!.hosts!.stop();
+});
+
+test("a remote crew's event refreshes its host at once, and its turn start is the one the host reported", async () => {
+  const r = macRig({ ttlMs: 60_000 });
+  await r.show();
+  r.mac.world.agents.get("mac-new")!.status = "idle";
+  r.mac.world.agents.get("mac-new")!.items = [assistant("DONE: mac @ abc")];
+  await sleep(600);
+  r.deck.onAgentEvent("mac-new", "srv_mac");
+  await r.show();
+  assert.equal(r.row()?.stage, "Review");
+  r.deck.stop();
+});
+
+test("before the first SDK handle, remembered Mac crews are not replaced by an old local one", async () => {
+  const agentsDir = mkdtempSync(join(tmpdir(), "deck-agents-"));
+  mkdirSync(join(agentsDir, "a"));
+  writeFileSync(join(agentsDir, "a", "old-local.json"), JSON.stringify({ id: "old-local", labels: macLabels, createdAt: "2026-10-20T09:00:00Z", lastStatus: "idle" }));
+  const r = rig(MACTASK, { sdk: false, deck: { agentsDir } });
+  writeFileSync(join(r.root, "state", "remote-agents.json"), JSON.stringify({ version: 1, hosts: { srv_mac: { label: "mac", offlineSince: null, agents: [{ id: "mac-new", task: "demo-ux-task", status: "running", archived: false, createdAt: "2026-10-22T09:00:00Z", lastActivityAt: "2026-10-22T09:00:00Z", pending: 0, labels: macLabels }] } } }));
+  await r.deck.configure();
+  await r.deck.publishStages();
+  const row = r.deck.snapshot()!.rows[0];
+  assert.deepEqual([row.agentId, row.host], ["mac-new", "mac"]);
   r.deck.stop();
 });

@@ -24,6 +24,10 @@ export type FmSummary = {
   url: string;
   agentUrl: string | null;
   auto: boolean;
+  /** The Paseo host the agent runs on; absent for one on this daemon. */
+  host?: { serverId: string; label: string };
+  /** That host is offline since then (ms): the rest is the last known state. */
+  hostOffline?: { label: string; since: number };
 };
 
 /** ok: the last read worked. down: it failed (the page shows a soft badge). off: no canvas URL is configured. */

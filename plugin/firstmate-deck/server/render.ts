@@ -106,6 +106,19 @@ function stampLong(d: Date): string {
 
 const stampShort = (d: Date) => `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
 
+const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+
+/** A fixed past moment as the page writes it: the time, with the date when it was not today. */
+function sinceLabel(iso: string, now: Date): string {
+  const d = new Date(iso);
+  if (isNaN(d.getTime())) return iso;
+  const hm = `${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  return d.toDateString() === now.toDateString() ? hm : `${d.getDate()} ${MONTHS[d.getMonth()]} ${hm}`;
+}
+
+/** "mac offline since 14:03": why a crew on that host is unknown. */
+export const offlineText = (o: { label: string; since: string }, now: Date): string => `${o.label} offline since ${sinceLabel(o.since, now)}`;
+
 const titleCase = (s: string) => s.replace(/[-_]+/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
 
 /** The task's computed stage (stage.ts): from the registry's intent, its asks, and the Paseo agents carrying its label. */
@@ -140,28 +153,35 @@ function agentBlock(t: Task, group: GroupKey, view: AgentView | undefined, o: Re
     return `<div class="ag"><span class="pill p-idle"><span class="dot"></span>${esc(st.stage)}</span>${flagBadges(st.flags)}</div>`;
   }
   const url = esc(o.paseoAgentUrl(aid));
+  const crew = o.labeled?.[t.id]?.find((x) => x.id === aid);
+  const on = crew?.host ? `on ${crew.host}` : "";
   if (group === "done") { // frozen: the agent id may be reused later, so show none of its live state
     const [cls, label] = st.failed ? ["error", "failed"] : ["done", "done"];
-    const who = t.provider ? `<span class="facts">${esc(t.provider)}</span>` : "";
+    const facts = [t.provider, on].filter(Boolean).join(" · ");
+    const who = facts ? `<span class="facts">${esc(facts)}</span>` : "";
     return `<div class="ag"><span class="pill p-${cls}"><span class="dot"></span>${label}</span>${who}${flagBadges(st.flags)}<a class="open" href="${url}">Open in Paseo</a></div>`;
   }
   const a: AgentView = view ?? { status: "unknown", stepCount: 0, recent: [] };
-  const ast = a.stale ? "unknown" : a.status;
-  const [cls, label] = a.stale ? ["idle", STALE_PILL] : pill(group, ast);
+  const away = crew?.hostOffline; // its host is offline: what the view says is only what was last seen
+  const ast = away || a.stale ? "unknown" : a.status;
+  const [cls, label] = away ? ["idle", `unknown · ${offlineText(away, o.now)}`] : a.stale ? ["idle", STALE_PILL] : pill(group, ast);
   const c = a.createdAt ? new Date(a.createdAt) : null;
   const u = a.updatedAt ? new Date(a.updatedAt) : null;
   const ok = (d: Date | null): d is Date => !!d && !isNaN(d.getTime());
-  const el = !a.stale && ok(c) && ok(u)
+  const el = !away && !a.stale && ok(c) && ok(u)
     ? ACTIVE.has(ast) ? `${dur((o.now.getTime() - c.getTime()) / 1000)} so far` : `took ${dur((u.getTime() - c.getTime()) / 1000)}`
     : "";
   // Paseo has no record of the agent (or none yet): fall back to the provider/model the task itself names
   const model = [a.model || t.provider, a.thinking].filter(Boolean).join(" ");
-  const facts = [a.stepCount ? `${a.stepCount}${a.stepsAtLeast ? "+" : ""} steps` : "", el, model, ast === "archived" ? "archived" : ""].filter(Boolean).join(" · ");
+  const facts = [on, a.stepCount ? `${a.stepCount}${a.stepsAtLeast ? "+" : ""} steps` : "", el, model, ast === "archived" ? "archived" : ""].filter(Boolean).join(" · ");
+  // the pill already says which host is away and since when
+  const stage = away && st.stage.startsWith("Unknown") ? "" : `<span class="stg">${esc(st.stage)}</span>`;
+  const flags = flagBadges(away ? st.flags.filter((f) => f.key !== "host-offline") : st.flags);
   const cur = ACTIVE.has(ast) && a.recent.length ? a.recent[a.recent.length - 1] : a.final || a.recent[a.recent.length - 1] || "";
   // with a canvas fragment the links move below it (cvLinks) and the canvas's BLUF/steps/Now replace the recent-steps block
   const head =
     `<div class="ag"><span class="pill p-${cls}"><span class="dot"></span>${esc(label)}</span>` +
-    `<span class="stg">${esc(st.stage)}</span>${flagBadges(st.flags)}<span class="facts">${esc(facts)}</span>${withCanvas ? "" : `<a class="open" href="${url}">Open in Paseo</a>`}</div>`;
+    `${stage}${flags}<span class="facts">${esc(facts)}</span>${withCanvas ? "" : `<a class="open" href="${url}">Open in Paseo</a>`}</div>`;
   if (withCanvas || !cur) return head;
   if (!a.recent.length) return head + `<div class="cur">${esc(cut(cur, 160))}</div>`;
   const lis = a.recent.map((s) => `<li>${esc(s)}</li>`).join("");
@@ -533,7 +553,7 @@ function renderLive(model: ProjectModel, agents: Record<string, AgentView>, o: R
   for (const k of Object.keys(buckets) as GroupKey[]) buckets[k] = byOrder(buckets[k].map((x) => ({ ...x, order: archivedIds.has(x.t.id) ? undefined : x.t.order }))).map(({ t, g }) => ({ t, g }));
 
   const busy = GROUPS.filter(([k]) => k !== "done").flatMap(([k]) => buckets[k])
-    .filter(({ t }) => { const a = stages.get(t.id)?.agentId; return a && ACTIVE.has(agents[a]?.status ?? ""); }).length;
+    .filter(({ t }) => { const a = stages.get(t.id)?.agentId; return a && ACTIVE.has(agents[a]?.status ?? "") && !o.labeled?.[t.id]?.find((x) => x.id === a)?.hostOffline; }).length;
   const failedN = buckets.done.filter(({ t }) => stages.get(t.id)?.failed ?? t.state === "failed").length;
   const countOf = (k: GroupKey) => (k === "done" ? buckets.done.length - failedN : buckets[k].length); // a failed task is not "done"
   // Done cards with a card.md start "unread" (the page moves the ones the captain has marked read into the Done group)

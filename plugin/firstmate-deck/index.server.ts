@@ -10,6 +10,8 @@ import { Gate } from "./server/gate.ts";
 import { fetchSummary } from "./server/canvas-port.ts";
 import { Permission } from "./server/permission.ts";
 import { Enforcer } from "./server/enforcer.ts";
+import { dispatcher } from "./server/dispatch.ts";
+import { fileStore, followRemoteEvents } from "./server/remote-events.ts";
 
 const AGENT_EVENTS = [
   "agent.turn_started",
@@ -28,7 +30,7 @@ export default function contribute(server: PluginServerContext) {
   // The SDK handle only reaches hooks and RPC handlers (never contribute()): every one of them hands it to the
   // selector, which switches the deck from the CLI to the SDK as soon as the first one arrives.
   const exec = makeExec(home);
-  const ports = new PortSelector(new CliPort(exec), log);
+  const ports = new PortSelector(new CliPort(exec, { root: (): string => deck.root() }), log);
 
   const settings = server.registerSettings(deckSettings);
   const deck = new Deck({
@@ -74,16 +76,15 @@ export default function contribute(server: PluginServerContext) {
     return deck.summary(input.project);
   });
 
+  const dispatch = dispatcher({ deck, gate, enforcer, permission });
   for (const name of AGENT_EVENTS) {
     server.on(name, (event, ctx) => {
       ports.capture(ctx, `hook ${name}`);
-      if (name === "agent.turn_started") deck.onTurnStarted(event.agent.id);
-      deck.onAgentEvent(event.agent.id);
-      if (name === "agent.turn_ended") { void gate.onTurnEnded(event as never); enforcer.onTurnEnded(event.agent.id); }
-      if (name === "agent.permission_requested") void permission.onRequested(event as never);
-      if (name === "agent.closed") void gate.onClosed(event as never);
+      dispatch(name, event);
     });
   }
+  // Crews on other Paseo hosts raise no hooks here: their events are made from those hosts' agent lists, once there is a handle.
+  const remote = followRemoteEvents(ports, { emit: dispatch, log, store: fileStore(() => deck.root()) });
   // no pill depends on these, but any callback can be the first to carry a handle
   server.on("agent.created", (_e, ctx) => ports.capture(ctx, "hook agent.created"));
   server.on("workspace.created", (_e, ctx) => ports.capture(ctx, "hook workspace.created"));
@@ -92,6 +93,8 @@ export default function contribute(server: PluginServerContext) {
   return async () => {
     log("cleanup");
     unsub();
+    remote.stop();
+    ports.sdkPort()?.hosts?.stop();
     gate.stop();
     clearInterval(enforcerTick);
     enforcer.stop();
