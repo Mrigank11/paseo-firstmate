@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # bin/isolated — a throwaway firstmate-v2 environment: its OWN Paseo daemon, plugins and state. Never touches ~/.paseo.
 #
-#   bin/isolated up [--no-canvas]   create the home and state on first use, start the daemon, install firstmate-deck from THIS
+#   bin/isolated up [--no-canvas] [--no-lavish]   create the home and state on first use, start the daemon, install firstmate-deck from THIS
 #                                   checkout (and agent-canvas), seed the sample fleet and project page; idempotent, and re-run
 #                                   from another worktree it re-points the plugin there
 #   bin/isolated down               stop the daemon (state and home are kept)
@@ -90,7 +90,10 @@ seed_state() {
 
 cmd_up() {
   command -v paseo >/dev/null && command -v jq >/dev/null || die "paseo and jq are required"
-  local canvas=1; [[ "${1:-}" == --no-canvas ]] && canvas=0
+  local canvas=1 lavish=1 a
+  for a in "$@"; do
+    case "$a" in --no-canvas) canvas=0 ;; --no-lavish) lavish=0 ;; *) die "unknown option '$a'" ;; esac
+  done
   export_env
   write_config
   mkdir -p "$ISO_ROOT/state"
@@ -116,7 +119,13 @@ cmd_up() {
     fm="$(P run --no-wait --quiet --provider claude --model claude-sonnet-5-5 --mode bypassPermissions --title "First mate (isolated stand-in)" --cwd "$ISO_WORK" "Reply with the single word ready, then stop. Do nothing else." | tail -1)"
     echo "$fm" >"$ISO_ROOT/fm-agent"
   fi
-  PASEO_AGENT_ID="$fm" "$REPO/bin/page" start "$PROJECT" --title "Demo app (isolated)" >/dev/null || echo "isolated: bin/page start reported a problem (bin/isolated page status)" >&2
+  if ((lavish)); then
+    PASEO_AGENT_ID="$fm" "$REPO/bin/page" start "$PROJECT" --title "Demo app (isolated)" >/dev/null || echo "isolated: bin/page start reported a problem (bin/isolated page status)" >&2
+  else
+    # no Lavish: claim and create the page only; the plugin renders its files, comments are not polled
+    node "$REPO/plugin/firstmate-deck/server/page-tool.ts" scaffold "$ISO_ROOT" "$PROJECT" --title "Demo app (isolated)" >/dev/null || die "could not create the project"
+    PASEO_AGENT_ID="$fm" "$REPO/bin/page" claim "$PROJECT" >/dev/null || die "could not claim $PROJECT"
+  fi
   cmd_status
 }
 

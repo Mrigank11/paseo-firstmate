@@ -16,6 +16,7 @@
 
 ```
 bin/isolated up         # start + install + seed (idempotent; from another worktree it re-points the plugin there)
+bin/isolated up --no-lavish   # the same without opening a Lavish session (page files only, no comment polling)
 bin/isolated status     # URLs, plugins, agents
 bin/isolated down       # stop the daemon, keep everything
 bin/isolated reset      # wipe home + state, up again
