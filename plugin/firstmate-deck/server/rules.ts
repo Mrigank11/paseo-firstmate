@@ -1,6 +1,8 @@
 // The auto-approve rules (S5): parse the fenced ```json fm-permission-rules block in state/decisions.md and classify one
 // permission request against it. Pure apart from reading the file and resolving real paths. It only ever says "allow" or
-// "escalate": nothing here denies. A missing or unparsable block escalates everything (fail closed).
+// "escalate": nothing here denies. A missing or unparsable block escalates everything (fail closed). For a crew on another host
+// (`remote`) only checks on the request's own text apply: anything that would look at files here, or means "that machine"
+// (loopback), escalates.
 import { existsSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, dirname, isAbsolute, join, resolve, sep } from "node:path";
@@ -42,7 +44,7 @@ export type PermissionRequestLike = {
   input?: unknown;
 };
 
-export type RuleContext = { cwd: string | null; root: string; task: string; paseoHome: string | null };
+export type RuleContext = { cwd: string | null; root: string; task: string; paseoHome: string | null; remote?: boolean };
 
 export type Classification = { decision: "allow" | "escalate"; rule: string };
 
@@ -297,6 +299,7 @@ export function normalizeSegment(words: readonly string[], sh: Rules["shell"]): 
 }
 
 function writeAllowed(rules: Rules, ctx: RuleContext, raw: string): { ok: boolean; target: string } {
+  if (ctx.remote) return { ok: false, target: raw };
   const wt = worktreeOf(rules, ctx);
   const target = realPathLoose(isAbsolute(raw) ? raw : resolve(ctx.cwd ?? ".", raw));
   for (const t of rules.writeWithin) {
@@ -320,7 +323,7 @@ function classifyShell(rules: Rules, cmd: string, ctx: RuleContext): Classificat
       if (/[*?[\]{}]/.test(r.target) || r.target.startsWith("~") || r.target === "") return esc(`redirect target ${JSON.stringify(r.target)} is not a plain path`);
       if (r.target === "/dev/null") continue;
       const w = writeAllowed(rules, ctx, r.target);
-      if (!w.ok) return esc(`redirect to ${w.target} outside writeWithin`);
+      if (!w.ok) return esc(ctx.remote ? `redirect to ${w.target} on another host cannot be checked` : `redirect to ${w.target} outside writeWithin`);
     }
     if (!seg.words.length) return esc("redirection without a command");
     const n = normalizeSegment(seg.words, rules.shell);
@@ -332,6 +335,8 @@ function classifyShell(rules: Rules, cmd: string, ctx: RuleContext): Classificat
   }
   return { decision: "allow", rule: `shell:${[...new Set(hits)].join(" + ")}` };
 }
+
+const LOOPBACK = /^((.*\.)?localhost\.?|127\..*|0\.0\.0\.0|\[::1?\]|\[::ffff:7f.*\])$/i;
 
 /** Decide one request. `detail`-less or unknown-shaped requests always escalate. */
 export function classify(rules: Rules, req: PermissionRequestLike, ctx: RuleContext): Classification {
@@ -346,6 +351,7 @@ export function classify(rules: Rules, req: PermissionRequestLike, ctx: RuleCont
     case "write": {
       const raw = typeof d.filePath === "string" ? d.filePath : "";
       if (!raw) return { decision: "escalate", rule: `${d.type}: no filePath` };
+      if (ctx.remote) return { decision: "escalate", rule: `${d.type}: files on another host cannot be checked (${raw})` };
       const w = writeAllowed(rules, ctx, raw);
       if (w.ok) return { decision: "allow", rule: `${d.type} within writeWithin` };
       const target = w.target;
@@ -356,6 +362,7 @@ export function classify(rules: Rules, req: PermissionRequestLike, ctx: RuleCont
     case "fetch": {
       let host = "";
       try { host = new URL(String(d.url)).hostname; } catch {}
+      if (ctx.remote && LOOPBACK.test(host)) return { decision: "escalate", rule: `fetch: ${host} is the other host's own machine` };
       return host && rules.fetchHosts.includes(host) ? { decision: "allow", rule: `fetch:${host}` } : { decision: "escalate", rule: `fetch: host ${host || "?"} not in fetchHosts` };
     }
     default:
