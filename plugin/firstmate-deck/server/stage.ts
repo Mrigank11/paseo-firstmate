@@ -35,7 +35,8 @@ export type HostOffline = { label: string; since: string };
 export type Owner = "captain" | "firstmate" | "crew" | "outside" | "nobody";
 
 /** What a badge on the card says. `drift` flags are the registry and Paseo disagreeing: the first mate should act. */
-export type StageFlag = { key: string; text: string; drift: boolean };
+/** `since` (ms) is set on a flag whose text counts time ("silent 41 min"): the page writes the count itself from it, so the payload does not change as the minutes pass. */
+export type StageFlag = { key: string; text: string; drift: boolean; since?: number };
 
 export type Stage = {
   /** Human label: "Running", "Needs you", "Review"... */
@@ -106,7 +107,7 @@ export function currentAgent<A extends { archived: boolean; createdAt?: string |
   return newest(agents.filter((a) => !a.archived)) ?? newest(agents.filter((a) => a.archived));
 }
 
-const flag = (key: string, text: string, drift = false): StageFlag => ({ key, text, drift });
+const flag = (key: string, text: string, drift = false, since?: number): StageFlag => ({ key, text, drift, ...(since ? { since } : {}) });
 
 /**
  * `opts.archived`: the task is an archive line (history, frozen): its stage is its verdict and Paseo is not consulted.
@@ -208,7 +209,7 @@ export function computeStage(task: StageTask, agents: readonly StageAgent[], now
   if (away) return out(`Unknown · ${away.label} offline`, "running", `unknown · ${away.label} offline since ${away.since}`);
   if (RUNNING.has(cur.status)) {
     const quiet = now.getTime() - ms(cur.lastActivityAt);
-    return out("Running", "running", "crew is working", "", cur.lastActivityAt && quiet > SILENT_MS ? [flag("silent", `silent ${Math.round(quiet / 60_000)} min`)] : []);
+    return out("Running", "running", "crew is working", "", cur.lastActivityAt && quiet > SILENT_MS ? [flag("silent", `silent ${Math.round(quiet / 60_000)} min`, false, ms(cur.lastActivityAt))] : []);
   }
   if (cur.status === "unknown") return out("Running", "running", "crew status unknown", "", [flag("status-unknown", "agent status unknown")]);
   if (cur.status === "error") return out("Failed (agent errored)", "fm", "the crew agent errored", "stuck-crew-recovery", [], true);

@@ -1,6 +1,6 @@
 // The deck's daemon-side brain: watches the first mate's state, renders each project page, owns each page's
 // Lavish poll, and relays page comments to the first mate.
-import { existsSync, readdirSync, readFileSync, statSync, watch, type FSWatcher } from "node:fs";
+import { closeSync, existsSync, mkdirSync, openSync, readdirSync, readSync, readFileSync, statSync, unlinkSync, watch, type FSWatcher } from "node:fs";
 import { basename, join, relative } from "node:path";
 import { createHash } from "node:crypto";
 import { execFile, type ChildProcess } from "node:child_process";
@@ -16,7 +16,7 @@ import { NO_CLAIM_MESSAGE, NoFirstMateError, PortSelector, resolveFirstMate, sen
 import { Relay, newEntries, parseTarget, type AskLookup, type TargetInfo } from "./relay.ts";
 import type { Known } from "./target.ts";
 import { CanvasPort, type FmSummary } from "./canvas-port.ts";
-import { liveJs, liveVersionJs, liveVersionFileOf, offlineText, renderProject, stageOf, stagesOf, type AgentView, type Banner } from "./render.ts";
+import { bodyDirOf, bodyFileName, bodyJs, liveJs, pageSigOf, liveVersionJs, liveVersionFileOf, offlineText, renderProject, stageOf, stagesOf, type AgentView, type Banner, type Body } from "./render.ts";
 import { currentAgent, type LabeledAgent } from "./stage.ts";
 import { inputsMtimeMs, readSnapshot, writeSnapshot, type Snapshot, type StageRow } from "./stages-file.ts";
 import { ownerOf } from "./gate.ts";
@@ -243,6 +243,9 @@ export class Deck {
   async start(): Promise<void> {
     await this.configure();
     this.timers.push(setInterval(() => void this.configure().catch((e) => this.log(`rescan failed: ${e}`)), this.o.rescanMs ?? RESCAN_MS));
+    // Every tick re-renders: for the things that change by the clock alone (a stage that goes quiet, a day-old answered comment),
+    // and as the page's "still alive" watch, so a page whose rendering has stopped warns. An unchanged payload is not rewritten
+    // (only the tiny version file moves), so an idle tab downloads nothing.
     this.timers.push(setInterval(() => { this.scheduleAll("tick", 0); this.scheduleStages(0); }, this.o.tickMs ?? TICK_MS));
     this.scheduleStages(500);
   }
@@ -752,6 +755,41 @@ export class Deck {
     await here;
   }
 
+  /** Body files written so far, per project: content-named, so each is written once and never changes. */
+  private bodyFiles = new Map<string, Set<string>>();
+  private bodyGcAt = new Map<string, number>();
+  /** When each page's content last really changed (ISO): the page shows it as "last update". */
+  private changedAt = new Map<string, string>();
+
+  /**
+   * Writes the bodies of the one-line cards next to the page in `<page>.d/`. Each is named by its content, so an existing one is
+   * never rewritten and a page that holds an older version can still fetch it; files nothing references for 10 minutes are removed.
+   */
+  private writeBodies(project: string, target: string, bodies: Record<string, Body>): void {
+    const dir = bodyDirOf(target);
+    const have = this.bodyFiles.get(project) ?? new Set<string>();
+    this.bodyFiles.set(project, have);
+    const keep = new Set<string>();
+    try {
+      mkdirSync(dir, { recursive: true });
+      for (const [id, b] of Object.entries(bodies)) {
+        const name = bodyFileName(id, b.hash);
+        keep.add(name);
+        if (have.has(name) && existsSync(join(dir, name))) continue;
+        writeAtomic(join(dir, name), bodyJs(id, b));
+        have.add(name);
+      }
+      const now = Date.now();
+      if (now - (this.bodyGcAt.get(project) ?? 0) > 600_000) {
+        this.bodyGcAt.set(project, now);
+        for (const f of readdirSync(dir)) {
+          if (keep.has(f) || !f.endsWith(".js")) continue;
+          try { if (now - statSync(join(dir, f)).mtimeMs > 600_000) { unlinkSync(join(dir, f)); have.delete(f); } } catch { /* gone already */ }
+        }
+      }
+    } catch (e) { this.log(`card bodies for ${project}: ${e}`); }
+  }
+
   /** Has `bin/page stop` stopped this page? Remembers it, so the resume is noticed. */
   private pageHalted(project: string): boolean {
     if (readPageJson(pageJsonPath(this.cfg.root, project)).session === "stopped") { this.haltedPages.add(project); return true; }
@@ -818,10 +856,20 @@ export class Deck {
     return [...new Set(ids)];
   }
 
+  /** The signature the page file on disk was written with ("" when it is missing or has none). Reads the first bytes only. */
+  private pageSignature(target: string): string {
+    try {
+      const fd = openSync(target, "r");
+      try { const b = Buffer.alloc(256); return pageSigOf(b.subarray(0, readSync(fd, b, 0, 256, 0)).toString("utf8")); } finally { closeSync(fd); }
+    } catch { return ""; }
+  }
+
   /** Cheap identity of the page on disk (mtime + size); "" when it is missing. */
   private pageStamp(target: string): string {
     try { const st = statSync(target); return `${st.mtimeMs}:${st.size}`; } catch { return ""; }
   }
+
+  private readonly startedAt = Date.now();
 
   private writePage(project: string, model: ProjectModel): void {
     // a project exists only while its project.json does; never resurrect a deleted project's dir
@@ -849,26 +897,34 @@ export class Deck {
     r.page = resolveAssets(r.page, abase, adir);
     r.live = resolveAssets(r.live, abase, adir);
     if (!model.seen && !readUi(this.cfg.root, project).s) updateUi(this.cfg.root, project, { o: {}, r: {}, s: { at: now.toISOString(), keys: r.attention.keys } });
-    const p2 = (n: number) => String(n).padStart(2, "0");
-    const ts = `${p2(now.getHours())}:${p2(now.getMinutes())}:${p2(now.getSeconds())}`;
     let rewrote = false;
     // also rewrite when the file is not the one we wrote (`bin/page start` re-renders it without the canvas stylesheet)
-    if (r.signature !== this.sigs.get(project) || this.pageStamp(target) !== this.stamps.get(project)) {
-      writeAtomic(target, r.page);
+    // Lavish reloads the page frame whenever this file changes, so it is written only when its shell really changed: a plugin
+    // restart finds the signature it would write already on disk and leaves the file (and every open tab) alone.
+    // Just after a restart the canvas stylesheet has not arrived yet, so the shell would differ from the one on disk (no canvas css)
+    // and be rewritten twice (without it, then with it): two reloads of every open tab. A page already on disk waits for it.
+    const cv = this.canvas.data(ids);
+    const waitCss = this.canvas.configured && !cv.css && Date.now() - this.startedAt < 90_000 && this.pageSignature(target) !== "";
+    if (!waitCss && (r.signature !== this.sigs.get(project) || this.pageStamp(target) !== this.stamps.get(project))) {
+      if (this.pageSignature(target) !== r.signature) {
+        writeAtomic(target, r.page);
+        rewrote = true;
+      }
       this.sigs.set(project, r.signature);
       this.stamps.set(project, this.pageStamp(target));
-      rewrote = true;
     }
     // The page polls the tiny version file each second and fetches the full payload only when its content hash moved, so
     // the payload is rewritten only then (the clock stamp is not part of the hash: it shows the last real change).
+    this.writeBodies(project, target, r.bodies);
     const hash = createHash("sha1").update(r.live).digest("hex").slice(0, 16);
     const liveFile = target.replace(/\.[^./]*$/, "") + ".live.js";
     const seq = ++this.liveSeq;
     if (hash !== this.liveHashes.get(project) || !existsSync(liveFile)) {
-      writeAtomic(liveFile, liveJs(r.live.replace(/\{TS\}/g, ts), now.toISOString(), seq, hash));
+      this.changedAt.set(project, now.toISOString());
+      writeAtomic(liveFile, liveJs(r.live, this.changedAt.get(project), seq, hash));
       this.liveHashes.set(project, hash);
     }
-    writeAtomic(liveVersionFileOf(target), liveVersionJs(hash, now.toISOString(), seq));
+    writeAtomic(liveVersionFileOf(target), liveVersionJs(hash, now.toISOString(), seq, this.changedAt.get(project)));
     patchPageJson(pageJsonPath(this.cfg.root, project), { lastRender: now.toISOString(), banner: banner?.text ?? null, agentViews: this.agents.snapshot(ids) });
     if (rewrote) this.log(`rendered ${project} (${r.signature.slice(0, 8)})`);
   }
