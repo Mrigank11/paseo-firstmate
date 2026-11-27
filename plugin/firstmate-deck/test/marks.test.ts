@@ -10,6 +10,7 @@ import { renderProject } from "../server/render.ts";
 import { loadProject } from "../server/state.ts";
 import { markdown } from "../server/markdown.ts";
 import { pageScript } from "../server/page-script.ts";
+import { withBodies } from "./bodies.ts";
 
 function world() {
   const root = mkdtempSync(join(tmpdir(), "marks-"));
@@ -96,7 +97,7 @@ test("Needs-you ask: BLUF text is the bold label, context is open and does not r
     { id: "q", intent: "q", state: "active", project: "demo", asks: [{ id: "a1", text: "BLUF: pick one.", since: "2026-10-21T09:00:00Z", context: "tasks/q/asks/1.md" }] },
     { id: "b", intent: "b", state: "done", project: "demo" },
   ] }));
-  const live = renderProject(loadProject(root, "demo"), {}, opts).live;
+  const rr = renderProject(loadProject(root, "demo"), {}, opts), live = withBodies(rr);
   assert.match(live, /<div class="ask"><b>BLUF: pick one\.<\/b><\/div>/);
   assert.ok(!live.includes("Your call:"));
   assert.match(live, /<details class="actx" id="x-q-a1" open><summary>Context<\/summary><div><ol>/);
@@ -118,7 +119,7 @@ test("a 160-char title renders in full and the title cell wraps", async () => {
   const root = world();
   const long = ("A very long task title with words " + "and-an-unbreakable-" + "x".repeat(40) + " ").repeat(1).padEnd(160, "y").slice(0, 160);
   writeFileSync(join(root, "state", "fleet.json"), JSON.stringify({ version: 2, tasks: [{ id: "lt", intent: "lt", title: long, state: "queued", project: "demo" }] }));
-  const live = renderProject(loadProject(root, "demo"), {}, opts).live;
+  const rr = renderProject(loadProject(root, "demo"), {}, opts), live = withBodies(rr);
   assert.ok(live.includes(long));
   assert.match(CSS, /\.tt\{flex-wrap:wrap\}\.ttl\{min-width:0;overflow-wrap:anywhere\}/);
 });

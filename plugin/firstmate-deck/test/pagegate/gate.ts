@@ -4,9 +4,10 @@
 //   busy     crew changes every 1-3 s for GATE_BUSY_S, with real sidebar clicks: bytes a minute, update time, main-thread blocking, sidebar flicker
 //   restart  the plugin process restarted 3 times under the open tab: frame reloads
 //   comment  a comment on an old done card: its body must be on the page
+//   open     a one-line done card opens to its body, and the body is still there after a stretch of live updates
 // Exit code 1 when a check in GATE_CHECKS (default all) misses its budget. Results also go to <dir>/gate-<run>.json.
 // Chrome keeps a unix socket under TMPDIR, whose path must stay under 108 characters: PG_CHROME_TMP is a short on-disk dir (default <dir>/../pgt, a symlink to <dir>/tmp).
-// usage: PG_DIR=<scratch> node gate.ts   env: GATE_IDLE_S=300 GATE_BUSY_S=120 GATE_CHECKS=idle,bytes,update,restart,comment GATE_CPU=1
+// usage: PG_DIR=<scratch> node gate.ts   env: GATE_IDLE_S=300 GATE_BUSY_S=120 GATE_CHECKS=idle,bytes,update,restart,comment,open GATE_CPU=1
 //        PG_RUN=gate PG_LPORT=4531 PG_MPORT=4532 PG_CPORT=4533
 import { createRequire } from "node:module";
 import { spawn, type ChildProcess } from "node:child_process";
@@ -18,7 +19,7 @@ const here = dirname(fileURLToPath(import.meta.url));
 const DIR = process.env.PG_DIR ?? "/home/mrigank/projects/llm-exp/paseo-firstmate/.isolated/deck-page-firstprinciples-build";
 const RUN = process.env.PG_RUN ?? "gate", LPORT = process.env.PG_LPORT ?? "4531";
 const IDLE_S = +(process.env.GATE_IDLE_S ?? 300), BUSY_S = +(process.env.GATE_BUSY_S ?? 120), CPU = +(process.env.GATE_CPU ?? 1);
-const CHECKS = new Set((process.env.GATE_CHECKS ?? "idle,bytes,update,restart,comment").split(","));
+const CHECKS = new Set((process.env.GATE_CHECKS ?? "idle,bytes,update,restart,comment,open").split(","));
 const BUDGET = { idleLists: 0, mbPerMin: 0.5, updateP95Ms: 50, restartReloads: 0 };
 const { chromium } = createRequire(import.meta.url)(process.env.PG_PLAYWRIGHT ?? "/home/mrigank/projects/confcall/node_modules/playwright-core");
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -135,6 +136,21 @@ try {
       await sleep(8000); fr = await frame();
       const r = await fr.evaluate((id: string) => { const a = document.getElementById("t-" + id); return a ? { len: a.innerHTML.length, hasTrail: (a.textContent || "").includes("gate comment") } : null; }, old.id);
       verdict("comment", !!r && r.len > 1500 && r.hasTrail, r ? `card t-${old.id}: ${r.len} chars of body, comment ${r.hasTrail ? "shown on it" : "missing from it"}` : `card t-${old.id} is not on the page`);
+    }
+  }
+  // ---- open: a one-line card opens to its body, and keeps it through live updates
+  if (CHECKS.has("open")) {
+    setChurn(true); fr = await frame(); await pass();
+    const lite = await fr.evaluate(() => { const c = document.querySelector("article.task[data-bh]") as HTMLElement | null; if (!c) return null;
+      for (let p = c.parentElement; p; p = p.parentElement) { if (p.tagName === "DETAILS") (p as HTMLDetailsElement).open = true; if ((p as HTMLElement).hidden) (p as HTMLElement).hidden = false; }
+      c.scrollIntoView({ block: "center" }); return { id: c.id, before: c.innerHTML.length }; });
+    if (!lite) verdict("open", false, "no one-line done card on the page");
+    else {
+      const sum = await fr.$(`#${lite.id} > details.lz > summary`); const t = Date.now(); await sum!.click();
+      let n = 0; for (let i = 0; i < 100 && !n; i++) { n = await fr.evaluate((id: string) => document.querySelector(`#${id} .lzb`)?.innerHTML.length ?? 0, lite.id); if (!n) await sleep(100); }
+      const loadMs = Date.now() - t; await sleep(20000); fr = await frame();
+      const after = await fr.evaluate((id: string) => ({ len: document.querySelector(`#${id} .lzb`)?.innerHTML.length ?? 0, open: !!(document.querySelector(`#${id} > details.lz`) as HTMLDetailsElement | null)?.open }), lite.id);
+      verdict("open", n > 1000 && after.len === n && after.open, `${lite.id}: body ${n} chars after ${loadMs} ms, ${after.len} chars and ${after.open ? "still open" : "closed"} after 20 s of updates (was ${lite.before} chars as one line)`);
     }
   }
 } catch (e: any) { log("GATE ERROR", String(e?.stack ?? e).slice(0, 600)); result.error = String(e); process.exitCode = 2; }

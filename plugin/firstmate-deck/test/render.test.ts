@@ -6,7 +6,8 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { loadProject } from "../server/state.ts";
-import { groupOf, liveJs, renderProject, stampLive } from "../server/render.ts";
+import { groupOf, liveJs, pageSigOf, renderProject } from "../server/render.ts";
+import { withBodies } from "./bodies.ts";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const root = join(here, "fixtures", "root");
@@ -82,22 +83,30 @@ test("replying changes the live payload, not the page file's signature", () => {
 });
 
 test("failed marker, done collapsed, dependency across the archive", () => {
-  assert.match(r.live, /<article class="task s-done s-failed" id="t-broke-build"[^>]*>/);
+  assert.match(r.live, /<article [^>]*class="task s-done s-failed" id="t-broke-build"[^>]*>/);
   assert.match(r.live, /<details class="grp" id="g-done">/);
-  assert.match(r.live, /after <a href="#t-arch-schema">Draft the schema<\/a>/);
-  assert.match(r.live, /then <a href="#t-pick-db">Choose the &lt;b&gt;database&lt;\/b&gt; for the demo<\/a>, <a href="#t-done-live">/);
+  assert.match(withBodies(r), /after <a href="#t-arch-schema">Draft the schema<\/a>/);
+  assert.match(withBodies(r), /then <a href="#t-pick-db">Choose the &lt;b&gt;database&lt;\/b&gt; for the demo<\/a>, <a href="#t-done-live">/);
 });
 
 test("live block shape", () => {
-  assert.ok(r.live.includes("{TS}"));
-  assert.ok(!r.page.includes("{TS}"));
-  assert.ok(r.page.includes("<div id=\"live\"><!--LIVE-START-->" + r.live.replace("{TS}", "10:15:30").replace("{STAMP}", "2026-10-21 10:15 UTC") + "<!--LIVE-END--></div>"));
+  assert.ok(!r.live.includes("{TS}") && !r.live.includes("{STAMP}"), "no clock placeholders: the browser writes the last-change stamp itself");
+  assert.match(r.live, /\(last change <span data-chg="time"><\/span>\)/);
+  assert.match(r.live, /<div data-slot-for="stamp"><span data-chg="long"><\/span><\/div>/, "the stamp rides in the live payload as an element the page fills from the time of the last change");
   assert.match(liveJs("a\"b"), /^window\.__fdLive&&window\.__fdLive\("a\\"b"\);\n$/);
   assert.match(r.page, /page\.live\.js/);
-  assert.match(r.page, /last update <b data-slot="stamp">2026-10-21 10:15 UTC<\/b>/);
-  assert.match(r.live, /<div data-slot-for="stamp">\{STAMP\}<\/div>/, "the stamp rides in the live payload, filled at write time so it stays out of the content hash");
-  assert.match(stampLive(r.live, opts.now), /<div data-slot-for="stamp">2026-10-21 10:15 UTC<\/div>/);
   assert.match(r.live, /<div data-slot-for="banner"><\/div>/);
+});
+
+test("the page file is a shell: no task list, no stamp, no banner, and the signature it was written with", () => {
+  assert.match(r.page, /<div id="live"><!--LIVE-START--><div class="m" id="fd-loading">Loading the page…<\/div><!--LIVE-END--><\/div>/);
+  for (const id of ["pick-db", "ship-api", "done-live"]) assert.ok(!r.page.includes(`id="t-${id}"`), `${id}: the list is not in the page file`);
+  assert.equal(pageSigOf(r.page.slice(0, 256)), r.signature, "a restarted plugin can tell the file on disk is already this page");
+  // the file is the same bytes whatever the tasks, the agents or the banner say
+  const m2 = structuredClone(model);
+  m2.tasks = m2.tasks.slice(1);
+  assert.equal(renderProject(m2, agents, { ...opts, banner: { kind: "state", text: "x" } }).page, r.page);
+  assert.equal(renderProject(model, agents, { ...opts, now: new Date("2027-01-01T00:00:00Z") }).page, r.page);
 });
 
 test("sections and nav", () => {
@@ -134,7 +143,6 @@ test("agent step text is escaped; banner renders", () => {
   const out = renderProject(model, a2, { ...opts, banner: { kind: "plugin-down", text: "Plugin <down>" } });
   assert.ok(!out.live.includes("<script>x"));
   assert.match(out.live, /&lt;script&gt;x/);
-  assert.match(out.page, /<div class="banner b-bad" role="status">Plugin &lt;down&gt;<\/div>/);
   assert.match(out.live, /<div data-slot-for="banner"><div class="banner b-bad" role="status">Plugin &lt;down&gt;<\/div><\/div>/);
 });
 
@@ -206,7 +214,7 @@ test("Parked sorts newest parked first; a live task's order still pins it", () =
 test("an archived task keeps its answered ask, and its context", () => {
   const t = model.archive.find((x) => x.id === "arch-schema")!;
   assert.deepEqual(t.answered.map((a) => [a.id, a.text]), [["a1", "Postgres or SQLite?"]]);
-  const card = r.live.slice(r.live.indexOf('id="t-arch-schema"'), r.live.indexOf('id="t-broke-build"'));
+  const all = withBodies(r), card = all.slice(all.indexOf('id="t-arch-schema"'), all.indexOf('id="t-broke-build"'));
   assert.match(card, /Answered/);
   assert.match(card, /Postgres or SQLite\?/);
   assert.match(card, /<b>wins<\/b> on concurrent writes/);
@@ -219,7 +227,7 @@ test("a context file with no answer record (answered before records existed) sti
   writeFileSync(join(dir, "state", "tasks", "old", "asks", "1.md"), "Old context body");
   writeFileSync(join(dir, "state", "tasks", "old", "card.md"), "Brief text");
   writeFileSync(join(dir, "state", "fleet-archive.jsonl"), '{"id":"old","project":"p","status":"done","notes":"Extra notes kept","lastEvent":"2026-10-21T01:00:00Z"}\n');
-  const live = renderProject(loadProject(dir, "p"), {}, opts).live;
+  const live = withBodies(renderProject(loadProject(dir, "p"), {}, opts));
   assert.match(live, /Old context body/);
   assert.match(live, /Extra notes kept/);
 });
@@ -237,4 +245,25 @@ test("the payload does not depend on the clock: same data, two hours later, byte
   assert.equal(later.live, r.live);
   assert.match(r.live, /<span class="ck" data-so="\d+"><\/span>/, "a running agent carries when it started; the browser writes the elapsed time");
   assert.ok(!/ so far/.test(r.live), "no elapsed-time words in the payload");
+});
+
+test("done and parked cards are one line with their body kept aside; a card with a comment stays whole", () => {
+  const lite = r.live.match(/<article [^>]*class="task s-(?:done|parked)[^"]*" id="t-([\w-]+)"[^>]*data-bh="([0-9a-f]{12})"/g) ?? [];
+  assert.ok(lite.length >= 3, "the fixture's done cards are one line");
+  for (const id of Object.keys(r.bodies)) {
+    const card = r.live.slice(r.live.indexOf(`id="t-${id}"`), r.live.indexOf("</article>", r.live.indexOf(`id="t-${id}"`)));
+    assert.match(card, /<details class="lz" id="lz-[^"]+"><summary>Show card<\/summary><div class="lzb"><\/div><\/details>/);
+    assert.ok(card.length < 900, `${id}: the one-line card is small (${card.length} chars)`);
+    assert.match(card, new RegExp(`data-bh="${r.bodies[id].hash}"`));
+  }
+  assert.ok(!r.live.includes("Postgres or SQLite?") || !Object.keys(r.bodies).includes("pick-db"), "an open ask keeps its card whole");
+  // a comment on a done card puts its body back on the page at once (nothing to open, nothing to load)
+  const done = model.tasks.find((x) => r.bodies[x.id]) ?? model.archive.find((x) => r.bodies[x.id])!;
+  const m2 = structuredClone(model);
+  m2.comments = [{ id: "cc", at: "2026-10-21T10:00:00Z", target: `t-${done.id}`, text: "a note", delivered: true, answered: false }];
+  const r2 = renderProject(m2, agents, opts);
+  assert.ok(!(done.id in r2.bodies), "a commented card is not one line");
+  assert.ok(!r2.live.slice(r2.live.indexOf(`id="t-${done.id}"`)).startsWith(`id="t-${done.id}" data-bh`));
+  // the body's hash is its content: same data, same hash; a changed card, a new hash
+  assert.equal(renderProject(model, agents, opts).bodies[Object.keys(r.bodies)[0]].hash, r.bodies[Object.keys(r.bodies)[0]].hash);
 });

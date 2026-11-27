@@ -232,18 +232,18 @@ body{margin:0;background:#fff}
     return loadProject(lastRoot, "demo");
   };
   const r = render(withSnap({ "canvas.final.html": snap, "card.md": "short card text" }));
-  const both = r.live.slice(r.live.indexOf(`id="t-t1"`)); // the snapshot has its own <article>, so card() would cut short
+  const both = withBodies(r).slice(withBodies(r).indexOf(`id="t-t1"`)); // the snapshot has its own <article>, so card() would cut short
   assert.match(both, /<details class="cnotes cv-d" id="cvf-t1" open><summary>Final canvas<\/summary><div class="cv-f cv-fin acv"><div class="acv"><article class="canvas"><div class="sheet">.*FINAL "canvas"/s);
   assert.ok(!both.includes("<iframe") && !both.includes("statusline") && !both.includes("Open agent in Paseo"), "inline, without the frozen status line and title row");
   assert.ok(both.indexOf("cv-fin") < both.indexOf("short card text"), "canvas first");
   assert.match(both, /<details class="cnotes" id="cd-t1"><summary>Card<\/summary>.*short card text/s);
   // its stylesheet is hoisted once, without the standalone document's body and wrapper rules
-  assert.equal((r.live.match(/<style data-cv-snap>/g) ?? []).length, 1);
-  assert.match(r.live, /<style data-cv-snap>\n\.acv \.lede\{color:red\}\n<\/style>/);
-  const cardOnly = card(render(withSnap({ "card.md": "short card text" })).live);
+  assert.equal((withBodies(r).match(/<style data-cv-snap>/g) ?? []).length, 1);
+  assert.match(withBodies(r), /<style data-cv-snap>\n\.acv \.lede\{color:red\}\n<\/style>/);
+  const cardOnly = card(withBodies(render(withSnap({ "card.md": "short card text" }))));
   assert.ok(!cardOnly.includes("cv-fin") && /<div class="nt">.*short card text/s.test(cardOnly));
   // a snapshot that is not the expected shape still shows, in a sandboxed frame
-  const odd = card(render(withSnap({ "canvas.final.html": "<p>odd</p>" })).live);
+  const odd = card(withBodies(render(withSnap({ "canvas.final.html": "<p>odd</p>" }))));
   assert.match(odd, /<iframe class="cv-final" title="Final canvas" sandbox srcdoc="&lt;p&gt;odd/);
 });
 
@@ -271,6 +271,7 @@ test("relay: a click on a canvas ask is parsed, validated against the canvas, an
 
 // ---------- recap strip ----------
 import { recapOfSource } from "../server/recap.ts";
+import { withBodies } from "./bodies.ts";
 
 const RECAP = { asked: "Use SQLite, keep the migration path open", did: "Switched the store to SQLite behind a flag" };
 const recapData = (over: object = {}) => data({}, summary("ag-1", { recap: RECAP, updatedAt: Date.parse("2026-10-24T11:30:00Z"), ...over }));
@@ -310,10 +311,10 @@ test("recap strip: a done card reads canvas.final.tsx; no file means no strip", 
   const m = project([D]);
   const dir = join(lastRoot, "state", "tasks", "t1");
   mkdirSync(dir, { recursive: true });
-  assert.equal(stripOf(card(render(m).live)), "");
+  assert.equal(stripOf(card(withBodies(render(m)))), "");
   writeFileSync(join(dir, "canvas.final.tsx"), tsx);
   const m2 = loadProject(lastRoot, "demo");
-  const html = card(render(m2).live);
+  const html = card(withBodies(render(m2)));
   assert.match(stripOf(html), /Ship the API &amp; docs\./);
   assert.match(stripOf(html), /Shipped both\./);
 });

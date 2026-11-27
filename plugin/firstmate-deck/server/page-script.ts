@@ -54,7 +54,8 @@ export function pageScript(project: string, liveFile: string, tickSeconds: numbe
     else [].slice.call(document.querySelectorAll("#g-doneu .task")).forEach(function(t){var h=t.getAttribute("data-h");if(h)R[t.id]=h});
     save();arrange();push()});
   if(MU)setInterval(pull,30000);
-  function reveal(id){var t=id&&document.getElementById(id);for(var p=t&&t.parentElement;p;p=p.parentElement)if(p.tagName==="DETAILS")p.open=true}
+  function reveal(id){var t=id&&document.getElementById(id);for(var p=t&&t.parentElement;p;p=p.parentElement)if(p.tagName==="DETAILS")p.open=true;
+    var z=t&&t.querySelector&&t.querySelector(":scope > details.lz");if(z&&!z.open)z.open=true}
   document.addEventListener("click",function(e){var a=e.target.closest&&e.target.closest('a[href^="#"]');if(a)reveal(a.getAttribute("href").slice(1))});
   function fill(){var el=live();if(!el)return;document.querySelectorAll("[data-trail-slot]").forEach(function(s){
     var k=s.getAttribute("data-trail-slot"),src=null;el.querySelectorAll("[data-trail-for]").forEach(function(x){if(x.getAttribute("data-trail-for")===k)src=x});
@@ -62,7 +63,7 @@ export function pageScript(project: string, liveFile: string, tickSeconds: numbe
     // the "last update" stamp and the session banner live in the shell and arrive with every payload
     document.querySelectorAll("[data-slot]").forEach(function(s){var k=s.getAttribute("data-slot"),src=null;
       el.querySelectorAll("[data-slot-for]").forEach(function(x){if(x.getAttribute("data-slot-for")===k)src=x});
-      if(src&&s.innerHTML!==src.innerHTML)s.innerHTML=src.innerHTML});tn();attn()}
+      if(src&&s.innerHTML!==src.innerHTML)s.innerHTML=src.innerHTML});clocks();tn();attn()}
   // ---- the browser tab and the "new" dots. The live block carries (data-attn) the Needs-you count, one attention key per
   // task and the keys the captain last saw. Unseen = keys that differ from the seen ones (nothing is unseen until
   // something has been stored). Looking at the page for 3 s while its tab is visible marks what it showed as seen, and
@@ -115,14 +116,36 @@ export function pageScript(project: string, liveFile: string, tickSeconds: numbe
       if(lv.sendQueuedPrompts)lv.sendQueuedPrompts()}
     catch(err){delete Q[k];box.querySelectorAll("button.opt").forEach(function(x){x.disabled=false;x.classList.remove("on");x.setAttribute("aria-pressed","false")});if(l){l.hidden=false;l.textContent="could not send, comment on the card instead"}}});
   // ---- clocks. The payload never changes as time passes (that would re-send the whole list every minute): it carries only
-  // timestamps, and the browser writes the words. data-so = when a running agent started ("N min so far"); data-late = how long a
+  // timestamps, and the browser writes the words. data-so = when a running agent started ("N min so far"), data-ago = since when a flag has held ("silent N min"), data-chg = the time of the last real change (the "last update" stamp); data-late = how long a
   // comment may sit as "sending" on this screen before it shows as late (this browser's clock only, never compared with the daemon's).
   function dur(sec){var m=Math.floor(sec/60);return m<60?m+" min":m<1440?Math.floor(m/60)+" h "+(m%60<10?"0":"")+m%60+" min":Math.floor(m/1440)+" d"}
+  var CHG=0;
+  function p2(n){return n<10?"0"+n:""+n}
+  function chgText(kind){if(!CHG)return "";var d=new Date(CHG);if(kind==="time")return p2(d.getHours())+":"+p2(d.getMinutes())+":"+p2(d.getSeconds());
+    try{var q={};new Intl.DateTimeFormat("en-GB",{year:"numeric",month:"2-digit",day:"2-digit",hour:"2-digit",minute:"2-digit",hourCycle:"h23",timeZoneName:"short"}).formatToParts(d).forEach(function(x){q[x.type]=x.value});
+      return q.year+"-"+q.month+"-"+q.day+" "+q.hour+":"+q.minute+" "+q.timeZoneName}catch(e){return d.toISOString()}}
   function clocks(root){root=root||document;var now=Date.now();
+    [].slice.call(root.querySelectorAll("[data-chg]")).forEach(function(e){var t=chgText(e.getAttribute("data-chg"));if(t&&e.textContent!==t)e.textContent=t});
     [].slice.call(root.querySelectorAll("[data-so]")).forEach(function(e){var t=dur(Math.max(0,(now-Number(e.getAttribute("data-so")))/1000))+" so far";if(e.textContent!==t)e.textContent=t});
+    [].slice.call(root.querySelectorAll("[data-ago]")).forEach(function(e){var t=dur(Math.max(0,(now-Number(e.getAttribute("data-ago")))/1000));if(e.textContent!==t)e.textContent=t});
     if(root!==document)return;
     [].slice.call(root.querySelectorAll(".st-send[data-late]")).forEach(function(e){if(!e.__t)e.__t=now;if(now-e.__t>Number(e.getAttribute("data-late")))e.classList.add("st-late")})}
   setInterval(function(){clocks()},15000);
+  // ---- cards that are one line until opened (data-bh): the body is a content-named file next to the page, loaded when the card is
+  // opened (or when it is open already). BODY keeps what was loaded, by task id, so a swap re-fills an open card with no flash.
+  var D=${j(liveFile.replace(/\.live\.js$/, "") + ".d")}+"/",BODY={},CSSK={},BL={};
+  function hs(t){var h=5381;for(var i=0;i<t.length;i++)h=((h<<5)+h+t.charCodeAt(i))|0;return h+":"+t.length}
+  function fillBody(card,any){var id=card.id.slice(2),h=card.getAttribute("data-bh"),b=BODY[id],z=card.querySelector(".lzb");
+    if(!z||!b||(!any&&b.h!==h))return;if(z.firstChild&&z.__h===b.h)return;z.innerHTML=b.html;z.__h=b.h;restore(z);anchorIds(z);clocks(z)}
+  function want(d){var card=d.closest&&d.closest("article.task[data-bh]");if(!card)return;var id=card.id.slice(2),h=card.getAttribute("data-bh"),b=BODY[id];
+    if(b&&b.h===h){fillBody(card);return}
+    var k=id+" "+h;if(BL[k])return;BL[k]=1;var sc=document.createElement("script");sc.src=D+"b."+id+"."+h+".js";
+    sc.onload=sc.onerror=function(){sc.remove();setTimeout(function(){delete BL[k]},4000)};document.head.appendChild(sc)}
+  function bodies(){[].slice.call(document.querySelectorAll("details.lz[open]")).forEach(want)}
+  document.addEventListener("toggle",function(e){var d=e.target;if(d&&d.classList&&d.classList.contains("lz")&&d.open)want(d)},true);
+  window.__fdBody=function(id,h,html,css){
+    if(css){var k=hs(css);if(!CSSK[k]){CSSK[k]=1;var st=document.createElement("style");st.setAttribute("data-cv-snap","");st.textContent=css;document.head.appendChild(st)}}
+    BODY[id]={h:h,html:html};var c=document.getElementById("t-"+id);if(c&&c.getAttribute("data-bh")===h){var d=c.querySelector("details.lz");if(d&&d.open)fillBody(c)}};
   restore(document);arrange();clocks();pull();reveal(location.hash.slice(1));fill();
   // Keyboard focus survives a live swap: remember the focused element's id (or its <details> id, for a summary) and put focus back.
   function fkey(){var a=document.activeElement,el=live();if(!a||!el||!el.contains||!el.contains(a))return null;
@@ -136,26 +159,69 @@ export function pageScript(project: string, liveFile: string, tickSeconds: numbe
   // with the browser's, so a skewed phone clock cannot raise a false alarm or hide a real stall.
   function stale(){var b=document.getElementById("fd-stale");staleNow=(Date.now()-changedAt)>STALE;if(b)b.hidden=!staleNow;meta()}
   setInterval(stale,5000);
-  // The page polls a tiny version file (V) every second and loads the full payload (F) only when its content hash moved:
-  // an idle tab costs bytes, not the whole page. have is the hash of the payload on screen; loading stops a second fetch
-  // while one is in flight.
-  var have=null,loading=false;
+  // The page polls a tiny version file (V) every second. It names the content of the page in pieces (see render.ts renderLive): the
+  // skeleton (sk), the parked and done block (cd) and the manifest of the active cards (mf), each a content-named file in D. A
+  // change fetches only the pieces whose name moved, then only the cards whose hash differs from the one on screen, and swaps just
+  // those cards (or, when the skeleton or the cold block moved, morphs the page with an empty stub for every unchanged card, which
+  // the morph skips). The whole payload (F) is the first load and the fallback for anything that does not add up.
+  var have=null,loading=false,HV={sk:null,cd:null,mf:null},SKL={},COL={},MAN={},CAR={},noSync=0;
+  var CB={beforeAttributeUpdated:function(a,n){if(a==="open"&&n.id&&n.id in S)return false},
+    beforeNodeMorphed:function(n,m){if(n.nodeName==="IFRAME"&&m.nodeName==="IFRAME"&&n.getAttribute("srcdoc")===m.getAttribute("srcdoc"))return false;
+      if(n.getAttribute&&m.getAttribute){var a=n.getAttribute("data-ch");if(a&&a===m.getAttribute("data-ch"))return false}}};
+  function safe(id){return id.replace(/[^\w.-]/g,"_")}
   function seen(seq,iso){var tk=seq!==undefined&&seq!==null?"s"+seq:(iso?"i"+iso:null);
     if(tk!==null&&tk!==token){token=tk;changedAt=Date.now();stale()}}
-  window.__fdVer=function(hash,seq,iso){seen(seq,iso);if(hash&&hash!==have&&!loading)full()};
-  window.__fdLive=function(html,iso,seq,hash){seen(seq,iso);loading=false;if(hash)have=hash;
+  window.__fdVer=function(hash,seq,iso,chg,sk,cd,mf){seen(seq,iso);
+    if(chg){var c=Date.parse(chg);if(c&&c!==CHG){CHG=c;clocks()}}
+    if(!hash||hash===have||loading)return;
+    if(sk&&have!==null&&Date.now()>noSync)sync(hash,sk,cd,mf);else full()};
+  window.__fdSkel=function(h,html){SKL[h]=html};window.__fdCold=function(h,html){COL[h]=html};window.__fdMan=function(h,m){MAN[h]=m};
+  window.__fdCard=function(id,h,html){CAR[id+" "+h]=html;var ks=Object.keys(CAR);if(ks.length>400)delete CAR[ks[0]]};
+  function getAll(jobs,cb){var n=jobs.length,bad=false;if(!n)return cb(true);
+    jobs.forEach(function(j){var sc=document.createElement("script");sc.src=D+j.f;
+      sc.onload=sc.onerror=function(){sc.remove();if(!j.ok())bad=true;if(--n===0)cb(!bad)};document.head.appendChild(sc)})}
+  function sync(hash,sk,cd,mf){loading=true;var jobs=[];
+    if(sk!==HV.sk&&!SKL[sk])jobs.push({f:"s."+sk+".js",ok:function(){return SKL[sk]!==undefined}});
+    if(cd!==HV.cd&&!COL[cd])jobs.push({f:"k."+cd+".js",ok:function(){return COL[cd]!==undefined}});
+    if(mf!==HV.mf&&!MAN[mf])jobs.push({f:"m."+mf+".js",ok:function(){return !!MAN[mf]}});
+    getAll(jobs,function(ok){if(!ok)return bad();
+      var man=MAN[mf]||{},cards=[];
+      Object.keys(man).forEach(function(id){var e=document.getElementById("t-"+id),h=man[id];
+        if((e&&e.getAttribute("data-ch"))!==h&&CAR[id+" "+h]===undefined)cards.push({f:"c."+safe(id)+"."+h+".js",ok:function(){return CAR[id+" "+h]!==undefined}})});
+      getAll(cards,function(ok2){if(!ok2)return bad();finish(hash,sk,cd,mf)})})}
+  function bad(){noSync=Date.now()+30000;full()}
+  function finish(hash,sk,cd,mf){var skC=sk!==HV.sk,cdC=cd!==HV.cd,man=MAN[mf]||{},ok=true,fk=fkey(),y=window.scrollY;
+    if(!skC&&!cdC){
+      Object.keys(man).forEach(function(id){var e=document.getElementById("t-"+id),h=man[id];if(!e){ok=false;return}if(e.getAttribute("data-ch")===h)return;
+        var c=CAR[id+" "+h];if(c===undefined){ok=false;return}swapCard(e,c)});
+      if(!ok)return bad()}
+    else{
+      var html=(SKL[sk]||"").replace("<!--cold-->",function(){return cdC?(COL[cd]||""):'<div class="fd-cold" id="fd-cold" data-ch="'+cd+'"></div>'})
+        .replace(/<!--c:([^>]+?)-->/g,function(m,id){var h=man[id],e=document.getElementById("t-"+id);if(!h){ok=false;return ""}
+          if(e&&e.getAttribute("data-ch")===h)return '<article class="task" id="t-'+id+'" data-ch="'+h+'"></article>';
+          var c=CAR[id+" "+h];if(c===undefined){ok=false;return ""}return c});
+      if(!ok)return bad();
+      applyHtml(html)}
+    HV={sk:sk,cd:cd,mf:mf};have=hash;loading=false;clocks();refocus(fk);if(window.scrollY!==y)window.scrollTo(0,y)}
+  function swapCard(e,html){var I=window.Idiomorph,tmp=document.createElement("div");tmp.innerHTML=html;restore(tmp);reapply(tmp);clocks(tmp);anchorIds(tmp);
+    var n=tmp.firstElementChild;if(!n)return;
+    if(I&&I.morph)I.morph(e,n,{morphStyle:"outerHTML",restoreFocus:true,callbacks:CB});else e.replaceWith(n)}
+  window.__fdLive=function(html,iso,seq,hash,pc){seen(seq,iso);loading=false;if(hash)have=hash;
+    if(pc)HV={sk:pc[0],cd:pc[1],mf:pc[2]};
+    if(iso){var c=Date.parse(iso);if(c)CHG=c}
+    applyHtml(html)};
+  function applyHtml(html){
     var el=live();if(!el||html===last)return;last=html;
     var fk=fkey();snapshot();var y=window.scrollY,M="<!--LIVE-",I=window.Idiomorph;
     if(I&&I.morph&&window.Element&&el instanceof window.Element){
       // Morph, do not replace: build the new block off-screen, bring it in line with what this browser has done to the
       // page (open folds, read marks, picked options), then let the morph touch only the nodes that differ. Nothing
       // unchanged is re-created or moved, so embedded canvas frames do not reload and scroll, hover and selection stay.
-      var nx=document.createElement("div");nx.innerHTML=html;restore(nx);arrange(nx);reapply(nx);clocks(nx);anchorIds(nx);
-      I.morph(el,nx,{morphStyle:"innerHTML",restoreFocus:true,callbacks:{
-        beforeAttributeUpdated:function(a,n){if(a==="open"&&n.id&&n.id in S)return false},
-        beforeNodeMorphed:function(n,m){if(n.nodeName==="IFRAME"&&m.nodeName==="IFRAME"&&n.getAttribute("srcdoc")===m.getAttribute("srcdoc"))return false}}});
-      arrange();clocks();fill();refocus(fk);if(window.scrollY!==y)window.scrollTo(0,y);return}
-    el.innerHTML=M+"START-->"+html+M+"END-->";restore(el);arrange();reapply(el);clocks();anchorIds(el);fill();refocus(fk);window.scrollTo(0,y)};
+      var nx=document.createElement("div");nx.innerHTML=html;restore(nx);arrange(nx);reapply(nx);clocks(nx);
+      [].slice.call(nx.querySelectorAll("article.task[data-bh]")).forEach(function(c){var d=c.querySelector("details.lz");if(d&&d.open)fillBody(c,true)});anchorIds(nx);
+      I.morph(el,nx,{morphStyle:"innerHTML",restoreFocus:true,callbacks:CB});
+      arrange();clocks();bodies();fill();refocus(fk);if(window.scrollY!==y)window.scrollTo(0,y);return}
+    el.innerHTML=M+"START-->"+html+M+"END-->";restore(el);arrange();reapply(el);clocks();anchorIds(el);bodies();fill();refocus(fk);window.scrollTo(0,y)}
   function load(file,done){var s=document.createElement("script");s.src=file+"?t="+Date.now();s.onload=s.onerror=function(){s.remove();if(done)done()};document.head.appendChild(s)}
   // a full fetch that never answers must not block the next one for good
   function full(){loading=true;load(F,function(){setTimeout(function(){loading=false},4000)})}

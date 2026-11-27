@@ -55,7 +55,13 @@ export type RenderOpts = {
   stalled?: Record<string, { fp: string; why: string }>;
 };
 
-export type Rendered = { page: string; live: string; signature: string; attention: Attention };
+/** The body of a card the page shows as one line until it is opened: its html, the scoped stylesheet its canvas needs, and the content hash that names its file. */
+export type Body = { hash: string; html: string; css: string };
+
+/** The live page in the pieces the page fetches: see renderLive. `manifest` is each active card's hash; `sk`, `cd`, `mf` name the skeleton, the cold block and the manifest. */
+export type Pieces = { skel: string; cold: string; cards: Record<string, { hash: string; html: string }>; manifest: Record<string, string>; sk: string; cd: string; mf: string };
+
+export type Rendered = { page: string; live: string; signature: string; attention: Attention; bodies: Record<string, Body>; piece: Pieces };
 
 const GROUPS = [
   ["you", "Needs you"],
@@ -95,19 +101,8 @@ export function dur(sec: number): string {
   return m < 60 ? `${m} min` : m < 1440 ? `${Math.floor(m / 60)} h ${pad(m % 60)} min` : `${Math.floor(m / 1440)} d`;
 }
 
-function stampLong(d: Date): string {
-  const parts = Object.fromEntries(
-    new Intl.DateTimeFormat("en-GB", {
-      year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hourCycle: "h23", timeZoneName: "short",
-    }).formatToParts(d).map((p) => [p.type, p.value]),
-  );
-  return `${parts.year}-${parts.month}-${parts.day} ${parts.hour}:${parts.minute} ${parts.timeZoneName}`;
-}
 
-const stampShort = (d: Date) => `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
 
-/** Fill the two clock placeholders of a live payload ({TS}, {STAMP}) at write time: they are outside the content hash, so they show the last real change. */
-export const stampLive = (live: string, now: Date): string => live.replace(/\{TS\}/g, stampShort(now)).replace(/\{STAMP\}/g, esc(stampLong(now)));
 
 const titleCase = (s: string) => s.replace(/[-_]+/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
 
@@ -134,7 +129,8 @@ function pill(group: GroupKey, ast: string): [string, string] {
   return ["idle", ast || "idle"];
 }
 
-const flagBadges = (flags: StageFlag[]) => flags.map((f) => `<span class="fl${f.drift ? " fl-d" : ""}" title="${esc(f.key)}">${esc(f.text)}</span>`).join("");
+// a flag that counts time ("silent 41 min") carries when it began and the browser writes the count (page-script.ts clocks)
+const flagBadges = (flags: StageFlag[]) => flags.map((f) => `<span class="fl${f.drift ? " fl-d" : ""}" title="${esc(f.key)}">${f.since ? `${esc(f.text.replace(/\s*\d+ min$/, ""))} <span class="ck" data-ago="${f.since}"></span>` : esc(f.text)}</span>`).join("");
 
 function agentBlock(t: Task, group: GroupKey, view: AgentView | undefined, o: RenderOpts, st: Stage, withCanvas = false): string {
   const aid = st.agentId;
@@ -290,7 +286,7 @@ export function recapStrip(t: Task, group: GroupKey, recap: Recap | null | undef
   return { html: `<div class="recap">${row("You asked", esc(cut(recap.asked, 200)), recap.asked)}${row(`Crew did${crewAt ? hm(crewAt) : ""}`, esc(cut(recap.did, 200)), recap.did)}</div>` };
 }
 
-type Ctx = { snapCss: Set<string>; byId: Map<string, Task>; unblocks: Map<string, string[]>; agents: Record<string, AgentView>; o: RenderOpts; comments: TrailComment[]; stages: Map<string, Stage>; canvas?: CanvasData };
+type Ctx = { bodies: Map<string, Body>; snapCss: Set<string>; byId: Map<string, Task>; unblocks: Map<string, string[]>; agents: Record<string, AgentView>; o: RenderOpts; comments: TrailComment[]; stages: Map<string, Stage>; canvas?: CanvasData };
 
 /**
  * An ask's context repeats the ask text when it came from a longer text (the first sentence, bold or not). Show it once:
@@ -391,6 +387,10 @@ function row(t: Task, group: GroupKey, ctx: Ctx, idx = 0): string {
   const strip = group === "done" || snapOnly ? recapStrip(t, group, t.canvasRecap, t.canvasFinalAt, ctx.comments, ctx.o.now) : recapStrip(t, group, recapSum?.recap, recapSum?.updatedAt, ctx.comments, ctx.o.now);
   // one long explanation per card: when a crew canvas is on it, the first mate's context folds (a short note stays open)
   const hasCanvas = !!sum || !!t.canvasFinal;
+  // Done and parked cards are one line until opened (the page loads their body by `data-bh`): LH has hundreds of them and they
+  // were 88% of the page. A card the captain commented on, or that still asks something, stays whole.
+  const lite = (group === "done" || group === "parked") && !t.asks.length && !ctx.comments.some((c) => c.target === `t-${t.id}` || c.target.startsWith(`t-${t.id}#`));
+  const css = lite ? new Set<string>() : ctx.snapCss;
   const out = [
     `<article class="task s-${group}${failed ? " s-failed" : ""}" id="t-${esc(t.id)}"${data}>`,
     `<div class="tt"><span class="ttl">${title}</span>${chip}${btn}</div>`,
@@ -399,7 +399,7 @@ function row(t: Task, group: GroupKey, ctx: Ctx, idx = 0): string {
     trailHtml(ctx.comments.filter((c) => c.id !== strip.consumes), `t-${t.id}`, ctx.o.now, (c) => c.target.startsWith(`t-${t.id}#`) && !t.asks.some((a) => c.target === `t-${t.id}#${a.id}`) && !rawTargets.has(c.target)),
   ];
   if (sum) out.push(agentBlock(t, group, aid ? ctx.agents[aid] : undefined, ctx.o, st, true), canvasFragment(sum, ctx.canvas?.cards[sum.agentId], group === "you"));
-  else if (snapOnly) out.push(finalCanvas(t, ctx.snapCss, "Crew canvas"));
+  else if (snapOnly) out.push(finalCanvas(t, css, "Crew canvas"));
   t.asks.forEach((a) => {
     const box: string[] = [];
     const asked = `<div class="ask asked">${inline(a.text)}</div>`;
@@ -459,7 +459,7 @@ function row(t: Task, group: GroupKey, ctx: Ctx, idx = 0): string {
   const body = t.card.trim() ? cardHtml(t) : esc(t.notes);
   // a done task with a final canvas shows it expanded; the short card is the fallback when there is none, else it folds away
   if (group === "done" && t.canvasFinal) {
-    out.push(finalCanvas(t, ctx.snapCss));
+    out.push(finalCanvas(t, css));
     if (body) out.push(`<details class="cnotes" id="cd-${esc(t.id)}"><summary>Card</summary><div class="nt">${body}</div></details>`);
   } else if (body) out.push(`<div class="nt">${body}</div>`);
   // a done card with a card.md keeps its notes in the same place; a report on disk is pointed at, not inlined
@@ -475,6 +475,13 @@ function row(t: Task, group: GroupKey, ctx: Ctx, idx = 0): string {
         [dep.length ? "after " + dep.join(", ") : "", unb.length ? "then " + unb.join(", ") : ""].filter(Boolean).join(" · ") +
         "</div>",
     );
+  }
+  if (lite) {
+    const html = out.slice(2).join("");
+    const sheet = [...css].map(scaleText).join("\n").replace(/<\/style/gi, "<\\/style");
+    const hash = createHash("sha1").update(html).update("\0").update(sheet).digest("hex").slice(0, 12);
+    ctx.bodies.set(t.id, { hash, html, css: sheet });
+    return `${out[0].replace(/>$/, ` data-bh="${hash}">`)}${out[1]}<details class="lz" id="lz-${esc(t.id)}"><summary>Show card</summary><div class="lzb"></div></details></article>`;
   }
   return out.join("") + "</article>";
 }
@@ -516,7 +523,7 @@ export function stagesOf(model: ProjectModel, agents: Record<string, AgentView>,
   return out;
 }
 
-function renderLive(model: ProjectModel, agents: Record<string, AgentView>, o: RenderOpts): { html: string; attention: Attention } {
+function renderLive(model: ProjectModel, agents: Record<string, AgentView>, o: RenderOpts): { html: string; attention: Attention; bodies: Map<string, Body>; piece: Pieces } {
   const liveIds = new Set(model.tasks.map((t) => t.id));
   const archive = model.archive.filter((t) => !liveIds.has(t.id)).reverse(); // newest first
   const all = [...model.tasks, ...archive];
@@ -524,7 +531,7 @@ function renderLive(model: ProjectModel, agents: Record<string, AgentView>, o: R
   const unblocks = new Map<string, string[]>();
   for (const t of all) for (const d of t.depends_on) unblocks.set(d, [...(unblocks.get(d) ?? []), t.id]);
   const stages = stagesOf(model, agents, o);
-  const ctx: Ctx = { snapCss: new Set(), byId, unblocks, agents, o, comments: model.comments, stages, canvas: o.canvas };
+  const ctx: Ctx = { bodies: new Map(), snapCss: new Set(), byId, unblocks, agents, o, comments: model.comments, stages, canvas: o.canvas };
 
   const buckets: Record<GroupKey, { t: Task; g: GroupKey }[]> = { you: [], fm: [], running: [], blocked: [], next: [], parked: [], done: [] };
   for (const t of model.tasks) buckets[stages.get(t.id)!.group].push({ t, g: stages.get(t.id)!.group });
@@ -560,23 +567,35 @@ function renderLive(model: ProjectModel, agents: Record<string, AgentView>, o: R
   if (failedN) summary += `<a href="#g-done" class="sum c-fail">${failedN} failed</a>`;
   if (busy) summary += `<span class="sum c-running">${busy} agent${busy > 1 ? "s" : ""} working</span>`;
   if (o.canvas?.status === "down") summary += `<span class="fl cv-down" title="agent-canvas could not be reached from the deck">canvas unavailable</span>`;
-  const parts = [`<div class="summary">${summary}<span class="m">live: the page checks ${o.tickSeconds === 1 ? "every second" : `every ${o.tickSeconds} s`}; the plugin refreshes it on every change (last change {TS})</span></div>`];
+  // The page is built from three kinds of pieces, each named by its content so the page fetches only what changed: the skeleton
+  // (summary, group headers, navigator, slots, with a `<!--c:ID-->` hole for every active card and one `<!--cold-->` for the
+  // parked and done groups), the cards of the active groups (one piece each, `data-ch` = their hash), and the cold block.
+  const cards = new Map<string, { hash: string; html: string }>();
+  const cold: string[] = [];
+  const hashOf = (h: string) => createHash("sha1").update(h).digest("hex").slice(0, 12);
+  const stampCh = (html: string) => { const hash = hashOf(html); return { hash, html: html.replace(/^<article /, `<article data-ch="${hash}" `) }; };
+  const hole = (id: string, html: string) => { cards.set(id, stampCh(html)); return `<!--c:${id}-->`; };
+  const parts = [`<div class="summary">${summary}<span class="m">live: the page checks ${o.tickSeconds === 1 ? "every second" : `every ${o.tickSeconds} s`}; the plugin refreshes it on every change (last change <span data-chg="time"></span>)</span></div>`];
   for (const [k, n] of GROUPS) {
     const items = buckets[k];
     if (!items.length) continue;
     if (k === "done" && cands.length) {
-      const rowsOf = (list: typeof items) => list.map((x) => row(x.t, x.g, ctx, items.indexOf(x))).join("\n");
+      const rowsOf = (list: typeof items) => list.map((x) => stampCh(row(x.t, x.g, ctx, items.indexOf(x))).html).join("\n");
       const rest = items.filter((x) => !unreadIds.has(x.t.id));
-      parts.push(
+      if (!cold.length) parts.push("<!--cold-->");
+      cold.push(
         `<section class="grp" id="g-doneu"${unread.length ? "" : " hidden"}><h3>Done, unread <span class="n">(<span class="cn">${unread.length}</span>)</span> <button class="mra" type="button">Mark all read</button></h3>\n<div class="rows">${rowsOf(unread)}</div></section>`,
         `<details class="grp" id="g-done"${rest.length ? "" : " hidden"}><summary><h3>Done <span class="n">(<span class="cn">${rest.length}</span>)</span></h3></summary>\n<div class="rows">${rowsOf(rest)}</div></details>`,
       );
       continue;
     }
-    const rows = items.map(({ t, g }) => row(t, g, ctx, items.findIndex((x) => x.t === t))).join("\n");
+    const isCold = k === "done" || k === "parked";
+    const rows = items.map(({ t, g }) => { const html = row(t, g, ctx, items.findIndex((x) => x.t === t)); return isCold ? stampCh(html).html : hole(t.id, html); }).join("\n");
     const h = `<h3>${n} <span class="n">(${items.length})</span></h3>`;
-    if (k === "done" || k === "parked") parts.push(`<details class="grp" id="g-${k}"><summary>${h}</summary>\n${rows}</details>`);
-    else parts.push(`<section class="grp" id="g-${k}">${h}\n${rows}</section>`);
+    if (isCold) {
+      if (!cold.length) parts.push("<!--cold-->");
+      cold.push(`<details class="grp" id="g-${k}"><summary>${h}</summary>\n${rows}</details>`);
+    } else parts.push(`<section class="grp" id="g-${k}">${h}\n${rows}</section>`);
   }
   if (ctx.snapCss.size) parts.push(`<style data-cv-snap>\n${[...ctx.snapCss].map(scaleText).join("\n").replace(/<\/style/gi, "<\\/style")}\n</style>`);
   if (parts.length === 1) parts.push(`<div class="m">No tasks for this project yet.</div>`);
@@ -587,13 +606,18 @@ function renderLive(model: ProjectModel, agents: Record<string, AgentView>, o: R
     .map(([k, h]) => `<div data-trail-for="${esc(k)}">${h}</div>`).join("");
   parts.push(`<div hidden data-trails>${slots}</div>`);
   // The two time-varying bits of the shell travel here too, so page.html stays still while the page is live.
-  parts.push(`<div hidden data-slots><div data-slot-for="stamp">{STAMP}</div><div data-slot-for="banner">${bannerHtml(o.banner)}</div></div>`);
+  parts.push(`<div hidden data-slots><div data-slot-for="stamp"><span data-chg="long"></span></div><div data-slot-for="banner">${bannerHtml(o.banner)}</div></div>`);
   parts.push(`<div hidden data-tn>${navHtml(buckets)}</div>`);
   // What the browser tab says: the Needs-you count, the attention keys, and the keys the captain last saw (see attention.ts).
   // No stored "seen" yet (first render) means nothing is new: the runtime seeds it from these keys.
   const attention = attentionOf(model, [...model.tasks, ...archive], stages, o.canvas);
   parts.push(`<div hidden data-attn data-n="${attention.needsYou}" data-title="${esc(model.title)}" data-keys="${esc(JSON.stringify(attention.keys))}"${model.seen ? ` data-seen="${esc(JSON.stringify(model.seen))}"` : ""}></div>`);
-  return { html: parts.join("\n"), attention };
+  const skel = parts.join("\n");
+  const coldHtml = cold.length ? `<div class="fd-cold" id="fd-cold" data-ch="${hashOf(cold.join("\n"))}">${cold.join("\n")}</div>` : "";
+  const html = skel.replace("<!--cold-->", () => coldHtml).replace(/<!--c:([^>]+?)-->/g, (_m, id: string) => cards.get(id)!.html);
+  const manifest = Object.fromEntries([...cards].map(([id, c]) => [id, c.hash]));
+  const piece = { skel, cold: coldHtml, cards: Object.fromEntries(cards), manifest, sk: hashOf(skel), cd: hashOf(coldHtml), mf: hashOf(JSON.stringify(manifest)) };
+  return { html, attention, bodies: ctx.bodies, piece };
 }
 
 function renderSection(model: ProjectModel, name: string): string {
@@ -614,14 +638,44 @@ function renderSection(model: ProjectModel, name: string): string {
  * never compares `iso` with the browser clock (they can disagree by minutes); it only notices that the payload keeps
  * changing, on its own clock.
  */
-export function liveJs(liveHtml: string, iso?: string, seq?: number, hash?: string): string {
+export function liveJs(liveHtml: string, iso?: string, seq?: number, hash?: string, piece?: Pick<Pieces, "sk" | "cd" | "mf">): string {
   const extra = iso || seq !== undefined || hash ? `,${JSON.stringify(iso ?? "")}${seq !== undefined || hash ? `,${seq ?? "null"}` : ""}${hash ? `,${JSON.stringify(hash)}` : ""}` : "";
-  return `window.__fdLive&&window.__fdLive(${JSON.stringify(liveHtml)}${extra});\n`;
+  const pc = piece && hash ? `,${JSON.stringify([piece.sk, piece.cd, piece.mf])}` : "";
+  return `window.__fdLive&&window.__fdLive(${JSON.stringify(liveHtml)}${extra}${pc});\n`;
 }
 
+/** File names of the pieces next to the page (in `<page>.d/`), each named by content so it never changes once written. */
+const safeId = (id: string) => id.replace(/[^\w.-]/g, "_");
+export const pieceNames = {
+  card: (id: string, hash: string) => `c.${safeId(id)}.${hash}.js`,
+  skel: (hash: string) => `s.${hash}.js`,
+  cold: (hash: string) => `k.${hash}.js`,
+  manifest: (hash: string) => `m.${hash}.js`,
+};
+export const pieceJs = {
+  card: (id: string, hash: string, html: string) => `window.__fdCard&&window.__fdCard(${JSON.stringify(id)},${JSON.stringify(hash)},${JSON.stringify(html)});\n`,
+  skel: (hash: string, html: string) => `window.__fdSkel&&window.__fdSkel(${JSON.stringify(hash)},${JSON.stringify(html)});\n`,
+  cold: (hash: string, html: string) => `window.__fdCold&&window.__fdCold(${JSON.stringify(hash)},${JSON.stringify(html)});\n`,
+  manifest: (hash: string, m: Record<string, string>) => `window.__fdMan&&window.__fdMan(${JSON.stringify(hash)},${JSON.stringify(m)});\n`,
+};
+
+/** The signature a page file was written with (render.ts embeds it right after the doctype); "" for a file without one. */
+export function pageSigOf(head: string): string {
+  return /<!--fd-sig:([0-9a-f]{40})-->/.exec(head)?.[1] ?? "";
+}
+
+/** A card body's file (named by its content hash, so it is immutable): the page loads it when the card is opened. */
+export function bodyJs(id: string, b: Body): string {
+  return `window.__fdBody&&window.__fdBody(${JSON.stringify(id)},${JSON.stringify(b.hash)},${JSON.stringify(b.html)},${JSON.stringify(b.css)});\n`;
+}
+/** Folder next to the page that holds the body files, and a body file's name in it. */
+export const bodyDirOf = (pageFile: string) => pageFile.replace(/\.[^./]*$/, "") + ".d";
+export const bodyFileName = (id: string, hash: string) => `b.${id}.${hash}.js`;
+
 /** The tiny file an open page polls every second: the payload's content hash (the page fetches the full file only when it moved) and the growing sequence number its staleness check watches. */
-export function liveVersionJs(hash: string, iso: string, seq: number): string {
-  return `window.__fdVer&&window.__fdVer(${JSON.stringify(hash)},${seq},${JSON.stringify(iso)});\n`;
+export function liveVersionJs(hash: string, iso: string, seq: number, chg?: string, piece?: Pick<Pieces, "sk" | "cd" | "mf">): string {
+  const more = chg && piece ? `,${JSON.stringify(chg)},${JSON.stringify(piece.sk)},${JSON.stringify(piece.cd)},${JSON.stringify(piece.mf)}` : "";
+  return `window.__fdVer&&window.__fdVer(${JSON.stringify(hash)},${seq},${JSON.stringify(iso)}${more});\n`;
 }
 
 export const liveFileOf = (pageFile: string) => pageFile.replace(/\.[^./]*$/, "") + ".live.js";
@@ -634,7 +688,7 @@ function bannerHtml(b: RenderOpts["banner"]): string {
 }
 
 export function renderProject(model: ProjectModel, agents: Record<string, AgentView>, opts: RenderOpts): Rendered {
-  const { html: live, attention } = renderLive(model, agents, opts);
+  const { html: live, attention, bodies, piece } = renderLive(model, agents, opts);
   const pageFile = opts.pageFile ?? (model.page ? model.page.slice(model.page.lastIndexOf("/") + 1) : "page.html");
   const liveFile = pageFile.replace(/\.[^./]*$/, "") + ".live.js";
 
@@ -643,7 +697,8 @@ export function renderProject(model: ProjectModel, agents: Record<string, AgentV
     `<a href="#${esc(n)}">${esc(model.sectionTitles[n] ?? DEFAULT_TITLES[n] ?? titleCase(n))}</a>`)].join("");
   // The shell is everything except the three things that change while the page is live: the task snapshot in #live,
   // the "last update" stamp and the session banner (the live payload carries the latter two in slots).
-  const shell = (snapshot: string, stamp: string, banner: string) => `<!doctype html>
+  const shell = (snapshot: string, stamp: string, banner: string, sig = "") => `<!doctype html>
+<!--fd-sig:${sig}-->
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>${esc(model.title)} · status</title>
 <style>
@@ -681,6 +736,9 @@ ${pageScript(model.project, liveFile, opts.tickSeconds, opts.marksUrl)}
   // scripts, marks url) moves it and a task, agent or stage change does not: Lavish reloads the page when page.html is
   // rewritten, so that file must stay still while crews work.
   const signature = createHash("sha1").update(shell("", "", "")).digest("hex");
-  const page = shell(stampLive(live, opts.now), esc(stampLong(opts.now)), bannerHtml(opts.banner));
-  return { page, live, signature, attention };
+  // The page file holds the shell and nothing that moves: no task list, no stamp, no banner. Those arrive in the live payload, so the
+  // file is the same bytes for as long as its frame is, and a plugin restart (which only re-renders) has no reason to rewrite it.
+  // Its signature is written into it, so a restarted plugin can see the file on disk is already the right one.
+  const page = shell(`<div class="m" id="fd-loading">Loading the page…</div>`, "", "", signature);
+  return { page, live, signature, attention, bodies: Object.fromEntries(bodies), piece };
 }
