@@ -200,9 +200,15 @@ try {
         return n;
       }, sel);
       await sleep(3000);
-      await watchCards([sel]); setChurn("mixed"); await sleep(CORRECT_S * 1000);
+      // what the run really did: updates applied, cards that changed group, group counts that moved, comments that arrived
+      const shape = () => fr.evaluate(() => ({ where: Object.fromEntries([...document.querySelectorAll("#live article.task")].map((a) => [a.id, a.closest(".grp")?.id ?? ""])), counts: [...document.querySelectorAll("#live .grp h3")].map((h) => h.textContent).join("|"), comments: document.querySelectorAll("#live .trail").length }));
+      const before = await shape(); await fr.evaluate(() => { (window as any).__pg.upd = []; });
+      const moved = new Set<string>(); let countChanges = 0, prev = before;
+      await watchCards([sel]); setChurn("mixed");
+      for (const end = Date.now() + CORRECT_S * 1000; Date.now() < end; ) { await sleep(3000); const now = await shape(); for (const [id, g] of Object.entries(now.where)) if (prev.where[id] !== undefined && prev.where[id] !== g) moved.add(id); if (now.counts !== prev.counts) countChanges++; prev = now; }
+      const newComments = prev.comments - before.comments;
       setChurn("poke"); await sleep(9000); // the last changes touch only the selected card
-      const m = await watched(); setChurn("off"); setPoke(""); await sleep(8000);
+      const m = await watched(), updates = (await fr.evaluate(() => (window as any).__pg.upd.length)) as number; setChurn("off"); setPoke(""); await sleep(8000);
       const snap = () => fr.evaluate(() => {
         const canon = (n: Node): string => {
           if (n.nodeType === 3) return (n.textContent ?? "").replace(/\s+/g, " ").trim();
@@ -231,9 +237,9 @@ try {
       const diffs = [...new Set([...Object.keys(fresh), ...Object.keys(live)])].filter((k) => fresh[k] !== live[k]);
       const show = (k: string) => { const a = live[k] ?? "(missing)", b = fresh[k] ?? "(missing)"; let i = 0; while (i < a.length && a[i] === b[i]) i++; return `${k}: live …${a.slice(Math.max(0, i - 40), i + 80)}… fresh …${b.slice(Math.max(0, i - 40), i + 80)}…`.replace(/\n/g, " "); };
       writeFileSync(join(DIR, `correct-${RUN}.json`), JSON.stringify({ sel, live, fresh, diffs }, null, 1));
-      result.correct = { sel, folds, frames: m.frames, badFrames: m.bad, first: m.first, compared: Object.keys(fresh).length, diffs: diffs.length, examples: diffs.slice(0, 6).map(show) };
+      result.correct = { sel, folds, updates, cardsMoved: moved.size, countChanges, newComments, frames: m.frames, badFrames: m.bad, first: m.first, compared: Object.keys(fresh).length, diffs: diffs.length, examples: diffs.slice(0, 6).map(show) };
       log("correct", result.correct);
-      verdict("correct", folds > 0 && m.frames > 100 && m.bad === 0 && diffs.length === 0, `${sel} in focus view, ${folds} folds opened: hidden or without its canvas in ${m.bad} of ${m.frames} painted frames${m.first ? ` (first: ${m.first})` : ""}; ${diffs.length} of ${Object.keys(fresh).length} parts differ from a fresh load`);
+      verdict("correct", folds > 0 && updates > CORRECT_S / 5 && moved.size > 0 && m.frames > 100 && m.bad === 0 && diffs.length === 0, `${sel} in focus view, ${folds} folds opened, ${updates} live updates (${moved.size} cards changed group, ${newComments} new comment trails): hidden or without its canvas in ${m.bad} of ${m.frames} painted frames${m.first ? ` (first: ${m.first})` : ""}; ${diffs.length} of ${Object.keys(fresh).length} parts differ from a fresh load`);
     }
   }
 } catch (e: any) { log("GATE ERROR", String(e?.stack ?? e).slice(0, 600)); result.error = String(e); process.exitCode = 2; }
