@@ -8,7 +8,7 @@ process.env.LAVISH_AXI_BIN = "/nonexistent/lavish-axi.mjs";
 process.env.LAVISH_AXI_PORT = "1";
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import vm from "node:vm";
@@ -139,7 +139,11 @@ async function openWindow(r: { base: string; key: () => string }, o: Opts = {}, 
     document: { getElementById: el, title: "" },
     location: { hash, host: "box.example:4398", hostname: "box.example" },
     navigator: { locks: o.locks ?? makeLocks() },
-    fetch: async (u: string, init?: RequestInit) => { signals.push(init?.signal); try { return await fetch(new URL(u, `${r.base}/demo/notify`), init); } finally { fetches++; } },
+    fetch: async (u: string, init?: RequestInit) => {
+      const report = u.startsWith("log?"); // the window's own reports for the deck's log, not polls
+      if (!report) signals.push(init?.signal);
+      try { return await fetch(new URL(u, `${r.base}/demo/notify`), init); } finally { if (!report) fetches++; }
+    },
     setTimeout: (fn: () => void) => { timers.push(fn); return timers.length; }, clearTimeout: () => {},
     Date: { now: () => clock.now },
     AbortSignal,
@@ -439,6 +443,109 @@ test("a newer window takes over: the older one stops, so nothing is notified twi
     assert.equal(first.fetches, before, "it no longer asks");
     assert.equal(second.fired.length, 1);
     assert.equal(first.fired.length, 0);
+  } finally { r.stop(); }
+});
+
+/** The deck's log of a try, without the time on each line. */
+function logOf(r: { pdir: string }): string[] {
+  let text = "";
+  try { text = readFileSync(join(r.pdir, "notify.log"), "utf8"); } catch {}
+  return text.split("\n").filter(Boolean).map((l) => { assert.match(l, /^\d{4}-\d\d-\d\d \d\d:\d\d:\d\d /); return l.slice(20); });
+}
+/** Wait until each of these appears in the log, in this order. */
+async function logged(r: { pdir: string }, ...wanted: RegExp[]) {
+  const missing = () => { let at = 0; const lines = logOf(r); return wanted.find((w) => { const i = lines.findIndex((l, n) => n >= at && w.test(l)); at = i + 1; return i < 0; }); };
+  await until(() => !missing()).catch(() => assert.fail(`not in the log: ${missing()}\n${logOf(r).join("\n")}`));
+}
+
+test("the deck's log shows every stage of a try, from the window being asked for to the click and the close", async () => {
+  const pick: T = { id: "pick", state: "queued", title: "Secret title" };
+  const r = await rig([WAITING, pick]);
+  try {
+    assert.deepEqual(logOf(r), [], "nothing until someone opens the window");
+    const w = await openWindow(r, { permission: "default" });
+    await logged(r, /^deck: window page requested from 127\.0\.0\.1/, /^window: open, secure=yes permission=default$/);
+    await w.el("allow").onclick();
+    await w.settled();
+    // the window's reports and the deck's own answers travel separately, so only each side's order is fixed
+    await logged(r, /^window: Allow pressed, the browser answered granted$/);
+    await logged(r, /^deck: list handed to the window: old$/);
+    await logged(r, /^window: watching; already waiting, so no notification: old$/);
+    await w.next(); await w.next();
+    assert.equal(logOf(r).filter((l) => l.startsWith("deck: list handed")).length, 1, "an unchanged list is not logged again");
+
+    await r.set([WAITING, { ...pick, state: "active", asks: [ask("a1", "Which?")] }]);
+    await logged(r, /^deck: waiting for you now: old, pick$/);
+    await w.next();
+    await logged(r, /^deck: list handed to the window: old, pick$/);
+    await logged(r, /^window: notification given to the browser: pick$/);
+    w.fired[0].onshow();
+    w.fired[0].onclick({ preventDefault() {} });
+    for (const fn of w.listeners.pagehide) fn({});
+    await logged(r, /^window: the browser says it showed it: pick$/);
+    await logged(r, /^window: notification clicked: pick$/);
+    await logged(r, /^window: closed or reloaded$/);
+    const all = logOf(r).join("\n");
+    assert.ok(!all.includes(r.key()) && !all.includes("Secret title") && !all.includes("Which?"), "no key, titles or questions");
+  } finally { r.stop(); }
+});
+
+test("the log says where a try stopped: insecure, refused, out of date, or a browser error", async () => {
+  const r = await rig([{ id: "pick", state: "queued" }]);
+  try {
+    await openWindow(r, { secure: false, permission: "denied" });
+    await logged(r, /^window: open, secure=no permission=denied$/);
+    const refused = await openWindow(r, { permission: "default", answer: "denied" });
+    await refused.el("allow").onclick();
+    await logged(r, /^window: Allow pressed, the browser answered denied$/);
+    await openWindow(r, {}, "#k=old");
+    await logged(r, /^deck: refused a window with an out-of-date key$/);
+    const w = await openWindow(r);
+    await w.next();
+    await r.set([{ id: "pick", asks: [ask("a1", "Which?")] }]);
+    await w.next();
+    w.fired[0].onerror();
+    await logged(r, /^window: the browser could not show it: pick$/);
+    const broken = await openWindow(r, { broken: true });
+    await broken.next();
+    await r.set([{ id: "pick", state: "queued" }]); await broken.next(); await broken.next(90_000);
+    await r.set([{ id: "pick", asks: [ask("a1", "Which?")] }]); await broken.next();
+    await logged(r, /^window: the browser could not show it: pick: Illegal constructor$/);
+  } finally { r.stop(); }
+});
+
+test("the log says why a task that came straight back was quiet, and when a newer window took over", async () => {
+  const asking: T = { id: "pick", asks: [ask("a1", "Which?")] };
+  const gone: T = { id: "pick", state: "queued" };
+  const r = await rig([gone]);
+  try {
+    const locks = makeLocks();
+    const w = await openWindow(r, { locks });
+    await w.next();
+    await logged(r, /^window: watching; already waiting, so no notification: none$/);
+    await r.set([asking]); await w.next();
+    await r.set([gone]); await w.next();
+    await r.set([asking]); await w.next();
+    await logged(r, /^window: notification given to the browser: pick$/, /^window: back within a minute for the same thing, so no notification: pick$/);
+    await openWindow(r, { locks });
+    await logged(r, /^window: a newer window took over, this one stopped$/);
+  } finally { r.stop(); }
+});
+
+test("the log takes only known reports with the page's key, one line each, and stays small", async () => {
+  const r = await rig([WAITING]);
+  try {
+    const report = (q: string) => fetch(`${r.base}/demo/log?${q}`).then((x) => x.status);
+    assert.equal(await report("e=fire&d=x"), 403);
+    assert.equal(await report(`k=${r.key()}&e=made-up&d=x`), 400);
+    assert.equal(await report(`k=${r.key()}&e=fire&d=${encodeURIComponent("a\nwindow: forged\r\u0007" + "y".repeat(500))}`), 204);
+    const lines = logOf(r);
+    assert.equal(lines.filter((l) => l.startsWith("window:")).length, 1);
+    assert.ok(lines.at(-1)!.length < 300);
+    writeFileSync(join(r.pdir, "notify.log"), "2026-11-28 00:00:00 old line\n".repeat(20_000));
+    await report(`k=${r.key()}&e=fire&d=newest`);
+    assert.ok(statSync(join(r.pdir, "notify.log")).size < 150_000);
+    assert.match(logOf(r).at(-1)!, /newest/);
   } finally { r.stop(); }
 });
 

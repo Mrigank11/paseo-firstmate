@@ -9,6 +9,12 @@
 //   GET /<project>/notify          the window (no task data in it, only the project's title; its key travels in the #fragment)
 //   GET /<project>/needs?k=<key>   {page, partial, tasks:[{id,title,reason,wait}]}; 503 while the deck has not read everything
 //                                  yet; partial = agent-canvas is down, so tasks may be missing (nothing is known to have left)
+//   GET /<project>/log?k=&e=&d=    the window reporting a step, for the log below
+//
+// state/projects/<project>/notify.log says where a try stopped: what the deck was asked for and answered ("deck: …") and
+// what the window then did ("window: …"). It holds task ids, never keys, titles or questions. It starts when a window is
+// first asked for. "showed it" is the browser's word: the system can still hold the banner back.
+import { appendFileSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import type { CanvasData } from "./canvas-port.ts";
 import type { Stage } from "./stage.ts";
 import type { Task } from "./state.ts";
@@ -28,6 +34,40 @@ function plain(text: string): string {
 /** The first question still open on a crew canvas, for a Needs-you line that has no registry ask behind it. */
 export const canvasQuestion = (canvas: CanvasData | undefined, agentId: string | null): string =>
   canvas?.summaries[agentId ?? ""]?.openAsks.find((a) => !a.pending)?.question ?? "";
+
+/** The steps a window may report, in the words the log uses. */
+const REPORTS: Record<string, string> = {
+  open: "open",
+  allow: "Allow pressed, the browser answered",
+  watching: "watching; already waiting, so no notification",
+  fire: "notification given to the browser",
+  shown: "the browser says it showed it",
+  error: "the browser could not show it",
+  quiet: "back within a minute for the same thing, so no notification",
+  click: "notification clicked",
+  replaced: "a newer window took over, this one stopped",
+  closed: "closed or reloaded",
+};
+const LINE_MAX = 220, LOG_MAX = 128 * 1024;
+const oneLine = (s: string) => s.replace(/[\x00-\x1f\x7f\u2028\u2029]+/g, " ").trim().slice(0, LINE_MAX);
+
+/** The log line for a window's report; null for a step it does not know. */
+export function windowLine(event: string, detail: string): string | null {
+  if (!Object.hasOwn(REPORTS, event)) return null;
+  const d = oneLine(detail);
+  if (event === "open") return `window: open, ${d}`;
+  return `window: ${REPORTS[event]}${!d ? "" : event === "allow" ? ` ${d}` : `: ${d}`}`;
+}
+
+/** Add one line to a project's notify log, keeping the newer half when it grows large. Never throws: it is only a diary. */
+export function appendNotifyLog(file: string, line: string): void {
+  try {
+    appendFileSync(file, `${new Date().toLocaleString("sv-SE")} ${oneLine(line)}\n`);
+    if (statSync(file).size <= LOG_MAX) return;
+    const tail = readFileSync(file, "utf8").slice(-LOG_MAX / 2);
+    writeFileSync(file, tail.slice(tail.indexOf("\n") + 1));
+  } catch {}
+}
 
 function why(t: Task, s: Stage, canvas?: CanvasData): { reason: string; wait: string } {
   // a permission request has no name here, so each entry counts as its own
@@ -63,6 +103,11 @@ const windowScript = (project: string) => `(function(){
   var held=null,whole=false,page="",tab=null,pending="",trouble="",stopped=false;
   try{if(window.opener)tab=window.opener.top}catch(e){}
   function say(t){$("msg").textContent=t}
+  var told=Promise.resolve();
+  function tell(e,d,now){function send(){return fetch("log?k="+encodeURIComponent(key)+"&e="+e+"&d="+encodeURIComponent(d||""),{cache:"no-store",keepalive:true,signal:AbortSignal.timeout(5000)}).catch(function(){})}
+    if(now)send();else told=told.then(send)}
+  function ids(tasks){return tasks.map(function(t){return t.id}).join(", ")||"none"}
+  window.addEventListener("pagehide",function(){tell("closed","",true)});
   function focusMsg(task){return {type:"fm-notify-focus",task:task}}
   function show(task){var open=false;try{open=!!tab&&!tab.closed}catch(e){}
     if(open){try{tab.focus()}catch(e){}for(var i=0;i<tab.length;i++)try{tab[i].postMessage(focusMsg(task),"*")}catch(e){}}
@@ -70,12 +115,15 @@ const windowScript = (project: string) => `(function(){
     else window.focus()}
   window.addEventListener("message",function(e){if(!pending||!e.data||e.data.type!=="fm-notify-hello"||!e.source)return;
     try{tab=e.source.top}catch(x){}e.source.postMessage(focusMsg(pending),"*");pending=""});
-  function fire(t){try{var n=new Notification(t.title,{body:t.reason,tag:"fm:"+P+":"+t.id,renotify:true});
-    n.onclick=function(e){e.preventDefault();n.close();show(t.id)}}catch(e){trouble=" This browser could not show a notification: "+e.message}}
+  function fire(t){tell("fire",t.id);try{var n=new Notification(t.title,{body:t.reason,tag:"fm:"+P+":"+t.id,renotify:true});
+    n.onshow=function(){tell("shown",t.id)};n.onerror=function(){tell("error",t.id)};
+    n.onclick=function(e){e.preventDefault();n.close();tell("click",t.id);show(t.id)}}catch(e){tell("error",t.id+": "+e.message);trouble=" This browser could not show a notification: "+e.message}}
   function step(tasks,partial){var now=Date.now(),first=!held,starting=first||(!whole&&!partial),seen=Object.create(null);if(first)held=Object.create(null);
     tasks.forEach(function(t){var h=held[t.id];seen[t.id]=1;
       if(!starting&&(!h||(h.left&&(!t.wait||h.wait!==t.wait||now-h.left>=GRACE))))fire(t);
+      else if(!starting&&h&&h.left)tell("quiet",t.id);
       held[t.id]={wait:t.wait,left:0}});
+    if(starting)tell("watching",ids(tasks));
     if(partial)return;whole=true;
     Object.keys(held).forEach(function(id){if(seen[id])return;var h=held[id];if(!h.left)h.left=now;else if(now-h.left>=GRACE)delete held[id]})}
   function poll(){if(stopped)return;
@@ -89,11 +137,12 @@ const windowScript = (project: string) => `(function(){
     }).catch(function(){say("Can't reach the deck. Trying again…")}).then(function(){if(!stopped)setTimeout(poll,EVERY)})}
   function watch(){say("Starting…");
     navigator.locks.request("fm-notify-"+P,{steal:true},function(){poll();return new Promise(function(){})})
-      .catch(function(){stopped=true;say("A newer window is watching now.");window.close()})}
+      .catch(function(){stopped=true;tell("replaced");say("A newer window is watching now.");window.close()})}
   function blocked(){say("Notifications are blocked for this address. Allow them from the icon left of the address, then reload this window.")}
-  allow.onclick=function(){return Notification.requestPermission().then(function(r){
+  allow.onclick=function(){return Notification.requestPermission().then(function(r){tell("allow",r);
     if(r==="default"){say("Not allowed yet. Press the button again and choose Allow.");return}
     allow.hidden=true;if(r==="granted")watch();else blocked()})};
+  tell("open","secure="+(window.isSecureContext?"yes":"no")+" permission="+("Notification" in window?Notification.permission:"none"));
   if(!window.isSecureContext)say("This address cannot send notifications: browsers only allow them over https. Ask the first mate for the https address, or, in Firefox on this computer, open about:config, set dom.securecontext.allowlist to "+location.hostname+" and reload this window.");
   else if(!("Notification" in window))say("This browser has no notifications.");
   else if(Notification.permission==="granted")watch();
