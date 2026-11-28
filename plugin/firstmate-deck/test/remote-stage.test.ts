@@ -50,3 +50,10 @@ test("stageAgentsFor carries the host and its offline mark", () => {
   const [a] = stageAgentsFor([{ id: "mac-1", status: "running", archived: false, host: "mac", hostOffline: offline }], () => undefined);
   assert.deepEqual([a.host, a.hostOffline], ["mac", offline]);
 });
+
+test("an offline crew that was waiting for a permission says so, and still asks nothing of the captain", () => {
+  const s = stage(task(), [mac({ hostOffline: { ...offline, permission: true } })]);
+  assert.deepEqual([s.stage, s.group, s.owner], ["Unknown · mac offline", "running", "crew"]);
+  assert.deepEqual(s.flags.map((f) => [f.key, f.drift]), [["host-offline", false], ["permission-was-waiting", false]]);
+  assert.equal(s.flags[1].text, "was waiting for a permission");
+});

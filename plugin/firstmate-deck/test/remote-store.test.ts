@@ -69,6 +69,15 @@ test("records come out as agent records, marked with the host, offline ones as u
   rmSync(r, { recursive: true, force: true });
 });
 
+test("an offline record asks no permission, but remembers that one was waiting", () => {
+  const r = root();
+  recordHosts(r, [host({ agents: [agent("asks", { pending: 2 }), agent("quiet", { pending: 0 })] })], T0);
+  recordHosts(r, [host({ online: false, agents: null })], T1);
+  const since = T1.toISOString();
+  assert.deepEqual(remoteRecords(readRemoteStore(r)).map((a) => [a.id, a.pending, a.hostOffline]), [["asks", 0, { label: "mac", since, permission: true }], ["quiet", 0, { label: "mac", since }]]);
+  rmSync(r, { recursive: true, force: true });
+});
+
 test("only records owned by the reading daemon are read, and a write drops the rest", () => {
   const r = root();
   mkdirSync(join(r, "state"), { recursive: true });

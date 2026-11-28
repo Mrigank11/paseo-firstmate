@@ -1110,6 +1110,51 @@ test("while the Mac is offline its crew is unknown since then: never the old loc
   r.deck.stop();
 });
 
+test("a Mac card names its host beside the title; offline it keeps the lost permission, dates the canvas tag and says an answer waits", async () => {
+  const fc = await new FakeCanvas().start();
+  const since = "2026-10-22T09:00:00Z";
+  const task = (id: string, over: object = {}) => ({ id, intent: id, state: "active", project: "demo", shape: "ship", ...over });
+  const crew = (id: string, t: string, over: object = {}) => ({ id, status: "running" as const, createdAt: since, updatedAt: since, labels: { "fm.task": t, "fm.project": "demo" }, items: [assistant("on it")], ...over });
+  const mac: FakeHost = {
+    serverId: "srv_mac", label: "mac", lastOnlineAt: since,
+    world: new FakeWorld().add(
+      crew("m-ask", "asks"), crew("m-raw", "raw"),
+      crew("m-perm", "perm", { pendingPermissions: [{ id: "p1", name: "Bash", kind: "tool" }] }),
+      crew("m-done", "old", { status: "idle" }),
+    ),
+  };
+  fc.set(canvasSummary("m-ask"));
+  fc.set(canvasSummary("m-raw", { openAsks: [{ id: "db", question: "pg or sqlite?", blocking: true, options: [{ value: "pg", label: "pg" }, { value: "sqlite", label: "sqlite" }] }] }));
+  fc.set(canvasSummary("m-perm"));
+  const r = rig({ tasks: [task("asks", { asks: [{ id: "q", text: "Which way?", since, options: ["A", "B"] }] }), task("raw"), task("perm"), task("old", { state: "done", outcome: "ok" })] }, { hosts: new FakeHosts(mac), ttlMs: 0, deck: { canvasPollMs: 30 } });
+  const deck = r.mkDeck({ canvasUrl: fc.url });
+  await deck.configure();
+  await deck.render("demo");
+  const card = (id: string) => taskCard(readFileSync(r.live, "utf8"), id);
+  const NOTE = /mac is offline: your answer is saved here\. The crew can only get it once mac is back\./;
+  await until(() => /FULL CANVAS m-perm/.test(card("perm")) && /Uncurated/.test(card("raw")), 3000);
+  for (const id of ["asks", "raw", "perm", "old"]) {
+    assert.match(card(id), /class=\\"chip c-host\\">on mac</, `${id} names the host in its title row`);
+    assert.equal(card(id).match(/on mac/g)?.length, 1, `${id} names it once`);
+    assert.doesNotMatch(card(id), NOTE);
+    assert.doesNotMatch(card(id), /last seen/);
+  }
+  assert.match(card("perm"), /Needs you · permission/);
+
+  mac.status = "offline";
+  deck.onAgentEvent("m-ask", "srv_mac");
+  await until(() => /last seen: Working/.test(card("perm")) && /unknown · mac offline/.test(card("perm")), 3000);
+  assert.match(card("perm"), /was waiting for a permission/);
+  assert.doesNotMatch(card("perm"), /Needs you · permission/);
+  assert.match(card("asks"), /last seen: Working/);
+  assert.match(card("asks"), NOTE);
+  assert.match(card("raw"), NOTE);
+  assert.doesNotMatch(card("perm"), NOTE, "no question, so nothing to say about answers");
+  assert.match(card("old"), /class=\\"chip c-host\\">on mac</);
+  assert.doesNotMatch(card("old"), /was waiting|your answer is saved/);
+  deck.stop(); await fc.stop();
+});
+
 test("a hung host does not hold up a page", async () => {
   const r = macRig();
   await r.show();

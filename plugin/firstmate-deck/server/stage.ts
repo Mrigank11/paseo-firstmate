@@ -29,7 +29,8 @@ export type StageAgent = {
   hostOffline?: HostOffline;
 };
 
-export type HostOffline = { label: string; since: string };
+/** `permission`: a request was open when the host was last read. It cannot be answered (or known to still be open) until the host is back. */
+export type HostOffline = { label: string; since: string; permission?: boolean };
 
 /** Who owes the next move. `nobody` = nothing is owed (queued, parked, done). The group is derived from it: owner `firstmate` = group `fm`. */
 export type Owner = "captain" | "firstmate" | "crew" | "outside" | "nobody";
@@ -148,6 +149,7 @@ export function computeStage(task: StageTask, agents: readonly StageAgent[], now
   const canvas = !cur || cur.archived ? undefined : opts.canvas;
   if (cur && !cur.archived && cur.relayGone) extra.push(flag("relay-target-gone", `canvas relay target ${cur.relayGone.slice(0, 8)} is gone: bin/page claim re-points it`, true));
   if (away) extra.push(flag("host-offline", `${away.label} offline since ${away.since}`));
+  if (away?.permission) extra.push(flag("permission-was-waiting", "was waiting for a permission"));
   if (!away && canvas?.verdict === "Disputed") extra.push(flag("canvas-disputed", "canvas: status disputed"));
   if (!away && canvas?.verdict === "Stale") extra.push(flag("canvas-stale", "canvas: out of date"));
   if (task.commentWaiting) extra.push(flag("comment-waiting", "a comment on this card is waiting for the first mate"));

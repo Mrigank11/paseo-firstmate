@@ -86,6 +86,7 @@ button.opt[aria-pressed=true]{opacity:1;cursor:default;background:var(--you);bor
 details.sec>summary h2{display:inline-block;margin:0}
 details.sec{margin-top:36px;scroll-margin-top:48px}
 details.sec>summary{padding:2px 0}
+.chip.c-host{border:1px solid var(--run);color:var(--run);background:#fff}.away{margin-top:6px}
 .chip.c-fail,.c-fail{color:#b91c1c}.chip.c-fail{background:#fee2e2}.s-failed .ttl{font-weight:500}
 .actx{margin:4px 0 2px;font-size:13.5px;max-width:80ch}.actx>summary{color:var(--mut);font-size:12.5px;display:inline-block}
 .actx>div{padding:4px 0 0 4px;border-left:2px solid #f3d5bc;margin-top:4px;padding-left:12px}.actx p,.nt p{margin:4px 0}

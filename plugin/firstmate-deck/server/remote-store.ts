@@ -85,12 +85,12 @@ export function recordHosts(root: string, seen: readonly HostSeen[], now: Date =
   return next;
 }
 
-/** Every stored crew, marked with its host. An offline host's crews read as status "unknown" with no open permissions. */
+/** Every stored crew, marked with its host. An offline host's crews read as status "unknown" with no open permissions; `hostOffline.permission` remembers one. */
 export function remoteRecords(store: RemoteStore): RemoteRecord[] {
   return Object.entries(store.hosts).flatMap(([serverId, h]) =>
     h.agents.map((a): RemoteRecord => ({
       ...a, host: h.label, serverId,
-      ...(h.offlineSince ? { status: "unknown", pending: 0, hostOffline: { label: h.label, since: h.offlineSince } } : {}),
+      ...(h.offlineSince ? { status: "unknown", pending: 0, hostOffline: { label: h.label, since: h.offlineSince, ...(a.pending ? { permission: true } : {}) } } : {}),
     })),
   );
 }

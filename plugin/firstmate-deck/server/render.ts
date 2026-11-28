@@ -150,11 +150,9 @@ function agentBlock(t: Task, group: GroupKey, view: AgentView | undefined, o: Re
   }
   const url = esc(o.paseoAgentUrl(aid));
   const crew = o.labeled?.[t.id]?.find((x) => x.id === aid);
-  const on = crew?.host ? `on ${crew.host}` : "";
   if (group === "done") { // frozen: the agent id may be reused later, so show none of its live state
     const [cls, label] = st.failed ? ["error", "failed"] : ["done", "done"];
-    const facts = [t.provider, on].filter(Boolean).join(" · ");
-    const who = facts ? `<span class="facts">${esc(facts)}</span>` : "";
+    const who = t.provider ? `<span class="facts">${esc(t.provider)}</span>` : "";
     return `<div class="ag"><span class="pill p-${cls}"><span class="dot"></span>${label}</span>${who}${flagBadges(st.flags)}<a class="open" href="${url}">Open in Paseo</a></div>`;
   }
   const a: AgentView = view ?? { status: "unknown", stepCount: 0, recent: [] };
@@ -171,7 +169,7 @@ function agentBlock(t: Task, group: GroupKey, view: AgentView | undefined, o: Re
     : "";
   // Paseo has no record of the agent (or none yet): fall back to the provider/model the task itself names
   const model = [a.model || t.provider, a.thinking].filter(Boolean).join(" ");
-  const facts = [esc(on), a.stepCount ? esc(`${a.stepCount}${a.stepsAtLeast ? "+" : ""} steps`) : "", el, esc(model), ast === "archived" ? "archived" : ""].filter(Boolean).join(" · ");
+  const facts = [a.stepCount ? esc(`${a.stepCount}${a.stepsAtLeast ? "+" : ""} steps`) : "", el, esc(model), ast === "archived" ? "archived" : ""].filter(Boolean).join(" · ");
   // the pill already says which host is away and since when
   const stage = away && st.stage.startsWith("Unknown") ? "" : `<span class="stg">${esc(st.stage)}</span>`;
   const flags = flagBadges(away ? st.flags.filter((f) => f.key !== "host-offline") : st.flags);
@@ -197,8 +195,9 @@ const verdictTone = (label: string) => (label === "Error" ? "bad" : label === "N
  * The agent's canvas inside its card: verdict, BLUF, steps strip with the Now row. `compact` is what a grouped list shows;
  * the full embed card (agent-canvas `/api/fm/card`) sits in a collapsed "Full canvas" fold, open and replacing it in the focus view (style.ts, nav-script.ts).
  * `full` (a Needs-you card) shows the whole canvas open, BLUF uncut, in place of the compact strip: the crew's canvas is structured and short by then.
+ * `away` (the crew's host is offline): the verdict is dated, as it is only what was last seen.
  */
-export function canvasFragment(s: FmSummary, card?: string, full = false): string {
+export function canvasFragment(s: FmSummary, card?: string, full = false, away = false): string {
   const flags = s.verdict.flags.map((f) => `<span class="fl" title="${esc(f.signal)}">${esc(f.text)}</span>`).join("");
   const total = Math.min(s.steps.total, 24);
   const done = s.steps.total > 24 ? Math.round((s.steps.done / s.steps.total) * 24) : s.steps.done;
@@ -208,7 +207,7 @@ export function canvasFragment(s: FmSummary, card?: string, full = false): strin
     : "";
   const whole = full && !!card;
   const compact =
-    `<div class="cv-c"><div class="cv-top"><span class="cv-v cv-${verdictTone(s.verdict.label)}">${esc(s.verdict.label)}</span>${flags}${s.auto ? `<span class="fl" title="no canvas was written: this is the one agent-canvas drew from the agent's timeline">auto canvas</span>` : ""}</div>` +
+    `<div class="cv-c"><div class="cv-top"><span class="cv-v cv-${away ? "mut" : verdictTone(s.verdict.label)}">${away ? "last seen: " : ""}${esc(s.verdict.label)}</span>${flags}${s.auto ? `<span class="fl" title="no canvas was written: this is the one agent-canvas drew from the agent's timeline">auto canvas</span>` : ""}</div>` +
     // a whole canvas carries its own BLUF and steps: the strip keeps only the verdict
     `${whole ? "" : s.bluf ? `<div class="cv-bluf">${esc(full ? s.bluf : cut(s.bluf, 280))}</div>` : ""}${whole ? "" : steps}</div>`;
   return `<div class="cv${card ? " has-full" : ""}${whole ? " cv-whole" : ""}" data-rev="${s.rev}">${compact}${card ? `<details class="cnotes cv-d" id="cvd-${esc(s.agentId)}"${whole ? " open" : ""}><summary>Full canvas</summary><div class="cv-f acv">${card}</div></details>` : ""}</div>`;
@@ -218,7 +217,7 @@ export function canvasFragment(s: FmSummary, card?: string, full = false): strin
  * The crew's own canvas questions that no curated ask mirrors yet: raw, clickable at once, and still delivered through the
  * first mate (their buttons use the option-click path, target `t-<task>#c-<id>`). A pick waits as "sent to the first mate".
  */
-function rawAsks(t: Task, s: FmSummary, comments: TrailComment[], now: Date, activeSince?: string | null): string[] {
+function rawAsks(t: Task, s: FmSummary, comments: TrailComment[], now: Date, activeSince?: string | null, away = ""): string[] {
   const out: string[] = [];
   for (const a of s.openAsks) {
     if (t.asks.some((x) => x.ref?.block === a.id)) continue; // curated: the registry ask above is the one to answer
@@ -245,10 +244,13 @@ function rawAsks(t: Task, s: FmSummary, comments: TrailComment[], now: Date, act
       body = `${q}<div class="opts" data-key="${esc(key)}"><div class="opt-row">${btns}${hint}</div>${line}</div>`;
     }
     const trail = picked === undefined ? trailHtml(comments, `t-${t.id}#c-${a.id}`, now) : "";
-    out.push(`<div class="askbox raw" id="a-${esc(t.id)}-c-${esc(a.id)}"><div class="ask-tag">${tag}</div>${body}${trail}</div>`);
+    out.push(`<div class="askbox raw" id="a-${esc(t.id)}-c-${esc(a.id)}"><div class="ask-tag">${tag}</div>${body}${away}${trail}</div>`);
   }
   return out;
 }
+
+/** Under an open question of a crew whose host is offline: the answer is taken here, but cannot reach the crew yet. */
+const awayNote = (label: string) => `<div class="m away">${esc(label)} is offline: your answer is saved here. The crew can only get it once ${esc(label)} is back.</div>`;
 
 const DAY_MS = 24 * 3600 * 1000;
 const LATE_MS = 10_000;
@@ -396,7 +398,12 @@ function row(t: Task, group: GroupKey, ctx: Ctx, idx = 0): string {
   const live = group === "done" || !aid ? undefined : ctx.canvas?.summaries[aid];
   const sum = live?.auto && t.canvasFinal ? undefined : live;
   const curAgent = currentAgent(ctx.o.labeled?.[t.id] ?? []);
-  const raw = sum ? rawAsks(t, sum, ctx.comments, ctx.o.now, activeSinceOf(curAgent)) : [];
+  const crew = ctx.o.labeled?.[t.id]?.find((x) => x.id === aid);
+  // a finished task keeps its host name, but nothing on it waits for that host
+  const away = group === "done" ? undefined : crew?.hostOffline;
+  const note = away ? awayNote(away.label) : "";
+  const host = crew?.host ? `<span class="chip c-host">on ${esc(crew.host)}</span>` : "";
+  const raw = sum ? rawAsks(t, sum, ctx.comments, ctx.o.now, activeSinceOf(curAgent), note) : [];
   const rawTargets = new Set((sum?.openAsks ?? []).filter((a) => !t.asks.some((x) => x.ref?.block === a.id)).map((a) => `t-${t.id}#c-${a.id}`));
   const recapSum = group === "done" ? undefined : sum;
   // an open card whose crew is gone (archived, no live canvas) shows the snapshot taken when the ask was made, like a done card does
@@ -410,12 +417,12 @@ function row(t: Task, group: GroupKey, ctx: Ctx, idx = 0): string {
   const css = lite ? new Set<string>() : ctx.snapCss;
   const out = [
     `<article class="task s-${group}${failed ? " s-failed" : ""}" id="t-${esc(t.id)}"${data}>`,
-    `<div class="tt"><span class="ttl">${title}</span>${chip}${btn}</div>`,
+    `<div class="tt"><span class="ttl">${title}</span>${host}${chip}${btn}</div>`,
     strip.html,
     // card-level comments, plus comments on asks that are gone (an answered ask takes its own trail with it); the strip already shows a newer one
     trailHtml(ctx.comments.filter((c) => c.id !== strip.consumes), `t-${t.id}`, ctx.o.now, (c) => c.target.startsWith(`t-${t.id}#`) && !t.asks.some((a) => c.target === `t-${t.id}#${a.id}`) && !rawTargets.has(c.target)),
   ];
-  if (sum) out.push(agentBlock(t, group, aid ? ctx.agents[aid] : undefined, ctx.o, st, true), canvasFragment(sum, ctx.canvas?.cards[sum.agentId], group === "you"));
+  if (sum) out.push(agentBlock(t, group, aid ? ctx.agents[aid] : undefined, ctx.o, st, true), canvasFragment(sum, ctx.canvas?.cards[sum.agentId], group === "you", !!away));
   else if (snapOnly) out.push(finalCanvas(t, css, "Crew canvas"));
   t.asks.forEach((a) => {
     const box: string[] = [];
@@ -450,6 +457,7 @@ function row(t: Task, group: GroupKey, ctx: Ctx, idx = 0): string {
       }
       trail = trailHtml(ctx.comments, `t-${t.id}#${a.id}`, ctx.o.now); // this ask's own comments, right under it
     }
+    if (note && !(a.ref && sum && !sum.openAsks.some((x) => x.id === a.ref!.block))) box.push(note);
     if (trail) box.push(trail);
     const ctxMd = contextBody(a.text, a.contextMd);
     if (ctxMd.trim()) {
