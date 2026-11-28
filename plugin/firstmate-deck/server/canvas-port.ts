@@ -78,6 +78,8 @@ export class CanvasPort {
   private st: CanvasStatus = "off";
   private fails = 0;
   private failingSince = 0;
+  /** Agents a successful cycle has asked about. */
+  private covered = new Set<string>();
   /** Agents with news nobody has been told about yet (a cycle that failed half way keeps what it did read). */
   private changed = new Set<string>();
   private timer: ReturnType<typeof setTimeout> | null = null;
@@ -91,6 +93,9 @@ export class CanvasPort {
   /** A canvas URL is set (whether or not it answered yet). */
   get configured(): boolean { return !!this.o.url().trim(); }
   summary(agentId: string): FmSummary | undefined { return this.sums.get(agentId); }
+
+  /** Has agent-canvas answered about all of these (whether or not it knows them)? */
+  covers(ids: string[]): boolean { return ids.every((i) => this.covered.has(i)); }
 
   /** Everything a render needs, for the agents `ids` (all wanted agents when omitted). */
   data(ids?: Iterable<string>): CanvasData {
@@ -199,6 +204,7 @@ export class CanvasPort {
       // agents the canvas no longer knows (or that nobody wants any more) leave the cache
       for (const id of [...this.sums.keys()]) if (!seen.has(id)) { this.sums.delete(id); this.cards.delete(id); if (ids.includes(id)) changed.add(id); }
       for (const id of [...this.cards.keys()]) if (!seen.has(id)) this.cards.delete(id);
+      for (const id of ids) this.covered.add(id);
       this.fails = 0;
       this.failingSince = 0;
       this.lastErr = "";

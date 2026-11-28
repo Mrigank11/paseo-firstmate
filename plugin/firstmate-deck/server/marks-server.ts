@@ -33,6 +33,8 @@ const MAX_BODY = 1 << 20;
 
 export class MarksServer {
   private servers: Server[] = [];
+  /** Other things served to the captain's browser from this origin (the notification window and its list). No CORS: only that origin may read them. */
+  pages?: (url: URL) => { code: number; type: string; body: string } | null;
   /** "host:port" each listener is bound to. */
   bound: string[] = [];
   private getRoot: () => string;
@@ -57,6 +59,11 @@ export class MarksServer {
   private handle = (req: IncomingMessage, res: ServerResponse): void => {
     try {
       if (req.method === "OPTIONS") return this.send(res, 204);
+      const page = req.method === "GET" ? this.pages?.(new URL(req.url ?? "/", "http://deck")) : null;
+      if (page) {
+        res.writeHead(page.code, { "Content-Type": page.type, "Content-Length": Buffer.byteLength(page.body), "Cache-Control": "no-store", "X-Frame-Options": "DENY" });
+        return void res.end(page.body);
+      }
       const a = /^\/asset\/([0-9a-f]{32})$/.exec((req.url ?? "").split("?")[0]);
       if (a) {
         const pic = req.method === "GET" || req.method === "HEAD" ? readAsset(assetDir(this.getRoot()), a[1]) : null;

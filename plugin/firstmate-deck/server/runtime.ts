@@ -2,7 +2,7 @@
 // Lavish poll, and relays page comments to the first mate.
 import { closeSync, existsSync, mkdirSync, openSync, readdirSync, readSync, readFileSync, statSync, unlinkSync, watch, type FSWatcher } from "node:fs";
 import { basename, join, relative } from "node:path";
-import { createHash } from "node:crypto";
+import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import { execFile, type ChildProcess } from "node:child_process";
 import { assetDir, resolveAssets } from "./asset-store.ts";
 import { normalizeRoot, type DeckConfig } from "./config.ts";
@@ -22,6 +22,7 @@ import { inputsMtimeMs, readSnapshot, writeSnapshot, type Snapshot, type StageRo
 import { ownerOf } from "./gate.ts";
 import { branchMerged } from "./merged.ts";
 import { MarksServer, readUi, updateUi } from "./marks-server.ts";
+import { canvasQuestion, needsList, notifyWindowHtml, type NeedsItem } from "./notify.ts";
 import { loadLive, loadProject, type ProjectModel, type Task } from "./state.ts";
 import { appendInbox, inboxPath, pageJsonPath, patchPageJson, pidPath, projectDir, readInbox, readPageJson, updateInbox, writeAtomic, type InboxEntry, type PageJson } from "./store.ts";
 
@@ -87,9 +88,6 @@ const IGNORED = /(^|\/)(\.[^/]*|[^/]*\.tmp|[^/]*\.lock|page\.html|[^/]*\.live\.j
 const STALE_UNKNOWN: AgentView = { status: "unknown", stepCount: 0, recent: [], stale: true };
 
 const plainTitle = (t: Task) => t.title || t.intent || t.id;
-
-/** The first question still open on a crew canvas, for a Needs-you line that has no registry ask behind it. */
-const canvasQuestion = (s: FmSummary | undefined): string => s?.openAsks.find((a) => !a.pending)?.question ?? "";
 
 type PollerEntry = { poller: PagePoller; child: ChildProcess | null; last: ChildProcess | null; ac: AbortController; http: number; lastEnd: number };
 const killEntry = (e: PollerEntry) => { e.poller.stop(); e.ac.abort(); try { e.child?.kill("SIGTERM"); } catch {} };
@@ -200,6 +198,7 @@ export class Deck {
     this.log = o.log ?? (() => {});
     this.agents = new AgentViews((m) => this.log(m));
     this.marks = new MarksServer(() => this.cfg.root, (m) => this.log(m));
+    this.marks.pages = (url) => this.notifyRoute(url);
     this.ports = o.ports ?? new PortSelector(new CliPort(o.exec), (m) => this.log(m));
     // the first handle: everything on the pages was last-known until now, so ask about it all
     this.ports.onFirstHandle = () => this.scheduleAll("handle", 0);
@@ -349,6 +348,38 @@ export class Deck {
     try { host = new URL(pj.lavishUrl ?? "").hostname; } catch {}
     if (!host) host = this.tailnetIp || "127.0.0.1";
     return `http://${host}:${port}`;
+  }
+
+  /** Where the page's "Notify me" button opens the notification window: the https address if one is set, else the web server's own. */
+  private notifyUrl(project: string, pj: PageJson): string | undefined {
+    const own = this.marksBase(pj);
+    if (!own) return undefined;
+    const key = pj.notifyKey || patchPageJson(pageJsonPath(this.cfg.root, project), { notifyKey: randomBytes(16).toString("hex") }).notifyKey;
+    return key ? `${this.cfg.notifyUrl || own}/${project}/notify#k=${key}` : undefined;
+  }
+
+  /** Each project's Needs-you list as of its last render; null while that render could not see everything. */
+  private needs = new Map<string, NeedsItem[] | null>();
+
+  /** `GET /<project>/notify` (the notification window) and `/<project>/needs?k=` (what it reads). */
+  private notifyRoute(url: URL): { code: number; type: string; body: string } | null {
+    const m = /^\/([a-z0-9][a-z0-9-]*)\/(notify|needs)$/.exec(url.pathname);
+    if (!m) return null;
+    const [, project, what] = m;
+    const json = (code: number, v: unknown) => ({ code, type: "application/json", body: JSON.stringify(v) });
+    if (!this.cfg.root || !existsSync(join(projectDir(this.cfg.root, project), "project.json"))) return json(404, { error: "no such project" });
+    if (what === "notify") return { code: 200, type: "text/html; charset=utf-8", body: notifyWindowHtml(project, this.lastGood.get(project)?.title ?? project) };
+    const pj = readPageJson(pageJsonPath(this.cfg.root, project));
+    const key = Buffer.from(pj.notifyKey ?? ""), given = Buffer.from(url.searchParams.get("k") ?? "");
+    if (!key.length || key.length !== given.length || !timingSafeEqual(key, given)) return json(403, { error: "bad key" });
+    const tasks = pj.session === "stopped" ? null : this.needs.get(project);
+    return tasks ? json(200, { page: pj.lavishUrl, tasks }) : json(503, { error: "not ready" });
+  }
+
+  /** Could this render see every task's crew? A list made before that would show tasks leaving that never left. */
+  private sawAll(ids: string[]): boolean {
+    if ((this.ports.sdkPort() || this.o.agentsDir) && !this.labeledKey) return false;
+    return !this.canvas.configured || !ids.length || (this.canvas.status === "ok" && this.canvas.covers(ids));
   }
 
   private async detectWebBase(): Promise<void> {
@@ -844,9 +875,11 @@ export class Deck {
     const target = this.pagePath(project);
     const now = new Date();
     const banner = this.bannerFor(project, pj.session);
+    const canvas = this.canvas.data(ids);
+    this.needs.set(project, this.sawAll(ids) ? needsList(model.tasks, stagesOf(model, views, { now, labeled: this.labeledFor(model), canvas, stalled: this.stalled }), canvas) : null);
     const r = renderProject(model, views, {
       now, tickSeconds: 1, refreshSeconds: Math.round((this.o.tickMs ?? TICK_MS) / 1000), paseoAgentUrl: this.agentUrl, paseoAppUrl: this.appUrl, banner, pageFile: basename(target),
-      marksUrl: this.marksUrl(project, pj), labeled: this.labeledFor(model), canvas: this.canvas.data(ids), stalled: this.stalled,
+      marksUrl: this.marksUrl(project, pj), notifyUrl: this.notifyUrl(project, pj), labeled: this.labeledFor(model), canvas, stalled: this.stalled,
     });
     // first render of a page that has never stored what the captain saw: seed it, so turning this on does not light every page
     // pictures are links to the deck's web server (or, with no server, the bytes inline)
@@ -1217,7 +1250,7 @@ export class Deck {
         if (g === "you") {
           counts.needsYou++;
           if (t.asks.length) for (const a of t.asks.filter((a) => !a.repliedAt)) needsYou.push({ taskId: t.id, askId: a.id, taskTitle: plainTitle(t), text: a.text, since: a.since ?? "" });
-          else needsYou.push({ taskId: t.id, askId: null, taskTitle: plainTitle(t), text: st.stage.endsWith("first mate stalled") ? st.reason : canvasQuestion(canvas.summaries[st.agentId ?? ""]) || t.notes || "Needs your call", since: "" });
+          else needsYou.push({ taskId: t.id, askId: null, taskTitle: plainTitle(t), text: st.stage.endsWith("first mate stalled") ? st.reason : canvasQuestion(canvas, st.agentId) || t.notes || "Needs your call", since: "" });
         } else if (g === "fm") {
           counts.withFirstMate++; // the next move is the first mate's, so it does not count as needing the captain
         } else if (g === "running") {

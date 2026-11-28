@@ -20,6 +20,9 @@ export const deckSettings = defineSettings({
     readMarksPort: z.number().int().default(4398),
     // The tailnet IP (or host) to bind when `tailscale ip -4` finds none. Empty = loopback only.
     readMarksHost: z.string().default(""),
+    // The https address of the read-marks endpoint as the captain's browser reaches it (e.g. behind `tailscale serve`): the
+    // "Notify me" window opens there, because browsers allow notifications only on https. Empty = the plain http address.
+    notifyUrl: z.string().default(""),
     // agent-canvas on this machine: the deck pulls each crew agent's canvas from it (loopback, plugin-side) into the task cards.
     // Live is 6790, the isolated daemon 6791. "off" turns the cards' canvas off.
     canvasUrl: z.string().default("http://127.0.0.1:6790"),

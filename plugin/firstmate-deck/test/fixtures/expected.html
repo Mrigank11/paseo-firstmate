@@ -1,5 +1,5 @@
 <!doctype html>
-<!--fd-sig:db8b6f97bf3c96eb48c4407de7591fe223c4a662-->
+<!--fd-sig:831df43fc895c37b50c69499ffdcfd538bfb4e61-->
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Deck demo project · status</title>
 <style>
@@ -83,8 +83,8 @@ button.opt[aria-pressed=true]{opacity:1;cursor:default;background:var(--you);bor
 /* read marks */
 .lz{margin:4px 0 0}.lz>summary{cursor:pointer;font-size:calc(12px*var(--ts,1));opacity:.7}.lzb:empty{display:none}
 .cnotes{margin:6px 0 2px;font-size:calc(13px*var(--ts,1))}.cnotes>summary{display:inline-block;color:var(--mut);font-size:calc(12.5px*var(--ts,1))}.cnotes>summary::before{width:5px;height:5px}
-.mr,.mra{font:inherit;font-size:calc(12px*var(--ts,1));font-weight:600;color:var(--mut);background:#fff;border:1px solid var(--line);border-radius:999px;padding:2px 10px;cursor:pointer;margin-left:auto;flex:none}
-.mra{margin-left:10px}.mr:hover,.mra:hover{color:var(--fg);border-color:#b8b2a3}
+.mr,.mra,#fd-notify{font:inherit;font-size:calc(12px*var(--ts,1));font-weight:600;color:var(--mut);background:#fff;border:1px solid var(--line);border-radius:999px;padding:2px 10px;cursor:pointer;margin-left:auto;flex:none}
+.mra{margin-left:10px}#fd-notify{margin-left:0}.mr:hover,.mra:hover,#fd-notify:hover{color:var(--fg);border-color:#b8b2a3}
 [hidden]{display:none!important}
 #g-done .mr{display:none}
 /* collapsible hand-written sections */
@@ -334,6 +334,8 @@ pre{overflow-x:auto;background:#fff;border:1px solid var(--line);border-radius:8
     for(var p=t.parentElement;p;p=p.parentElement)if(p.tagName==="DETAILS"&&!p.open)p.open=true;
     if(location.hash==="#"+id)t.scrollIntoView();else location.hash=id;
     setCur(id)}
+  // for the notification window (notify.ts): show one card; false while it is not drawn yet
+  window.__fdGo=function(id){if(!$(id))return false;go(id);return true};
   function onClick(e){var h=e.target.closest&&e.target.closest(".tn-h");
     if(h){if(fly.contains(h)||!window.__fdPref)return;var k=h.closest(".tn-st").getAttribute("data-k");window.__fdPref("tn-c-"+k,shut(k)?0:1);applyShut(fl);applyShut(sl);return}
     var m=e.target.closest&&e.target.closest(".tn-more");

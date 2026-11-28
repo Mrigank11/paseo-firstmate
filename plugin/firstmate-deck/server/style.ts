@@ -79,8 +79,8 @@ button.opt[aria-pressed=true]{opacity:1;cursor:default;background:var(--you);bor
 /* read marks */
 .lz{margin:4px 0 0}.lz>summary{cursor:pointer;font-size:12px;opacity:.7}.lzb:empty{display:none}
 .cnotes{margin:6px 0 2px;font-size:13px}.cnotes>summary{display:inline-block;color:var(--mut);font-size:12.5px}.cnotes>summary::before{width:5px;height:5px}
-.mr,.mra{font:inherit;font-size:12px;font-weight:600;color:var(--mut);background:#fff;border:1px solid var(--line);border-radius:999px;padding:2px 10px;cursor:pointer;margin-left:auto;flex:none}
-.mra{margin-left:10px}.mr:hover,.mra:hover{color:var(--fg);border-color:#b8b2a3}
+.mr,.mra,#fd-notify{font:inherit;font-size:12px;font-weight:600;color:var(--mut);background:#fff;border:1px solid var(--line);border-radius:999px;padding:2px 10px;cursor:pointer;margin-left:auto;flex:none}
+.mra{margin-left:10px}#fd-notify{margin-left:0}.mr:hover,.mra:hover,#fd-notify:hover{color:var(--fg);border-color:#b8b2a3}
 [hidden]{display:none!important}
 #g-done .mr{display:none}
 /* collapsible hand-written sections */
