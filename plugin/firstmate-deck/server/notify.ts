@@ -6,13 +6,16 @@
 // Browsers allow this on https (or localhost) only: the plugin setting `notifyUrl` is the https address of the deck's
 // web server, e.g. behind `tailscale serve`.
 //
-//   GET /<project>/notify          the window (no data in it; its key travels in the address's #fragment)
-//   GET /<project>/needs?k=<key>   {page, tasks:[{id,title,reason}]}; 503 while the deck has not read everything yet
+//   GET /<project>/notify          the window (no task data in it, only the project's title; its key travels in the #fragment)
+//   GET /<project>/needs?k=<key>   {page, partial, tasks:[{id,title,reason,wait}]}; 503 while the deck has not read everything
+//                                  yet; partial = agent-canvas is down, so tasks may be missing (nothing is known to have left)
 import type { CanvasData } from "./canvas-port.ts";
 import type { Stage } from "./stage.ts";
 import type { Task } from "./state.ts";
 
-export type NeedsItem = { id: string; title: string; reason: string };
+/** `wait` names what the task is waiting for (an ask, a canvas question...); "" when two waits cannot be told apart. */
+export type NeedsItem = { id: string; title: string; reason: string; wait: string };
+export type Needs = { partial: boolean; tasks: NeedsItem[] };
 
 const REASON_MAX = 180;
 
@@ -26,17 +29,22 @@ function plain(text: string): string {
 export const canvasQuestion = (canvas: CanvasData | undefined, agentId: string | null): string =>
   canvas?.summaries[agentId ?? ""]?.openAsks.find((a) => !a.pending)?.question ?? "";
 
-function reasonOf(t: Task, s: Stage, canvas?: CanvasData): string {
-  if (s.stage === "Needs you · permission") return "A crew is waiting for your permission answer.";
-  if (s.stage === "Needs you · first mate stalled") return "The first mate stalled on this task.";
-  return plain(t.asks.find((a) => !a.repliedAt)?.text || canvasQuestion(canvas, s.agentId) || t.notes || "Needs your call");
+function why(t: Task, s: Stage, canvas?: CanvasData): { reason: string; wait: string } {
+  // a permission request has no name here, so each entry counts as its own
+  if (s.stage === "Needs you · permission") return { reason: "A crew is waiting for your permission answer.", wait: "" };
+  if (s.stage === "Needs you · first mate stalled") return { reason: "The first mate stalled on this task.", wait: `stalled ${s.fp}` };
+  const ask = t.asks.find((a) => !a.repliedAt);
+  if (ask?.text) return { reason: plain(ask.text), wait: `ask ${ask.id} ${ask.since ?? ""} ${ask.text}` };
+  const question = canvasQuestion(canvas, s.agentId);
+  if (question) return { reason: plain(question), wait: `canvas ${s.agentId} ${question}` };
+  return { reason: plain(t.notes || "Needs your call"), wait: "" };
 }
 
 /** The tasks in the page's "Needs you" group. */
 export function needsList(tasks: readonly Task[], stages: ReadonlyMap<string, Stage>, canvas?: CanvasData): NeedsItem[] {
   return tasks.flatMap((t) => {
     const s = stages.get(t.id);
-    return s?.group === "you" ? [{ id: t.id, title: t.title || t.intent || t.id, reason: reasonOf(t, s, canvas) }] : [];
+    return s?.group === "you" ? [{ id: t.id, title: t.title || t.intent || t.id, ...why(t, s, canvas) }] : [];
   });
 }
 
@@ -44,14 +52,15 @@ const j = (v: unknown) => JSON.stringify(v).replace(/</g, "\\u003c");
 const esc = (s: string) => s.replace(/[&<>"]/g, (c) => `&#${c.charCodeAt(0)};`);
 
 // A task is notified when it enters the list; the list at opening is the starting point, so a reload repeats nothing.
-// One that drops out for under a minute and returns with the same reason is the same wait (a restart, a status blip).
+// One that drops out for under a minute and returns waiting for the same thing is the same wait (a status blip).
+// A partial list adds tasks but removes none; a window that started on one takes the first whole list as part of its start.
 // One window per project watches: the newest takes the lock, an older one closes.
 // A click brings the project page's tab forward (the tab, not the frame: it survives a reload) and asks it for the card.
 const windowScript = (project: string) => `(function(){
   var P=${j(project)},EVERY=5000,GRACE=60000;
   var $=function(i){return document.getElementById(i)},allow=$("allow");
   var key=(/[#&]k=([^&]*)/.exec(location.hash)||[])[1]||"";
-  var held=null,page="",tab=null,pending="",stopped=false;
+  var held=null,whole=false,page="",tab=null,pending="",trouble="",stopped=false;
   try{if(window.opener)tab=window.opener.top}catch(e){}
   function say(t){$("msg").textContent=t}
   function focusMsg(task){return {type:"fm-notify-focus",task:task}}
@@ -62,19 +71,21 @@ const windowScript = (project: string) => `(function(){
   window.addEventListener("message",function(e){if(!pending||!e.data||e.data.type!=="fm-notify-hello"||!e.source)return;
     try{tab=e.source.top}catch(x){}e.source.postMessage(focusMsg(pending),"*");pending=""});
   function fire(t){try{var n=new Notification(t.title,{body:t.reason,tag:"fm:"+P+":"+t.id,renotify:true});
-    n.onclick=function(e){e.preventDefault();n.close();show(t.id)}}catch(e){say("This browser could not show a notification: "+e.message)}}
-  function step(tasks){var now=Date.now(),first=!held,seen=Object.create(null);if(first)held=Object.create(null);
+    n.onclick=function(e){e.preventDefault();n.close();show(t.id)}}catch(e){trouble=" This browser could not show a notification: "+e.message}}
+  function step(tasks,partial){var now=Date.now(),first=!held,starting=first||(!whole&&!partial),seen=Object.create(null);if(first)held=Object.create(null);
     tasks.forEach(function(t){var h=held[t.id];seen[t.id]=1;
-      if(!first&&(!h||(h.left&&(h.reason!==t.reason||now-h.left>=GRACE))))fire(t);
-      held[t.id]={reason:t.reason,left:0}});
+      if(!starting&&(!h||(h.left&&(!t.wait||h.wait!==t.wait||now-h.left>=GRACE))))fire(t);
+      held[t.id]={wait:t.wait,left:0}});
+    if(partial)return;whole=true;
     Object.keys(held).forEach(function(id){if(seen[id])return;var h=held[id];if(!h.left)h.left=now;else if(now-h.left>=GRACE)delete held[id]})}
   function poll(){if(stopped)return;
-    fetch("needs?k="+encodeURIComponent(key),{cache:"no-store"}).then(function(r){
+    fetch("needs?k="+encodeURIComponent(key),{cache:"no-store",signal:AbortSignal.timeout(15000)}).then(function(r){
       if(r.status===403){stopped=true;say("This window is out of date. Close it and press Notify me on the project page again.");return}
       if(r.status===503){say("Waiting for the deck to finish reading the tasks…");return}
       if(!r.ok)throw new Error(String(r.status));
-      return r.json().then(function(b){if(stopped)return;page=b.page||"";step(b.tasks);var n=b.tasks.length;
-        say("Watching. Keep this window open (minimised is fine). "+(n===1?"1 task needs you":n+" tasks need you")+" now.")})
+      return r.json().then(function(b){if(stopped)return;page=b.page||"";step(b.tasks,b.partial);var n=b.tasks.length;
+        say("Watching. Keep this window open (minimised is fine). "+(n===1?"1 task needs you":n+" tasks need you")+" now."+
+          (b.partial?" Crew canvases cannot be read, so their questions are missing.":"")+trouble)})
     }).catch(function(){say("Can't reach the deck. Trying again…")}).then(function(){if(!stopped)setTimeout(poll,EVERY)})}
   function watch(){say("Starting…");
     navigator.locks.request("fm-notify-"+P,{steal:true},function(){poll();return new Promise(function(){})})

@@ -46,7 +46,7 @@ export function resolveConfig(s: SettingsValues, env: Record<string, string | un
     lavishBin: s.lavishBin?.trim() || undefined,
     readMarksPort: Number.isInteger(s.readMarksPort) && (s.readMarksPort as number) >= 0 && (s.readMarksPort as number) < 65536 ? (s.readMarksPort as number) : READ_MARKS_DEFAULT_PORT,
     readMarksHost: s.readMarksHost || "",
-    notifyUrl: (s.notifyUrl ?? "").trim().replace(/\/+$/, "") || undefined,
+    notifyUrl: /^https?:\/\/[^\s/]/i.test((s.notifyUrl ?? "").trim()) ? (s.notifyUrl as string).trim().replace(/\/+$/, "") : undefined,
   };
 }
 

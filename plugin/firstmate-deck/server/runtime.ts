@@ -22,7 +22,7 @@ import { inputsMtimeMs, readSnapshot, writeSnapshot, type Snapshot, type StageRo
 import { ownerOf } from "./gate.ts";
 import { branchMerged } from "./merged.ts";
 import { MarksServer, readUi, updateUi } from "./marks-server.ts";
-import { canvasQuestion, needsList, notifyWindowHtml, type NeedsItem } from "./notify.ts";
+import { canvasQuestion, needsList, notifyWindowHtml, type Needs } from "./notify.ts";
 import { loadLive, loadProject, type ProjectModel, type Task } from "./state.ts";
 import { appendInbox, inboxPath, pageJsonPath, patchPageJson, pidPath, projectDir, readInbox, readPageJson, updateInbox, writeAtomic, type InboxEntry, type PageJson } from "./store.ts";
 
@@ -298,6 +298,7 @@ export class Deck {
     }
     if (rootChanged) {
       this.sigs.clear();
+      this.needs.clear();
       this.stalePollsChecked.clear();
       this.hydrated.clear();
       this.log(next.root ? `first mate root: ${next.root}` : "no firstmateRoot configured (settings or FIRSTMATE_ROOT); idle");
@@ -359,7 +360,7 @@ export class Deck {
   }
 
   /** Each project's Needs-you list as of its last render; null while that render could not see everything. */
-  private needs = new Map<string, NeedsItem[] | null>();
+  private needs = new Map<string, Needs | null>();
 
   /** `GET /<project>/notify` (the notification window) and `/<project>/needs?k=` (what it reads). */
   private notifyRoute(url: URL): { code: number; type: string; body: string } | null {
@@ -372,14 +373,19 @@ export class Deck {
     const pj = readPageJson(pageJsonPath(this.cfg.root, project));
     const key = Buffer.from(pj.notifyKey ?? ""), given = Buffer.from(url.searchParams.get("k") ?? "");
     if (!key.length || key.length !== given.length || !timingSafeEqual(key, given)) return json(403, { error: "bad key" });
-    const tasks = pj.session === "stopped" ? null : this.needs.get(project);
-    return tasks ? json(200, { page: pj.lavishUrl, tasks }) : json(503, { error: "not ready" });
+    const needs = pj.session === "stopped" ? null : this.needs.get(project);
+    return needs ? json(200, { page: pj.lavishUrl, ...needs }) : json(503, { error: "not ready" });
   }
 
-  /** Could this render see every task's crew? A list made before that would show tasks leaving that never left. */
-  private sawAll(ids: string[]): boolean {
+  /**
+   * Has this render read enough to say who needs the captain? Not before the task files and the crews' labels are in, nor
+   * while a canvas answer is still on its way: such a list would show tasks leaving that never left. With agent-canvas down
+   * there is no answer to wait for, and the list goes out marked partial.
+   */
+  private sawAll(project: string, ids: string[]): boolean {
+    if (this.loadErrors.has(project) && !this.lastGood.has(project)) return false;
     if ((this.ports.sdkPort() || this.o.agentsDir) && !this.labeledKey) return false;
-    return !this.canvas.configured || !ids.length || (this.canvas.status === "ok" && this.canvas.covers(ids));
+    return !this.canvas.configured || !ids.length || this.canvas.status === "down" || (this.canvas.status === "ok" && this.canvas.covers(ids));
   }
 
   private async detectWebBase(): Promise<void> {
@@ -876,7 +882,8 @@ export class Deck {
     const now = new Date();
     const banner = this.bannerFor(project, pj.session);
     const canvas = this.canvas.data(ids);
-    this.needs.set(project, this.sawAll(ids) ? needsList(model.tasks, stagesOf(model, views, { now, labeled: this.labeledFor(model), canvas, stalled: this.stalled }), canvas) : null);
+    const stages = () => stagesOf(model, views, { now, labeled: this.labeledFor(model), canvas, stalled: this.stalled });
+    this.needs.set(project, this.sawAll(project, ids) ? { partial: canvas.status === "down" && ids.length > 0, tasks: needsList(model.tasks, stages(), canvas) } : null);
     const r = renderProject(model, views, {
       now, tickSeconds: 1, refreshSeconds: Math.round((this.o.tickMs ?? TICK_MS) / 1000), paseoAgentUrl: this.agentUrl, paseoAppUrl: this.appUrl, banner, pageFile: basename(target),
       marksUrl: this.marksUrl(project, pj), notifyUrl: this.notifyUrl(project, pj), labeled: this.labeledFor(model), canvas, stalled: this.stalled,

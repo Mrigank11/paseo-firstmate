@@ -1,8 +1,11 @@
 // "Notify me": the browser notifications for tasks that enter Needs you. The flow runs against the real deck and its real
 // web server; the notification window's script is the one that server hands out, run in a bare browser stand-in (the
 // Notification API, locks and window handles are the browser's, so those are faked).
+// It must never reach a real Lavish: the page session is not "open" (nothing polls), and the binary, port and state dir
+// are dead ends. A deck that finds a newer lavish-axi would otherwise replace the captain's running server.
 process.env.TZ = "UTC";
-process.env.FM_DECK_POLL_MODE ??= "cli";
+process.env.LAVISH_AXI_BIN = "/nonexistent/lavish-axi.mjs";
+process.env.LAVISH_AXI_PORT = "1";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
@@ -12,6 +15,7 @@ import vm from "node:vm";
 import { Deck, type DeckOpts } from "../server/runtime.ts";
 import { readPageJson } from "../server/store.ts";
 import { notifyPageSide } from "../server/notify.ts";
+import { computeStage } from "../server/stage.ts";
 import { resolveConfig } from "../server/config.ts";
 import { CliPort } from "../server/paseo-cli.ts";
 import { PortSelector } from "../server/paseo-port.ts";
@@ -28,31 +32,64 @@ async function until(cond: () => boolean, ms = 3000) {
 type T = { id: string; state?: string; title?: string; asks?: { id: string; text: string }[] };
 const ask = (id: string, text: string) => ({ id, text, since: "2026-11-28T10:00:00Z" });
 
-async function rig(tasks: T[], o: { cfg?: Record<string, unknown>; deck?: Partial<DeckOpts>; crew?: string[] } = {}) {
+async function rig(tasks: T[], o: { cfg?: Record<string, unknown>; deck?: Partial<DeckOpts>; crew?: string[]; brokenFleet?: boolean } = {}) {
   const root = mkdtempSync(join(tmpdir(), "deck-nt-"));
   const pdir = join(root, "state", "projects", "demo");
   mkdirSync(join(pdir, "sections"), { recursive: true });
   writeFileSync(join(pdir, "project.json"), JSON.stringify({ title: "Demo <app>", sections: [] }));
-  writeFileSync(join(pdir, "page.json"), JSON.stringify({ lavishUrl: "http://127.0.0.1:4999/session/abc", session: "open" }));
+  writeFileSync(join(pdir, "page.json"), JSON.stringify({ lavishUrl: "http://127.0.0.1:1/session/abc", session: "unknown" }));
   const fleet = (ts: T[]) => writeFileSync(join(root, "state", "fleet.json"), JSON.stringify({ version: 2, tasks: ts.map((t) => ({ intent: t.id, project: "demo", state: "active", ...t })) }));
-  fleet(tasks);
+  if (o.brokenFleet) writeFileSync(join(root, "state", "fleet.json"), ""); else fleet(tasks);
   const fw = new FakeWorld().add({ id: "fm-1", status: "idle", labels: { firstmate: "true" } });
   for (const task of o.crew ?? []) fw.add({ id: `ag-${task}`, status: "idle", createdAt: "2026-11-28T10:00:00Z", labels: { "fm.task": task, "fm.project": "demo" } });
   const exec = async (args: string[]) => (args[0] === "status" ? JSON.stringify({ listen: "127.0.0.1:1", serverId: "srv" }) : args[0] === "ls" ? "[]" : "");
   const ports = new PortSelector(new CliPort(exec));
   ports.capture({ paseo: fakePaseo(fw) }, "test");
   const port = 42000 + Math.floor(Math.random() * 1500);
-  const deck = new Deck({ exec, ports, tailnetIp: async () => "", readConfig: async () => ({ root, firstmateLabel: "firstmate=true", readMarksPort: port, canvasUrl: "", ...o.cfg }) as any, ...o.deck });
-  await deck.configure();
-  await deck.render("demo");
+  const cfg = { root, firstmateLabel: "firstmate=true", readMarksPort: port, canvasUrl: "", lavishBin: "/nonexistent/lavish-axi.mjs", lavishPort: "1", lavishStateDir: join(root, "lavish"), ...o.cfg };
+  const start = async () => {
+    const d = new Deck({ exec, ports, tailnetIp: async () => "", readConfig: async () => cfg as any, ...o.deck });
+    await d.configure();
+    await d.render("demo");
+    return d;
+  };
+  let deck = await start();
   const base = `http://127.0.0.1:${port}`;
   const key = () => (readPageJson(join(pdir, "page.json")) as any).notifyKey as string;
-  return { root, pdir, deck, base, key, page: () => readFileSync(join(pdir, "page.html"), "utf8"),
-    async set(ts: T[]) { fleet(ts); await deck.render("demo"); } };
+  const needs = async () => { const res = await fetch(`${base}/demo/needs?k=${key()}`); return { status: res.status, body: (await res.json()) as any }; };
+  return { root, pdir, fw, base, key, needs, page: () => readFileSync(join(pdir, "page.html"), "utf8"),
+    get deck() { return deck; },
+    stop() { deck.stop(); },
+    async restart() { deck.stop(); await sleep(50); deck = await start(); },
+    async set(ts: T[]) { fleet(ts); await deck.render("demo"); },
+    /** Paseo says something about a crew agent changed. */
+    async agentMoved(id: string) { deck.onAgentEvent(id); await deck.render("demo"); },
+  };
+}
+
+/** Wait for the needs list to reach a state (canvas polls and re-renders are the deck's own business). */
+async function needsUntil(r: { needs: () => Promise<{ status: number; body: any }> }, ok: (n: { status: number; body: any }) => boolean) {
+  const t0 = Date.now();
+  let n = await r.needs();
+  while (!ok(n)) { if (Date.now() - t0 > 4000) throw new Error(`needs never matched: ${JSON.stringify(n)}`); await sleep(30); n = await r.needs(); }
+  return n.body;
+}
+
+/** agent-canvas as the deck sees it: unanswered, failing, or answering with these open questions per agent. */
+function fakeCanvas() {
+  const c = { mode: "ok" as "hang" | "down" | "ok", asks: {} as Record<string, string>, rev: 0 };
+  const fetch = (async (url: string) => {
+    if (c.mode === "hang") return new Promise(() => {});
+    if (c.mode === "down") throw new Error("down");
+    const agents = Object.entries(c.asks).map(([agentId, question]) => ({ agentId, rev: c.rev, archived: false, title: "", verdict: { label: "Needs you", flags: [], needsYou: true }, bluf: "",
+      steps: { done: 0, total: 0, current: null }, openAsks: [{ id: "q1", question, options: [], blocking: true }], updatedAt: null, runState: "idle", url: "", agentUrl: null, auto: false }));
+    return { ok: true, status: 200, text: async () => "", json: async () => ({ agents }), arrayBuffer: async () => new ArrayBuffer(0) };
+  }) as any;
+  return { c, opts: { cfg: { canvasUrl: "http://canvas.invalid" }, deck: { canvasFetch: fetch, canvasPollMs: 20 } } };
 }
 
 /** The notification window: the served page's script in a stand-in browser. */
-type Opts = { secure?: boolean; permission?: string; answer?: string; opener?: any; locks?: ReturnType<typeof makeLocks>; clock?: { now: number } };
+type Opts = { secure?: boolean; permission?: string; answer?: string; broken?: boolean; opener?: any; locks?: ReturnType<typeof makeLocks>; clock?: { now: number } };
 function makeLocks() {
   const held = new Map<string, () => void>();
   return { request(name: string, o: { steal?: boolean }, cb: () => Promise<unknown>) {
@@ -73,13 +110,14 @@ async function openWindow(r: { base: string; key: () => string }, o: Opts = {}, 
   const el = (id: string) => { if (!els.has(id)) els.set(id, { id, hidden: new RegExp(`id="${id}"[^>]*\\shidden`).test(html), textContent: "", onclick: null }); return els.get(id); };
   const fired: any[] = [], asked: number[] = [], opened: string[] = [], listeners: Record<string, ((e: any) => void)[]> = {};
   const timers: (() => void)[] = [];
+  const signals: unknown[] = [];
   let fetches = 0, closed = false, selfFocus = 0;
   class Notification {
     static permission = o.permission ?? "granted";
     static async requestPermission() { asked.push(1); return (Notification.permission = o.answer ?? "granted"); }
     onclick: ((e: any) => void) | null = null;
     title: string; options: any;
-    constructor(title: string, options: any) { this.title = title; this.options = options; fired.push(this); }
+    constructor(title: string, options: any) { if (o.broken) throw new TypeError("Illegal constructor"); this.title = title; this.options = options; fired.push(this); }
     close() {}
   }
   const window: any = {
@@ -93,15 +131,16 @@ async function openWindow(r: { base: string; key: () => string }, o: Opts = {}, 
     document: { getElementById: el, title: "" },
     location: { hash, host: "box.example:4398", hostname: "box.example" },
     navigator: { locks: o.locks ?? makeLocks() },
-    fetch: async (u: string) => { try { return await fetch(new URL(u, `${r.base}/demo/notify`)); } finally { fetches++; } },
+    fetch: async (u: string, init?: RequestInit) => { signals.push(init?.signal); try { return await fetch(new URL(u, `${r.base}/demo/notify`), init); } finally { fetches++; } },
     setTimeout: (fn: () => void) => { timers.push(fn); return timers.length; }, clearTimeout: () => {},
     Date: { now: () => clock.now },
+    AbortSignal,
   });
   vm.runInContext(src, ctx);
   /** Let the poll in flight finish: it ends by scheduling the next one. */
   const settled = () => until(() => timers.length > 0);
   return {
-    html, fired, asked, opened, listeners, clock, el, window,
+    html, fired, asked, opened, signals, listeners, clock, el, window,
     get closed() { return closed; }, get selfFocus() { return selfFocus; }, get fetches() { return fetches; }, get timers() { return timers.length; },
     settled,
     /** Run the scheduled poll without waiting for a next one (a stopped window schedules none). */
@@ -117,46 +156,79 @@ test("the needs-you list: only tasks in Needs you, with title and the reason; be
   try {
     const ok = await fetch(`${r.base}/demo/needs?k=${r.key()}`);
     assert.equal(ok.status, 200);
-    assert.deepEqual(await ok.json(), { page: "http://127.0.0.1:4999/session/abc", tasks: [{ id: "old", title: "Already waiting", reason: "Old question?" }] });
+    const body = (await ok.json()) as any;
+    assert.equal(body.page, "http://127.0.0.1:1/session/abc");
+    assert.equal(body.partial, false);
+    assert.deepEqual(body.tasks.map((t: any) => [t.id, t.title, t.reason]), [["old", "Already waiting", "Old question?"]]);
     assert.equal(ok.headers.get("access-control-allow-origin"), null, "no other site may read task titles");
     assert.equal((await fetch(`${r.base}/demo/needs?k=wrong`)).status, 403);
     assert.equal((await fetch(`${r.base}/demo/needs`)).status, 403);
     assert.equal((await fetch(`${r.base}/nope/needs?k=${r.key()}`)).status, 404);
     assert.equal((await fetch(`${r.base}/nope/notify`)).status, 404);
-  } finally { r.deck.stop(); }
+  } finally { r.stop(); }
 });
 
-test("until a crew's canvas has been read the list is not ready: a half-read list would look like tasks leaving", async () => {
-  let up = false;
-  const canvasFetch = (async (url: string) => {
-    if (!up) throw new Error("down");
-    const body = url.includes("/summary") ? { agents: [] } : {};
-    return { ok: true, status: 200, text: async () => "", json: async () => body, arrayBuffer: async () => new ArrayBuffer(0) };
-  }) as any;
-  const r = await rig([WAITING, { id: "crewed" }], { crew: ["crewed"], cfg: { canvasUrl: "http://canvas.invalid" }, deck: { canvasFetch, canvasPollMs: 20 } });
+test("until a crew's canvas has been read the list is not ready; with agent-canvas down it is served as partial", async () => {
+  const { c, opts } = fakeCanvas();
+  c.mode = "hang";
+  const hung = await rig([WAITING, { id: "crewed" }], { ...opts, crew: ["crewed"] });
+  try { assert.equal((await hung.needs()).status, 503); } finally { hung.stop(); }
+  c.mode = "down";
+  const r = await rig([WAITING, { id: "crewed" }], { ...opts, crew: ["crewed"] });
   try {
-    const url = () => `${r.base}/demo/needs?k=${r.key()}`;
-    assert.equal((await fetch(url())).status, 503);
-    up = true;
-    const t0 = Date.now();
-    let status = 503;
-    while (status !== 200 && Date.now() - t0 < 4000) { await sleep(40); status = (await fetch(url())).status; }
-    assert.equal(status, 200);
-  } finally { r.deck.stop(); }
+    const down = await needsUntil(r, (n) => n.status === 200);
+    assert.deepEqual([down.partial, down.tasks.map((t: any) => t.id)], [true, ["old"]]);
+    c.mode = "ok";
+    await needsUntil(r, (n) => n.status === 200 && n.body.partial === false);
+  } finally { r.stop(); }
+});
+
+test("an unreadable fleet.json at start-up is not an empty list", async () => {
+  const r = await rig([], { brokenFleet: true });
+  try {
+    assert.equal((await r.needs()).status, 503);
+    await r.set([WAITING]);
+    assert.deepEqual((await r.needs()).body.tasks.map((t: any) => t.id), ["old"]);
+  } finally { r.stop(); }
+});
+
+test("the reason says why: a permission request, a canvas question, a stalled first mate", async () => {
+  const { c, opts } = fakeCanvas();
+  c.asks = { "ag-drawn": "Ship **now** or wait?" };
+  const r = await rig([{ id: "perm" }, { id: "drawn" }], { ...opts, crew: ["perm", "drawn"] });
+  try {
+    r.fw.agents.get("ag-perm")!.pendingPermissions = [{ id: "p1" }];
+    await r.agentMoved("ag-perm");
+    const body = await needsUntil(r, (n) => n.status === 200 && n.body.tasks.length === 2);
+    const why = Object.fromEntries(body.tasks.map((t: any) => [t.id, t.reason]));
+    assert.equal(why.perm, "A crew is waiting for your permission answer.");
+    assert.equal(why.drawn, "Ship now or wait?");
+  } finally { r.stop(); }
+  const s = await rig([{ id: "review" }], { crew: ["review"] });
+  try {
+    s.fw.agents.get("ag-review")!.status = "error";
+    await s.agentMoved("ag-review");
+    await needsUntil(s, (n) => n.status === 200 && n.body.tasks.length === 0);
+    // the enforcer judges the task in the situation it is in: an errored crew the first mate has not handled
+    const { fp } = computeStage({ state: "active", asks: [] }, [{ id: "ag-review", status: "error", archived: false, pendingPermissions: 0 }], new Date());
+    s.deck.setEnforcement([], { review: { fp, why: "ignored twice" } });
+    const body = await needsUntil(s, (n) => n.status === 200 && n.body.tasks.length === 1);
+    assert.equal(body.tasks[0].reason, "The first mate stalled on this task.");
+  } finally { s.stop(); }
 });
 
 test("the project page offers Notify me only with the deck's web server on, at its address or the https one set for it", async () => {
   const off = await rig([WAITING], { cfg: { readMarksPort: 0 } });
-  try { assert.doesNotMatch(off.page(), /id="fd-notify"|\/demo\/notify/); } finally { off.deck.stop(); }
+  try { assert.doesNotMatch(off.page(), /id="fd-notify"|\/demo\/notify/); } finally { off.stop(); }
   const on = await rig([WAITING]);
   try {
     assert.match(on.page(), /<button[^>]*id="fd-notify"[^>]*data-lavish-action[^>]*>Notify me<\/button>/);
     assert.ok(on.page().includes(`${on.base}/demo/notify#k=${on.key()}`));
-  } finally { on.deck.stop(); }
+  } finally { on.stop(); }
   const tls = await rig([WAITING], { cfg: { notifyUrl: "https://box.example:8443" } });
-  try { assert.ok(tls.page().includes(`https://box.example:8443/demo/notify#k=${tls.key()}`)); } finally { tls.deck.stop(); }
+  try { assert.ok(tls.page().includes(`https://box.example:8443/demo/notify#k=${tls.key()}`)); } finally { tls.stop(); }
   assert.equal(resolveConfig({ notifyUrl: " https://box.example:8443/ " }, {}).notifyUrl, "https://box.example:8443");
-  assert.equal(resolveConfig({ notifyUrl: "" }, {}).notifyUrl, undefined);
+  for (const bad of ["", "box.example:8443", "box.example", "ftp://box.example"]) assert.equal(resolveConfig({ notifyUrl: bad }, {}).notifyUrl, undefined, bad);
 });
 
 test("a task entering Needs you fires one notification with its title and reason; waiting tasks, polls and reloads fire none", async () => {
@@ -180,7 +252,7 @@ test("a task entering Needs you fires one notification with its title and reason
     await again.next();
     await again.next();
     assert.equal(again.fired.length, 0, "a reload repeats nothing");
-  } finally { r.deck.stop(); }
+  } finally { r.stop(); }
 });
 
 test("leaving Needs you and entering it again fires again; a short blip with the same reason does not", async () => {
@@ -202,20 +274,83 @@ test("leaving Needs you and entering it again fires again; a short blip with the
     await r.set([{ ...asking, asks: [ask("a2", "And the region?")] }]); await w.next();
     assert.equal(w.fired.length, 3, "a different question is news however soon");
     assert.equal(w.fired[2].options.body, "And the region?");
-  } finally { r.deck.stop(); }
+  } finally { r.stop(); }
 });
 
-test("an unreachable or not-ready deck changes nothing: what was waiting does not fire when it is back", async () => {
+test("an unreachable deck or one that was restarted changes nothing: what was waiting does not fire when it is back", async () => {
   const r = await rig([WAITING]);
   try {
     const w = await openWindow(r);
     await w.next();
-    r.deck.stop(); // the web server is gone
+    r.stop(); // the web server is gone
     await w.next(); await w.next(120_000);
     assert.match(w.el("msg").textContent, /Can.t reach/);
+    await r.restart();
+    await w.next(); await w.next();
+    assert.match(w.el("msg").textContent, /Watching/);
     assert.equal(w.fired.length, 0);
-    assert.ok(w.timers > 0, "keeps trying");
-  } finally { r.deck.stop(); }
+    assert.ok(w.signals.every((x) => x), "every request gives up after a while");
+  } finally { r.stop(); }
+});
+
+test("a not-ready answer (the page is stopped) keeps what the window knows", async () => {
+  const r = await rig([WAITING]);
+  try {
+    const w = await openWindow(r);
+    await w.next();
+    const pj = join(r.pdir, "page.json"), open = readFileSync(pj, "utf8");
+    writeFileSync(pj, JSON.stringify({ ...JSON.parse(open), session: "stopped" }));
+    await w.next(); await w.next(120_000);
+    assert.match(w.el("msg").textContent, /Waiting for the deck/);
+    writeFileSync(pj, open);
+    await w.next(); await w.next();
+    assert.equal(w.fired.length, 0);
+  } finally { r.stop(); }
+});
+
+test("with agent-canvas down new asks still notify, and canvas questions that were waiting stay quiet when it returns", async () => {
+  const { c, opts } = fakeCanvas();
+  c.mode = "down";
+  c.asks = { "ag-drawn": "Was waiting all along?" };
+  const tasks: T[] = [{ id: "drawn" }, { id: "pick", state: "queued" }];
+  const r = await rig(tasks, { ...opts, crew: ["drawn"] });
+  try {
+    await needsUntil(r, (n) => n.status === 200);
+    const w = await openWindow(r);
+    await w.next();
+    await r.set([tasks[0], { id: "pick", asks: [ask("a1", "Which?")] }]);
+    await w.next();
+    assert.deepEqual(w.fired.map((n) => n.options.tag), ["fm:demo:pick"]);
+    c.mode = "ok";
+    await needsUntil(r, (n) => n.status === 200 && n.body.partial === false && n.body.tasks.length === 2);
+    await w.next(); await w.next();
+    assert.equal(w.fired.length, 1);
+  } finally { r.stop(); }
+});
+
+test("a second permission request is a new wait however soon it comes", async () => {
+  const r = await rig([{ id: "perm", title: "Perm" }], { crew: ["perm"] });
+  const permission = async (n: number) => { r.fw.agents.get("ag-perm")!.pendingPermissions = Array.from({ length: n }, () => ({ id: "p" })); r.fw.agents.get("ag-perm")!.status = "running"; await r.agentMoved("ag-perm"); };
+  try {
+    await permission(0);
+    const w = await openWindow(r);
+    await w.next();
+    await permission(1); await w.next();
+    await permission(0); await w.next();
+    await permission(1); await w.next();
+    assert.equal(w.fired.length, 2);
+  } finally { r.stop(); }
+});
+
+test("a browser that cannot show notifications says so and keeps saying so", async () => {
+  const r = await rig([{ id: "pick", state: "queued" }]);
+  try {
+    const w = await openWindow(r, { broken: true });
+    await w.next();
+    await r.set([{ id: "pick", asks: [ask("a1", "Which?")] }]);
+    await w.next(); await w.next();
+    assert.match(w.el("msg").textContent, /could not show a notification/);
+  } finally { r.stop(); }
 });
 
 test("opt-in: nothing is asked or watched until the button is pressed, and the browser is asked once", async () => {
@@ -232,7 +367,7 @@ test("opt-in: nothing is asked or watched until the button is pressed, and the b
     assert.equal(w.el("allow").hidden, true);
     assert.match(w.el("msg").textContent, /Watching/);
     assert.equal(w.fired.length, 0);
-  } finally { r.deck.stop(); }
+  } finally { r.stop(); }
 });
 
 test("blocked, insecure or out-of-date: the window says what to do and never watches", async () => {
@@ -252,7 +387,7 @@ test("blocked, insecure or out-of-date: the window says what to do and never wat
     await sleep(20);
     assert.match(stale.el("msg").textContent, /Notify me/);
     assert.equal(stale.timers, 0);
-  } finally { r.deck.stop(); }
+  } finally { r.stop(); }
 });
 
 test("a newer window takes over: the older one stops, so nothing is notified twice", async () => {
@@ -271,7 +406,7 @@ test("a newer window takes over: the older one stops, so nothing is notified twi
     assert.equal(first.fetches, before, "it no longer asks");
     assert.equal(second.fired.length, 1);
     assert.equal(first.fired.length, 0);
-  } finally { r.deck.stop(); }
+  } finally { r.stop(); }
 });
 
 /** The project page's tab as the notification window holds it: the top window and the frames in it. */
@@ -295,7 +430,7 @@ test("clicking a notification brings the page's tab forward and asks it to show 
     w.fired[0].onclick({ preventDefault() {} });
     assert.deepEqual(t.log, [["focus"], ["post", { type: "fm-notify-focus", task: "pick" }]]);
     assert.deepEqual(w.opened, []);
-  } finally { r.deck.stop(); }
+  } finally { r.stop(); }
 });
 
 test("clicking a notification after the tab was closed opens the page and shows the card once it says hello", async () => {
@@ -308,14 +443,14 @@ test("clicking a notification after the tab was closed opens the page and shows 
     await w.next();
     t.top.closed = true;
     w.fired[0].onclick({ preventDefault() {} });
-    assert.deepEqual(w.opened, ["http://127.0.0.1:4999/session/abc"]);
+    assert.deepEqual(w.opened, ["http://127.0.0.1:1/session/abc"]);
     const fresh = tab();
     const source = { top: fresh.top, postMessage: (m: any) => fresh.log.push(["post", plain(m)]) };
     for (const fn of w.listeners.message) fn({ data: { type: "fm-notify-hello" }, source });
     assert.deepEqual(fresh.log, [["post", { type: "fm-notify-focus", task: "pick" }]]);
     for (const fn of w.listeners.message) fn({ data: { type: "fm-notify-hello" }, source });
     assert.equal(fresh.log.length, 1, "asked once");
-  } finally { r.deck.stop(); }
+  } finally { r.stop(); }
 });
 
 /** The project page's side: its script in a stand-in frame. */
