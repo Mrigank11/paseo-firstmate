@@ -237,7 +237,10 @@ async function answer(root: string, args: string[]): Promise<void> {
   let body: any = {};
   try { body = JSON.parse(text); } catch {}
   if (!r.ok || body?.ok === false) die(`agent-canvas refused (${r.status}): ${body?.error ?? text.slice(0, 200)}`);
-  console.log(`${decline !== undefined ? "declined" : "delivered"}: ${task} (agent ${agentId}) ask ${askId}${decline !== undefined ? `: ${decline}` : ` = ${value}`}`);
+  const what = `${task} (agent ${agentId}) ask ${askId}`;
+  const said = decline !== undefined ? `declined: ${decline}` : `= ${value}`;
+  if (body?.queued) return console.log(`queued: ${what} ${said}\nNot delivered yet: the crew's machine cannot take it now. agent-canvas keeps it and sends it when it can, so do not send it again.`);
+  console.log(decline !== undefined ? `declined: ${what}: ${decline}` : `delivered: ${what} ${said}`);
 }
 
 async function snapshot(root: string, args: string[]): Promise<void> {

@@ -32,6 +32,8 @@ async function rig() {
   const keyFile = join(root, "relay.key");
   writeFileSync(keyFile, `${KEY}\n`);
   const hits: { path: string; key?: string; body?: any }[] = [];
+  /** `queued`: the crew's machine cannot take the message yet. */
+  const state = { queued: false };
   const server = createServer((req, res) => {
     let raw = "";
     req.on("data", (d) => (raw += d));
@@ -39,7 +41,7 @@ async function rig() {
       const u = new URL(req.url ?? "/", "http://x");
       hits.push({ path: u.pathname + u.search, key: req.headers["x-canvas-key"] as string | undefined, body: raw ? JSON.parse(raw) : undefined });
       const send = (code: number, type: string, body: string) => { res.writeHead(code, { "content-type": type }); res.end(body); };
-      if (u.pathname === "/api/fm/deliver") return req.headers["x-canvas-key"] === KEY ? send(200, "application/json", JSON.stringify({ ok: true })) : send(403, "application/json", JSON.stringify({ ok: false, error: "wrong key" }));
+      if (u.pathname === "/api/fm/deliver") return req.headers["x-canvas-key"] === KEY ? send(200, "application/json", JSON.stringify({ ok: true, ...(state.queued ? { queued: true } : {}) })) : send(403, "application/json", JSON.stringify({ ok: false, error: "wrong key" }));
       if (u.pathname === "/api/fm/css") return send(200, "text/css", ".acv .blk{color:red}");
       if (u.pathname === "/api/fm/card/ag-1") return send(200, "text/html", `<div class="blk">CANVAS ag-1</div><img src="/asset/${"d".repeat(32)}" alt="shot"><img src="http://127.0.0.1:6790/asset/${"e".repeat(32)}" alt="tag">`);
       if (u.pathname === `/asset/${"d".repeat(32)}` || u.pathname === `/asset/${"e".repeat(32)}`) { res.writeHead(200, { "content-type": "image/png" }); return void res.end(Buffer.from("PNGBYTES")); }
@@ -50,7 +52,7 @@ async function rig() {
   await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
   const url = `http://127.0.0.1:${(server.address() as { port: number }).port}`;
   const env = { STAGE_AGENTS_JSON: agents, AGENT_CANVAS_URL: url, AGENT_CANVAS_KEY_FILE: keyFile };
-  return { root, env, hits, keyFile, stop: () => { server.closeAllConnections?.(); server.close(); } };
+  return { root, env, hits, keyFile, state, stop: () => { server.closeAllConnections?.(); server.close(); } };
 }
 
 test("canvas-snippet: the agent-canvas recipe for the configured port, the shape's starting canvas, the ask contract", async () => {
@@ -114,6 +116,15 @@ test("canvas-answer: delivers with the relay key to the task's current agent; --
   const no = await run(["answer", r.root, "t-one", "db", "--decline", "out of scope"], r.env);
   assert.match(no.out, /declined: .*out of scope/);
   assert.deepEqual(r.hits.filter((h) => h.path === "/api/fm/deliver").at(-1)?.body, { agentId: "ag-1", askId: "db", decline: "out of scope" });
+  // a crew on a machine that is away: agent-canvas keeps the answer, and this must not read as delivered
+  r.state.queued = true;
+  const later = await run(["answer", r.root, "t-one", "db", "pg"], r.env);
+  assert.equal(later.code, 0, later.err);
+  assert.match(later.out, /^queued: t-one \(agent ag-1\) ask db = pg\n.*not delivered yet.*do not send it again/i);
+  assert.doesNotMatch(later.out, /^delivered/m);
+  const laterNo = await run(["answer", r.root, "t-one", "db", "--decline", "out of scope"], r.env);
+  assert.match(laterNo.out, /^queued: .*declined: out of scope\n.*not delivered yet/i);
+  r.state.queued = false;
   writeFileSync(r.keyFile, "w".repeat(40));
   const bad = await run(["answer", r.root, "t-one", "db", "pg"], r.env);
   assert.notEqual(bad.code, 0);
