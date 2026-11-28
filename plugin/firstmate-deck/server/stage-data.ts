@@ -18,6 +18,8 @@ import { canvasInput } from "./canvas-view.ts";
 import type { FmSummary } from "./canvas-port.ts";
 import { freshSnapshot, type StageRow } from "./stages-file.ts";
 import { readRemote } from "./host-cli.ts";
+import { daemonServerId } from "./ownership.ts";
+import { readRemoteStore, remoteRecords } from "./remote-store.ts";
 import { makeExec } from "./paseo-cli.ts";
 
 export type Rec = { id: string; task: string; status: string; archived: boolean; createdAt: string | null; lastActivityAt: string | null; pending: number; labels?: Record<string, string>; relayGone?: string; host?: string; serverId?: string; hostOffline?: HostOffline };
@@ -89,6 +91,18 @@ async function withRemote(root: string, taskIds: string[], local: ReturnType<typ
 /** Every agent carrying an fm.task label, on this daemon, and ours (ownership.ts) on every other host. `taskIds`: the tasks being asked about. */
 export async function labelledAgents(root: string, taskIds: string[]): Promise<Rec[]> {
   return fakeAgents() ?? withRemote(root, taskIds, localAgents(taskIds));
+}
+
+/**
+ * `labelledAgents` without a call to another host: their crews as last seen (the plugin keeps that current). One live read of the
+ * other hosts takes seconds, and longer when one is asleep, while `bin/fleet` allows a canvas snapshot 5 s.
+ */
+export function rememberedAgents(root: string, taskIds: string[]): Rec[] {
+  const fake = fakeAgents();
+  if (fake) return fake;
+  const local = localAgents(taskIds).recs;
+  const mine = new Set(local.map((r) => r.id));
+  return [...local, ...remoteRecords(readRemoteStore(root, daemonServerId())).filter((r) => !mine.has(r.id))];
 }
 
 /** What `--host` accepts for our agent `id` on another host that is online; "" for any other agent. */

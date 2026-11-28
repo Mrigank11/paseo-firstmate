@@ -10,7 +10,7 @@ import { execFileSync } from "node:child_process";
 import { mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { canvasUrl, hostTarget, labelledAgents, type Rec } from "./stage-data.ts";
+import { canvasUrl, hostTarget, labelledAgents, rememberedAgents, type Rec } from "./stage-data.ts";
 import { projectClaimedId } from "./claims.ts";
 import { loadAllLive } from "./state.ts";
 import { currentAgent } from "./stage.ts";
@@ -196,7 +196,10 @@ If the write is refused, the error names what is missing or out of order: fix ex
 /** The task's current agent (newest live one, else the newest archived), or --agent. */
 async function agentOf(root: string, task: string, override?: string): Promise<string> {
   if (override) return override;
-  const mine = (await labelledAgents(root, [task])).filter((r) => r.task === task);
+  const of = (recs: Rec[]) => recs.filter((r) => r.task === task);
+  // the other hosts are asked only about a task no crew is known for
+  let mine = of(rememberedAgents(root, [task]));
+  if (!mine.length) mine = of(await labelledAgents(root, [task]));
   const cur = currentAgent(mine.map((r) => ({ ...r, id: r.id })));
   if (!cur) die(`no agent carries fm.task=${task}`);
   return cur.id;

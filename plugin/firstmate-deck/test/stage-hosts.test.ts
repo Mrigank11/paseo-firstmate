@@ -3,6 +3,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
+import { createServer } from "node:http";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -195,4 +196,55 @@ test("page status: drift counts a crew running on another host", async () => {
   const res = await r.run("page-tool.ts", ["status", r.root]);
   assert.equal(res.code, 0, res.err);
   assert.match(res.err, /drift: lh \(demo\) is Running/);
+});
+
+// ---------- the board commands: `bin/fleet finish` allows the snapshot 5 s, so they must not wait on another host ----------
+
+/** A stand-in agent-canvas that has a card for every agent and takes every answer. */
+async function board(r: ReturnType<typeof rig>) {
+  const keyFile = join(r.dir, "relay.key");
+  writeFileSync(keyFile, `${"k".repeat(40)}\n`);
+  const server = createServer((req, res) => { req.resume(); req.on("end", () => { res.writeHead(200, { "content-type": "application/json" }); res.end(req.url!.startsWith("/api/fm/deliver") ? '{"ok":true}' : "card"); }); });
+  await new Promise<void>((done) => server.listen(0, "127.0.0.1", done));
+  const env = { AGENT_CANVAS_URL: `http://127.0.0.1:${(server.address() as { port: number }).port}`, AGENT_CANVAS_KEY_FILE: keyFile };
+  return { env, stop: () => { server.closeAllConnections?.(); server.close(); } };
+}
+const asksAHost = (calls: string[][]) => calls.filter((c) => c[0] === "host" || c.includes("--host"));
+
+test("board commands: a task whose crew runs here is saved without asking another host", async () => {
+  const mine = crew("local-new", "lh", "2026-11-27T12:59:00Z");
+  const r = rig({ local: [mine], hosts: [mac([], { hangs: true })] });
+  const b = await board(r);
+  try {
+    const res = await r.run("canvas-cmd.ts", ["snapshot", r.root, "lh"], b.env);
+    assert.equal(res.code, 0, res.err);
+    assert.match(res.out, /from agent local-new/);
+    assert.deepEqual(asksAHost(r.calls()), []);
+  } finally { b.stop(); }
+});
+
+test("board commands: a Mac crew seen before is found from memory, without asking the Mac", async () => {
+  const r = rig();
+  await r.stage(); // records the Mac's crews
+  r.reset();
+  r.fake.world({ local: [OLD], hosts: [mac([MAC_FIRST, MAC_NEW], { hangs: true })] });
+  const b = await board(r);
+  try {
+    for (const args of [["snapshot", r.root, "lh"], ["answer", r.root, "lh", "q1", "a"]]) {
+      const res = await r.run("canvas-cmd.ts", args, b.env);
+      assert.equal(res.code, 0, res.err);
+      assert.match(res.out, new RegExp(MAC_NEW.id), "the newer Mac crew, not the old local one");
+    }
+    assert.deepEqual(asksAHost(r.calls()), []);
+  } finally { b.stop(); }
+});
+
+test("board commands: a task with no crew known yet is still looked for on the other hosts", async () => {
+  const r = rig({ local: [], hosts: [mac([MAC_NEW])] });
+  const b = await board(r);
+  try {
+    const res = await r.run("canvas-cmd.ts", ["snapshot", r.root, "lh"], b.env);
+    assert.equal(res.code, 0, res.err);
+    assert.match(res.out, new RegExp(`from agent ${MAC_NEW.id}`));
+  } finally { b.stop(); }
 });
