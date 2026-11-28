@@ -40,8 +40,6 @@ export type PageJson = {
   /** "stopped": `bin/page stop` — the plugin neither polls nor re-renders this page until `bin/page start`. */
   session: "open" | "ended" | "stopped" | "unknown";
   lastRender: string | null;
-  /** The key the page's "Notify me" link carries: the notification window shows it to read the Needs-you list. */
-  notifyKey?: string;
   lastDelivery: string | null;
   undelivered: number;
   /** "ok" | "active-elsewhere" | "error" | "pending": the state of the plugin's Lavish poll. `bin/page start` sets "pending" and waits for the plugin to say "ok". */

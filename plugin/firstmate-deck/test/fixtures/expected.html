@@ -1,5 +1,5 @@
 <!doctype html>
-<!--fd-sig:831df43fc895c37b50c69499ffdcfd538bfb4e61-->
+<!--fd-sig:8e3b1564b342e5695ad9473f75c40dec2fffc5a3-->
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Deck demo project · status</title>
 <style>
@@ -334,8 +334,6 @@ pre{overflow-x:auto;background:#fff;border:1px solid var(--line);border-radius:8
     for(var p=t.parentElement;p;p=p.parentElement)if(p.tagName==="DETAILS"&&!p.open)p.open=true;
     if(location.hash==="#"+id)t.scrollIntoView();else location.hash=id;
     setCur(id)}
-  // for the notification window (notify.ts): show one card; false while it is not drawn yet
-  window.__fdGo=function(id){if(!$(id))return false;go(id);return true};
   function onClick(e){var h=e.target.closest&&e.target.closest(".tn-h");
     if(h){if(fly.contains(h)||!window.__fdPref)return;var k=h.closest(".tn-st").getAttribute("data-k");window.__fdPref("tn-c-"+k,shut(k)?0:1);applyShut(fl);applyShut(sl);return}
     var m=e.target.closest&&e.target.closest(".tn-more");

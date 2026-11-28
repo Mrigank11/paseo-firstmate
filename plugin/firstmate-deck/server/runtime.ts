@@ -2,7 +2,7 @@
 // Lavish poll, and relays page comments to the first mate.
 import { closeSync, existsSync, mkdirSync, openSync, readdirSync, readSync, readFileSync, statSync, unlinkSync, watch, type FSWatcher } from "node:fs";
 import { basename, join, relative } from "node:path";
-import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
+import { createHash } from "node:crypto";
 import { execFile, type ChildProcess } from "node:child_process";
 import { assetDir, resolveAssets } from "./asset-store.ts";
 import { normalizeRoot, type DeckConfig } from "./config.ts";
@@ -22,7 +22,8 @@ import { inputsMtimeMs, readSnapshot, writeSnapshot, type Snapshot, type StageRo
 import { ownerOf } from "./gate.ts";
 import { branchMerged } from "./merged.ts";
 import { MarksServer, readUi, updateUi } from "./marks-server.ts";
-import { appendNotifyLog, canvasQuestion, needsList, notifyWindowHtml, windowLine, type Needs } from "./notify.ts";
+import { canvasQuestion, needsList } from "./notify.ts";
+import { WebPush } from "./push.ts";
 import { loadLive, loadProject, type ProjectModel, type Task } from "./state.ts";
 import { appendInbox, inboxPath, pageJsonPath, patchPageJson, pidPath, projectDir, readInbox, readPageJson, updateInbox, writeAtomic, type InboxEntry, type PageJson } from "./store.ts";
 
@@ -36,6 +37,12 @@ export type Summary = {
 };
 
 export type DeckOpts = {
+  /** Folder for web push's keys, browsers and log (the deck's settings folder). Without one there is no web push. */
+  pushDir?: string;
+  /** Tests stand in for the push service, the clock behind "once per wait" and the waits between tries. */
+  pushFetch?: typeof fetch;
+  pushNow?: () => number;
+  pushRetryMs?: number[];
   /** The `paseo` CLI: the cold-start delivery fallback, and `paseo status` for the agent links. */
   exec: Exec;
   /** Which API to use; defaults to the CLI until `capture()` hands it an SDK handle. */
@@ -198,7 +205,13 @@ export class Deck {
     this.log = o.log ?? (() => {});
     this.agents = new AgentViews((m) => this.log(m));
     this.marks = new MarksServer(() => this.cfg.root, (m) => this.log(m));
-    this.marks.pages = (url, from) => this.notifyRoute(url, from);
+    if (o.pushDir) {
+      try {
+        const push = new WebPush(o.pushDir, { fetch: o.pushFetch, now: o.pushNow, retryMs: o.pushRetryMs, log: (m) => this.log(m) });
+        this.push = push;
+        this.marks.push = (path, method, body, from) => push.route(path, method, body, from);
+      } catch (e) { this.log(`PROBLEM: web push is off: ${(e as Error).message}`); }
+    }
     this.ports = o.ports ?? new PortSelector(new CliPort(o.exec), (m) => this.log(m));
     // the first handle: everything on the pages was last-known until now, so ask about it all
     this.ports.onFirstHandle = () => this.scheduleAll("handle", 0);
@@ -256,6 +269,7 @@ export class Deck {
     for (const e of this.pollers.values()) killEntry(e);
     this.pollers.clear();
     killAllPolls();
+    this.push?.stop();
     void this.marks.close();
   }
 
@@ -298,8 +312,6 @@ export class Deck {
     }
     if (rootChanged) {
       this.sigs.clear();
-      this.needs.clear();
-      this.notifySaid.clear();
       this.stalePollsChecked.clear();
       this.hydrated.clear();
       this.log(next.root ? `first mate root: ${next.root}` : "no firstmateRoot configured (settings or FIRSTMATE_ROOT); idle");
@@ -352,56 +364,16 @@ export class Deck {
     return `http://${host}:${port}`;
   }
 
-  /** Where the page's "Notify me" button opens the notification window: the https address if one is set, else the web server's own. */
-  private notifyUrl(project: string, pj: PageJson): string | undefined {
+  /** Web push (push.ts); null without a settings folder for its keys. */
+  private push: WebPush | null = null;
+
+  /** Resolves when no push is on its way. */
+  pushIdle(): Promise<void> { return this.push?.idle() ?? Promise.resolve(); }
+
+  /** Where the page's "Notify me" button opens the opt-in tab: the https address if one is set, else the web server's own. */
+  private notifyUrl(pj: PageJson): string | undefined {
     const own = this.marksBase(pj);
-    if (!own) return undefined;
-    const key = pj.notifyKey || patchPageJson(pageJsonPath(this.cfg.root, project), { notifyKey: randomBytes(16).toString("hex") }).notifyKey;
-    return key ? `${this.cfg.notifyUrl || own}/${project}/notify#k=${key}` : undefined;
-  }
-
-  /** Each project's Needs-you list as of its last render; null while that render could not see everything. */
-  private needs = new Map<string, Needs | null>();
-
-  /** What the notify log last said about a project, per kind, so an unchanged answer is written once. */
-  private notifySaid = new Map<string, string>();
-
-  private notifyLog(project: string, line: string, kind?: string): void {
-    if (kind) {
-      const k = `${project} ${kind}`;
-      if (this.notifySaid.get(k) === line) return;
-      this.notifySaid.set(k, line);
-    }
-    appendNotifyLog(join(projectDir(this.cfg.root, project), "notify.log"), line);
-  }
-
-  /** `GET /<project>/notify` (the notification window), `/needs?k=` (what it reads) and `/log?k=` (what it reports). */
-  private notifyRoute(url: URL, from: { ip: string; agent: string }): { code: number; type: string; body: string } | null {
-    const m = /^\/([a-z0-9][a-z0-9-]*)\/(notify|needs|log)$/.exec(url.pathname);
-    if (!m) return null;
-    const [, project, what] = m;
-    const json = (code: number, v: unknown) => ({ code, type: "application/json", body: JSON.stringify(v) });
-    if (!this.cfg.root || !existsSync(join(projectDir(this.cfg.root, project), "project.json"))) return json(404, { error: "no such project" });
-    if (what === "notify") {
-      this.notifySaid.delete(`${project} list`); // a new window: say again what it is handed
-      this.notifyLog(project, `deck: window page requested from ${from.ip} (${from.agent})`);
-      return { code: 200, type: "text/html; charset=utf-8", body: notifyWindowHtml(project, this.lastGood.get(project)?.title ?? project) };
-    }
-    const pj = readPageJson(pageJsonPath(this.cfg.root, project));
-    const key = Buffer.from(pj.notifyKey ?? ""), given = Buffer.from(url.searchParams.get("k") ?? "");
-    if (!key.length || key.length !== given.length || !timingSafeEqual(key, given)) {
-      this.notifyLog(project, "deck: refused a window with an out-of-date key", "list");
-      return json(403, { error: "bad key" });
-    }
-    if (what === "log") {
-      const line = windowLine(url.searchParams.get("e") ?? "", url.searchParams.get("d") ?? "");
-      if (!line) return json(400, { error: "unknown report" });
-      this.notifyLog(project, line);
-      return { code: 204, type: "text/plain", body: "" };
-    }
-    const needs = pj.session === "stopped" ? null : this.needs.get(project);
-    this.notifyLog(project, needs ? `deck: list handed to the window: ${needs.tasks.map((t) => t.id).join(", ") || "none"}${needs.partial ? " (canvases unread)" : ""}` : "deck: list not ready yet", "list");
-    return needs ? json(200, { page: pj.lavishUrl, ...needs }) : json(503, { error: "not ready" });
+    return own && this.push ? `${this.cfg.notifyUrl || own}/_push/#k=${this.push.linkKey}` : undefined;
   }
 
   /**
@@ -910,13 +882,13 @@ export class Deck {
     const banner = this.bannerFor(project, pj.session);
     const canvas = this.canvas.data(ids);
     const stages = () => stagesOf(model, views, { now, labeled: this.labeledFor(model), canvas, stalled: this.stalled });
-    const needs = this.sawAll(project, ids) ? { partial: canvas.status === "down" && ids.length > 0, tasks: needsList(model.tasks, stages(), canvas) } : null;
-    this.needs.set(project, needs);
-    // only for a project someone has opened the window of
-    if (needs && existsSync(join(projectDir(this.cfg.root, project), "notify.log"))) this.notifyLog(project, `deck: waiting for you now: ${needs.tasks.map((t) => t.id).join(", ") || "none"}`, "waiting");
+    if (this.push && pj.session !== "stopped" && this.sawAll(project, ids)) {
+      try { this.push.see(project, projectDir(this.cfg.root, project), { partial: canvas.status === "down" && ids.length > 0, tasks: needsList(model.tasks, stages(), canvas) }, pj.lavishUrl); }
+      catch (e) { this.log(`web push failed for ${project}: ${(e as Error).message}`); } // the page is rendered regardless
+    }
     const r = renderProject(model, views, {
       now, tickSeconds: 1, refreshSeconds: Math.round((this.o.tickMs ?? TICK_MS) / 1000), paseoAgentUrl: this.agentUrl, paseoAppUrl: this.appUrl, banner, pageFile: basename(target),
-      marksUrl: this.marksUrl(project, pj), notifyUrl: this.notifyUrl(project, pj), labeled: this.labeledFor(model), canvas, stalled: this.stalled,
+      marksUrl: this.marksUrl(project, pj), notifyUrl: this.notifyUrl(pj), labeled: this.labeledFor(model), canvas, stalled: this.stalled,
     });
     // first render of a page that has never stored what the captain saw: seed it, so turning this on does not light every page
     // pictures are links to the deck's web server (or, with no server, the bytes inline)

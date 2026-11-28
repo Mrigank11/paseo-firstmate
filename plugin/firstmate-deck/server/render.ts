@@ -50,7 +50,7 @@ export type RenderOpts = {
   pageFile?: string;
   /** Where the page syncs its read marks (the plugin's marks endpoint, e.g. http://host:4398/<project>/state). Without it the marks live in the browser only. */
   marksUrl?: string;
-  /** The notification window of this project (notify.ts). With it the page has a "Notify me" button. */
+  /** The opt-in page for notifications (notify.ts). With it the page has a "Notify me" button. */
   notifyUrl?: string;
   /** Paseo agents found by their `fm.task` label, per task id (runtime.ts). Without them a v1 task's `agentId` stands in. */
   labeled?: Record<string, LabeledAgent[]>;
@@ -692,7 +692,7 @@ ${CSS}
 <div class="tn-sheet" id="tn-sheet" role="dialog" aria-modal="true" aria-label="Tasks by stage" data-lavish-action hidden><div class="tn-sb" id="tn-sl"></div><div class="tn-sf"><button class="tn-fx tn-fxl" type="button" aria-pressed="false">${svg(ICON.focus)}<span>Focus view</span></button><button class="tn-sx" id="tn-sx" type="button">Close</button></div></div>
 <main>
 <h1>${esc(model.title)}</h1>
-<div class="sub">Kept current by the firstmate-deck plugin · last update <b data-slot="stamp">${stamp}</b>${opts.notifyUrl ? ` · <button type="button" id="fd-notify" data-lavish-action title="Browser notifications when a task needs you (opens a small window)">Notify me</button>` : ""}</div>
+<div class="sub">Kept current by the firstmate-deck plugin · last update <b data-slot="stamp">${stamp}</b>${opts.notifyUrl ? ` · <button type="button" id="fd-notify" data-lavish-action title="Notifications when a task needs you (set up once, in a new tab)">Notify me</button>` : ""}</div>
 <p class="chan"><b>This page is our channel.</b> Comment on any card or block, then Send; the first mate answers here.</p>
 <div class="trail-slot" data-trail-slot="page"></div>
 <div class="banner b-bad" id="fd-stale" role="status" hidden>${esc(STALE_TEXT)}</div>
@@ -708,7 +708,7 @@ ${names.map((n) => renderSection(model, n)).join("\n")}
 <script>
 ${navScript()}
 ${IDIOMORPH_SOURCE.replace(/<\/(script|body|head|html)/gi, "<\\/$1")}
-${pageScript(model.project, liveFile, opts.tickSeconds, opts.marksUrl)}${opts.notifyUrl ? `\n${notifyPageSide(model.project, opts.notifyUrl)}` : ""}
+${pageScript(model.project, liveFile, opts.tickSeconds, opts.marksUrl)}${opts.notifyUrl ? `\n${notifyPageSide(opts.notifyUrl)}` : ""}
 </script>
 </main></body></html>
 `;

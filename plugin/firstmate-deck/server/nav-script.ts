@@ -98,8 +98,6 @@ export function navScript(): string {
     for(var p=t.parentElement;p;p=p.parentElement)if(p.tagName==="DETAILS"&&!p.open)p.open=true;
     if(location.hash==="#"+id)t.scrollIntoView();else location.hash=id;
     setCur(id)}
-  // for the notification window (notify.ts): show one card; false while it is not drawn yet
-  window.__fdGo=function(id){if(!$(id))return false;go(id);return true};
   function onClick(e){var h=e.target.closest&&e.target.closest(".tn-h");
     if(h){if(fly.contains(h)||!window.__fdPref)return;var k=h.closest(".tn-st").getAttribute("data-k");window.__fdPref("tn-c-"+k,shut(k)?0:1);applyShut(fl);applyShut(sl);return}
     var m=e.target.closest&&e.target.closest(".tn-more");

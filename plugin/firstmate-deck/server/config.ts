@@ -16,7 +16,7 @@ export type DeckConfig = {
   readMarksPort?: number;
   /** Fallback tailnet host to bind when `tailscale ip -4` finds none. */
   readMarksHost?: string;
-  /** The https address of the read-marks endpoint for the "Notify me" window (no trailing slash); unset = its own http address. */
+  /** The https address of the read-marks endpoint for the "Notify me" page (no trailing slash); unset = its own http address. */
   notifyUrl?: string;
   /** Base URL of agent-canvas (default http://127.0.0.1:6790). "" = no canvas in the cards. */
   canvasUrl?: string;

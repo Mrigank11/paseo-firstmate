@@ -38,6 +38,7 @@ export default function contribute(server: PluginServerContext) {
     home,
     extraBanner: (): string | null => permission.problem(),
     agentsDir: join(home ?? join(homedir(), ".paseo"), "agents"),
+    pushDir: join(home ?? join(homedir(), ".paseo"), "plugin-settings", "firstmate-deck", "push"),
     log,
     readConfig: async () => {
       const st = await settings.read();
