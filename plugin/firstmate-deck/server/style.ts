@@ -46,6 +46,7 @@ details[open]>summary::before{transform:rotate(45deg)}
 .p-you{background:#fde6cf;color:var(--you)}.p-done{background:#dcfce7;color:var(--ok)}.p-error{background:#fee2e2;color:#b91c1c}
 @keyframes pulse{50%{opacity:.3}}@media (prefers-reduced-motion:reduce){.p-running .dot{animation:none}}
 .facts{font-variant-numeric:tabular-nums}.open{margin-left:auto;font-weight:500}
+.open-pair{margin-left:auto;display:inline-flex;align-items:baseline;gap:8px;white-space:nowrap}.app-open{font-size:11.5px}
 .stg{font-weight:600;color:var(--fg)}.fl{font-size:11.5px;padding:1px 7px;border-radius:5px;background:var(--soft);color:var(--mut)}.fl-d{background:#fee2e2;color:#b91c1c;font-weight:600}
 .cur{font-size:13px;color:#3d3a34;margin-top:6px;max-width:80ch}
 details.stp>summary.cur{display:block}
@@ -76,9 +77,10 @@ button.opt[aria-pressed=true]{opacity:1;cursor:default;background:var(--you);bor
 .askbox .trail{margin:6px 0 2px}
 .askbox.answered{opacity:.85}.ask-tag{font-size:11px;text-transform:uppercase;letter-spacing:.04em;color:#8a7a6a;margin-top:6px}
 /* read marks */
+.lz{margin:4px 0 0}.lz>summary{cursor:pointer;font-size:12px;opacity:.7}.lzb:empty{display:none}
 .cnotes{margin:6px 0 2px;font-size:13px}.cnotes>summary{display:inline-block;color:var(--mut);font-size:12.5px}.cnotes>summary::before{width:5px;height:5px}
-.mr,.mra{font:inherit;font-size:12px;font-weight:600;color:var(--mut);background:#fff;border:1px solid var(--line);border-radius:999px;padding:2px 10px;cursor:pointer;margin-left:auto;flex:none}
-.mra{margin-left:10px}.mr:hover,.mra:hover{color:var(--fg);border-color:#b8b2a3}
+.mr,.mra,#fd-notify{font:inherit;font-size:12px;font-weight:600;color:var(--mut);background:#fff;border:1px solid var(--line);border-radius:999px;padding:2px 10px;cursor:pointer;margin-left:auto;flex:none}
+.mra{margin-left:10px}#fd-notify{margin-left:0}.mr:hover,.mra:hover,#fd-notify:hover{color:var(--fg);border-color:#b8b2a3}
 [hidden]{display:none!important}
 #g-done .mr{display:none}
 /* collapsible hand-written sections */
@@ -134,7 +136,6 @@ pre{overflow-x:auto;background:#fff;border:1px solid var(--line);border-radius:8
 .tn-fl::-webkit-scrollbar-thumb,.tn-fly::-webkit-scrollbar-thumb,.tn-sb::-webkit-scrollbar-thumb{background:#cfc9b8;border-radius:4px;border:2px solid transparent;background-clip:content-box}
 .tn-top .tn-fx{margin-left:auto}.tn-spine>.tn-fx{margin:-4px 0 6px}
 .tn-fx[aria-pressed=true],.tn-fx[aria-pressed=true]:hover{background:#fff;color:var(--you);box-shadow:0 1px 2px rgba(28,27,25,.1)}
-body.tn-focus #live .task:not(.tn-sel),body.tn-focus #live .grp:not(:has(.tn-sel)),body.tn-focus #live .summary{display:none}
 .tn-fbar{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin:12px 0 4px;padding:8px 12px;background:#fff;border:1px solid var(--line);border-radius:10px;font-size:13.5px;color:var(--mut)}
 .tn-fbar[hidden]{display:none}.tn-fbar .tn-ic{color:var(--you)}.tn-fbar b{color:var(--fg)}
 .tn-fall{margin-left:auto;font:inherit;font-size:13px;font-weight:600;color:var(--run);background:none;border:0;padding:6px 4px;cursor:pointer;text-decoration:underline;text-underline-offset:2px}
@@ -196,10 +197,9 @@ body.tn-focus #live .task:not(.tn-sel),body.tn-focus #live .grp:not(:has(.tn-sel
 .cv-final{display:block;width:100%;height:520px;margin-top:8px;border:1px solid var(--line,#e4e0d4);border-radius:8px;background:#fff}
 /* the embedded canvas wears the deck's own surface: its tokens are re-pointed at the page's (agent-canvas's .acv sets its own, so two classes) */
 .cv-f.acv,.cv-f .acv{--bg:#f7f6f2;--raised:#fff;--well:#f1efe8;--line:#e4e0d4;--line-strong:#d6d1c2;--fg:#1c1b19;--muted:#625f57;--faint:#8a857a;--sans:inherit;background:transparent;font-size:14px}
-body.tn-focus .task.tn-sel .cv.has-full .cv-c{display:none}
-.cv-links{display:flex;flex-wrap:wrap;gap:4px 14px;margin-top:8px;font-size:12.5px}.cv-open{font-weight:600}.cv-links .open{margin-left:0}
+.cv-links{display:flex;flex-wrap:wrap;gap:4px 14px;margin-top:8px;font-size:12.5px}.cv-open{font-weight:600}.cv-links .open,.cv-links .open-pair{margin-left:0}
 .askbox.raw{border-left:3px solid #f3d5bc;padding-left:10px;margin-top:8px}.cv-down{background:#fef3c7;color:#92400e}
-@media (max-width:560px){.open{margin-left:0}main{padding:18px 14px 60px}nav{margin:12px -14px 0;padding:8px 14px}h1{font-size:20px}.tt{flex-direction:column;gap:4px}.s-you{padding:12px}.tw table{min-width:480px}}`;
+@media (max-width:560px){.open,.open-pair{margin-left:0}main{padding:18px 14px 60px}nav{margin:12px -14px 0;padding:8px 14px}h1{font-size:20px}.tt{flex-direction:column;gap:4px}.s-you{padding:12px}.tw table{min-width:480px}}`;
 
 
 export const CSS = scaleText(BASE);

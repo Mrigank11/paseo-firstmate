@@ -3,7 +3,7 @@ import { existsSync, realpathSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 
-export type SettingsValues = { firstmateRoot?: string; firstmateLabel?: string; lavishPort?: number; lavishStateDir?: string; lavishBin?: string; readMarksPort?: number; readMarksHost?: string; canvasUrl?: string; canvasDir?: string };
+export type SettingsValues = { firstmateRoot?: string; firstmateLabel?: string; lavishPort?: number; lavishStateDir?: string; lavishBin?: string; readMarksPort?: number; readMarksHost?: string; notifyUrl?: string; canvasUrl?: string; canvasDir?: string };
 
 export type DeckConfig = {
   root: string;
@@ -16,6 +16,8 @@ export type DeckConfig = {
   readMarksPort?: number;
   /** Fallback tailnet host to bind when `tailscale ip -4` finds none. */
   readMarksHost?: string;
+  /** The https address of the read-marks endpoint for the "Notify me" page (no trailing slash); unset = its own http address. */
+  notifyUrl?: string;
   /** Base URL of agent-canvas (default http://127.0.0.1:6790). "" = no canvas in the cards. */
   canvasUrl?: string;
   canvasDir?: string;
@@ -44,6 +46,7 @@ export function resolveConfig(s: SettingsValues, env: Record<string, string | un
     lavishBin: s.lavishBin?.trim() || undefined,
     readMarksPort: Number.isInteger(s.readMarksPort) && (s.readMarksPort as number) >= 0 && (s.readMarksPort as number) < 65536 ? (s.readMarksPort as number) : READ_MARKS_DEFAULT_PORT,
     readMarksHost: s.readMarksHost || "",
+    notifyUrl: /^https?:\/\/[^\s/]/i.test((s.notifyUrl ?? "").trim()) ? (s.notifyUrl as string).trim().replace(/\/+$/, "") : undefined,
   };
 }
 

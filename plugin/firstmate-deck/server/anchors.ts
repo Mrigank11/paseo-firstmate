@@ -24,7 +24,9 @@ export const ANCHOR_JS = `function anchorIds(root){
     for(var i=0;kids&&i<kids.length;i++){
       var c=kids[i],tag=c.tagName,own=owner,p=path.concat(i),dd=d+1,fo=false;
       if(tag==="SCRIPT"||tag==="STYLE")continue;
-      if(c.id){dd=0;if(OWN.test(c.id)){own=c.id;p=[]}else fo=true}
+      // a stamp from an earlier run counts as the one this run would place there, so running twice changes nothing
+      if(c.id&&c.id.indexOf("k_")===0)dd=0;
+      else if(c.id){dd=0;if(OWN.test(c.id)){own=c.id;p=[]}else fo=true}
       else if(owner&&(dd>=EVERY||foreign)){c.setAttribute("id","k_"+owner+"_"+p.join("-"));dd=0}
       walk(c,own,p,dd,fo)}}
   walk(root,null,[],0,false)}`;

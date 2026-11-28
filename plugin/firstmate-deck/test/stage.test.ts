@@ -67,6 +67,8 @@ test("11: a running agent is Running; silence over 30 min is flagged", () => {
   const s = stage(task(), [agent()]);
   assert.deepEqual([s.stage, s.group, keys(s), s.agentId], ["Running", "running", [], "ag-1"]);
   assert.deepEqual(keys(stage(task(), [agent({ lastActivityAt: ago(40) })])), ["silent"]);
+  const silent = stage(task(), [agent({ lastActivityAt: ago(40) })]).flags[0];
+  assert.ok(silent.since && Math.abs(silent.since - Date.parse(ago(40))) < 1000, "the flag carries when the silence began, so the page can write the minutes itself");
   assert.equal(stage(task(), [agent({ status: "initializing" })]).group, "running");
 });
 

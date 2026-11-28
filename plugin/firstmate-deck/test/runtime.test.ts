@@ -2,7 +2,7 @@ process.env.TZ = "UTC";
 process.env.FM_DECK_POLL_MODE ??= "cli"; // the older tests drive a fake lavish-axi CLI; the HTTP path has its own tests (http-poll, runtime-http)
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Deck } from "../server/runtime.ts";
@@ -436,7 +436,7 @@ test("C3: with no last good view (plugin just started) a broken fleet.json rende
 test("M4: every version file carries a growing sequence number", async () => {
   const r = rig(FLEET);
   await r.deck.configure();
-  const seq = () => Number(/,(\d+),"[^"]*"\);\n$/.exec(readFileSync(r.live.replace(".live.js", ".live.v.js"), "utf8"))?.[1]);
+  const seq = () => Number(/__fdVer\("[^"]*",(\d+),/.exec(readFileSync(r.live.replace(".live.js", ".live.v.js"), "utf8"))?.[1]);
   await r.deck.render("demo");
   const a = seq();
   await r.deck.render("demo");
@@ -1055,5 +1055,34 @@ test("enforcement reaches the page and stages.json together: a stalled task move
   r.deck.setEnforcement([], { l1: { fp: "old", why: "x" } });
   await r.deck.publishStages();
   assert.equal(l1().group, "fm");
+  r.deck.stop();
+});
+
+test("the page's 'still alive' number comes from rendering: it moves on every tick, and stops when rendering stops working", async () => {
+  const r = rig(FLEET);
+  const deck = new Deck({ exec: async () => "", ports: r.ports, batchMs: 30, tickMs: 40, readConfig: async () => ({ root: r.root, firstmateLabel: "firstmate=true" }) });
+  const seq = () => Number(/__fdVer\("[^"]*",(\d+),/.exec(readFileSync(r.live.replace(".live.js", ".live.v.js"), "utf8"))?.[1]);
+  try {
+    await deck.start();
+    await until(() => existsSync(r.live), 3000);
+    const a = seq();
+    await until(() => seq() > a, 3000);
+    (deck as any).writePage = () => { throw new Error("the render is broken"); };
+    await sleep(100);
+    const b = seq();
+    await sleep(200); // five ticks
+    assert.equal(seq(), b, "no render, no new number: the open page warns that it is stale");
+  } finally { deck.stop(); }
+});
+
+test("a one-line card's body file has a name safe for any task id, the same one the page asks for", async () => {
+  const id = "odd id#1?";
+  const r = rig({ tasks: [{ id, intent: "done thing", state: "done", project: "demo", notes: "the body" }] });
+  await r.deck.configure();
+  await r.deck.render("demo");
+  const files = readdirSync(r.page.replace(/\.html$/, ".d"));
+  assert.equal(files.length, 1);
+  assert.match(files[0], /^b\.odd_id_1_\.[0-9a-f]{12}\.js$/);
+  assert.match(readFileSync(r.page, "utf8"), /sc\.src=D\+"b\."\+id\.replace\(\/\[\^\\w\.-\]\/g,"_"\)\+"\."\+h\+"\.js"/);
   r.deck.stop();
 });

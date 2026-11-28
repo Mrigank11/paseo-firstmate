@@ -531,7 +531,7 @@ J
   eq "$(S que-b '.stage+"|"+(.flags|map(.key)|join(","))')" "Running|queued-but-has-agent"; check "stage: a queued task with a RUNNING agent is Running, with the drift flag (T4)" $?
   eq "$(S que-b '.owner+"|"+.source')" "crew|local"; check "stage: rows carry the owner of the next move, and say they were computed locally when no plugin snapshot exists" $?
   eq "$(S que-b '.flags[0].drift')" true; check "stage: ...marked drift:true" $?
-  eq "$(S ask-c '.group')" you; check "stage: an open ask is Needs you even with a running agent" $?
+  eq "$(S ask-c .group)" running; check "stage: a running agent outranks an open ask (the ask stays a note)" $?
   eq "$(S old-d '.stage+"|"+(.flags|map(.key)|join(","))')" "Lost|no-agent"; check "stage: an old active task with no agent is Lost, not Needs you" $?
   eq "$(S v1-e '.agentId')" null; check "stage: with no fm.task label there is no agent (a v1 agentId is not a hint any more)" $?
   eq "$(S x1 '.stage+"|"+.group')" "Done|done"; check "stage: an archived task is frozen Done" $?
@@ -542,6 +542,64 @@ J
   before="$(cat "$FLEET_FILE")"; "$F" stages >/dev/null; eq "$(cat "$FLEET_FILE")" "$before"; check "stages never writes fleet.json" $?
 }
 export FLEET_FILE="$FLEET_FILE_MAIN"; unset STAGE_AGENTS_JSON FLEET_STAGE_TOOL
+
+# ---- task tree: parent, kind=group, node claims, scope ----
+export FLEET_FILE="$T/tree/fleet.json"; mkdir -p "$T/tree"; echo '{"version":2,"tasks":[]}' >"$FLEET_FILE"
+export FLEET_NO_SNAPSHOT=1; unset FLEET_STAGE_TOOL STAGE_AGENTS_JSON
+$F add g1 intent="iter 05" shape=scout state=active project=lh kind=group title="Iter 05" >/dev/null
+eq "$($F get g1 | jq -r .kind)" group; check "tree: kind=group is stored" $?
+$F add c1 intent=x shape=ship state=queued parent=g1 >/dev/null
+eq "$($F get c1 | jq -r '.parent+"|"+.project')" "g1|lh"; check "tree: a child inherits the parent's project" $?
+refused "tree: a parent that does not exist" $F add c9 intent=x shape=ship state=queued parent=nope
+refused "tree: a parent that is not a group" $F add c9 intent=x shape=ship state=queued parent=c1
+refused "tree: a child of another project" $F add c9 intent=x shape=ship state=queued parent=g1 project=other
+refused "tree: kind other than group" $F add c9 intent=x shape=ship state=queued kind=folder
+refused "tree: a task cannot be its own parent" $F set g1 parent=g1
+$F add g2 intent="sub" shape=scout state=active kind=group parent=g1 >/dev/null; check "tree: a group inside a group" $?
+refused "tree: a cycle" $F set g1 parent=g2
+$F add c2 intent=x shape=ship state=queued parent=g2 >/dev/null; check "tree: project > group > group > task is the deepest level" $?
+refused "tree: a third group level" $F add g3 intent=deep shape=scout state=active kind=group parent=g2
+refused "tree: a group cannot be its own descendant" $F set g2 parent=g2
+$F set c1 parent= >/dev/null; eq "$($F get c1 | jq -c '.parent')" null; check "tree: parent= removes the parent" $?
+refused "tree: kind= on a group that has children" $F set g1 kind=
+eq "$($F children g1 | jq -r 'map(.id)|join(",")')" "g2"; check "tree: children lists direct children" $?
+$F tree lh >"$T/tree.out" 2>"$T/tree.err"; check "tree: tree exits cleanly" $?
+[[ ! -s "$T/tree.err" ]]; check "tree: ...with nothing on stderr" $?
+$F tree lh | grep -q '^g1'; check "tree: tree prints the roots" $?
+$F tree lh | grep -q '^  g2'; check "tree: ...and indents children" $?
+$F tree lh | grep -q '^    c2'; check "tree: ...two levels down" $?
+$F add plain intent=x shape=ship state=queued project=lh >/dev/null
+eq "$($F get plain | jq -c 'has("parent") or has("kind")')" false; check "tree: a task with no parent has neither field" $?
+# archive and finish guards
+$F set c2 state=done >/dev/null
+$F add c3 intent=x shape=ship state=active parent=g1 >/dev/null
+refused "tree: a group is not finished while a descendant is open (g1 has c3)" $F finish g1 --no-canvas
+refused "tree: a group with live children does not archive" $F archive g1
+$F finish c2 --no-canvas >/dev/null 2>&1; $F archive c2 >/dev/null
+refused "tree: a group with a live child group does not archive" $F archive g1
+$F finish g2 --no-canvas >/dev/null; check "tree: a group finishes once its leaves are done" $?
+# node claims: only the first mate claims and releases
+$F claim-node g1 sm-1 >/dev/null; check "tree: claim-node writes the claim" $?
+eq "$(jq -r .agentId "$T/tree/tasks/g1/claim.json")" sm-1; check "tree: ...as tasks/<id>/claim.json" $?
+refused "tree: a second claim needs --replace" $F claim-node g1 sm-2
+$F claim-node g1 sm-2 --replace >/dev/null; check "tree: claim-node --replace" $?
+refused "tree: only a group can be claimed" $F claim-node c3 sm-1
+PASEO_AGENT_ID=sm-2 refused "tree: a second mate cannot release itself" $F release-node g1
+PASEO_AGENT_ID=sm-2 refused "tree: a second mate cannot claim another node" $F claim-node g2 sm-3
+$F release-node g1 >/dev/null; [[ ! -e "$T/tree/tasks/g1/claim.json" ]]; check "tree: the first mate releases a second mate" $?
+# scope: a second mate writes only inside its own subtree
+$F claim-node g1 sm-1 >/dev/null
+PASEO_AGENT_ID=sm-1 $F set c3 title="in scope" >/dev/null; check "tree scope: a second mate edits a task under its group" $?
+PASEO_AGENT_ID=sm-1 $F add c4 intent=x shape=ship state=queued parent=g1 >/dev/null; check "tree scope: ...adds a child under its group" $?
+PASEO_AGENT_ID=sm-1 refused "tree scope: ...not a task outside it" $F set plain title=nope
+PASEO_AGENT_ID=sm-1 refused "tree scope: ...not a top-level task" $F add c5 intent=x shape=ship state=queued
+PASEO_AGENT_ID=sm-1 refused "tree scope: ...cannot set its own group's state" $F set g1 state=parked
+PASEO_AGENT_ID=sm-1 refused "tree scope: ...cannot finish its own group" $F finish g1 --no-canvas
+PASEO_AGENT_ID=sm-1 refused "tree scope: ...cannot move a child out of its group" $F set c3 parent=
+PASEO_AGENT_ID=other $F set plain title=free >/dev/null; check "tree scope: any other agent (the first mate) is unrestricted" $?
+PASEO_AGENT_ID=sm-1 $F log g1 "own note"; check "tree scope: a second mate may log on its own group" $?
+echo "# card" | PASEO_AGENT_ID=sm-1 $F card g1 -; check "tree scope: ...and write its group's card" $?
+export FLEET_FILE="$FLEET_FILE_MAIN"
 
 echo "---- $pass passed, $fail failed"
 [[ $fail -eq 0 ]]

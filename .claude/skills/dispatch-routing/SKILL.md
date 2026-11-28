@@ -11,7 +11,7 @@ Resolve the launch configuration in this order, then spawn once and stop — sup
 
 Resolve every task's launch config in this precedence, stopping at the first that applies:
 
-1. **Per-task captain override** — the captain named a lane, provider, or model for *this* task, in the ask or in `state/decisions.md`. Obey it.
+1. **Per-task captain override** — the captain named a lane, provider, or model for *this* task, in the ask or in `state/decisions.md`. Obey it, through a profile: settings that match no `fm-*` profile are refused (section 3, "The launch check").
 2. **Routing lane** — classify the task's role (section 2), find its lane in the `## Routing` list of `state/decisions.md`, and materialize that lane's profile (section 3).
 3. **Default lane** — if no role mapping matched, use the lane marked default in that table. Nothing is ever left unrouted.
 4. **No lanes defined** — if `decisions.md` has no lanes, stop and tell the captain; do not pick a provider yourself.
@@ -40,7 +40,7 @@ A lane is a Paseo agent profile: `profile:fm-planning`, `profile:fm-contributor`
 3. Copy: `provider` + `model` → `provider` (`<provider>/<model>`), `modeId` → `settings.modeId`, `thinkingOptionId` → `settings.thinkingOptionId`, `featureValues` → `settings.features`. `notes` says when to use it.
 4. If the profile is missing or a field is rejected, **stop and tell the captain** (`bin/page profiles --check` names the drift; a stale repo file is not a reason to stop, the daemon is right). Do not substitute a raw spec or another provider. Use `inspect_provider` only to learn why a value was rejected.
 
-A raw `provider/model · mode · features` spec is legal only as a per-task captain override (section 1.1).
+**The launch check.** The deck plugin refuses, inside the Paseo daemon and so for any harness, a crew launch (an agent with `fm.task` or `paseo.parent-agent-id`) whose settings are not those of a daemon `fm-*` profile, and any `fm.shape=ship` on `fm-planning`. `create_agent` fails with `Launch refused: …`, which names the call that passes: launch again with those values. No agent was created; a workspace you made for it is still there, so reuse it. "Matches" means provider, model, mode, thinking level and every feature the profile declares, so copy all of them. A raw `provider/model · mode · features` spec that matches no profile cannot be launched: for a captain override of the model, the captain (or you on his word) adds a profile named `fm-<name>` in Paseo, you launch from it, and it is removed afterwards. `profile-check: off` in `state/decisions.md` (the captain's word only) switches the check off; see `docs/PROFILES.md`.
 
 **Contributor fallback.** If an `fm-contributor` agent cannot start (the provider errors on launch), relaunch once with the `fallback` lane (`profile:fm-fallback`) and say so in one line to the captain; do not retry the failing profile.
 

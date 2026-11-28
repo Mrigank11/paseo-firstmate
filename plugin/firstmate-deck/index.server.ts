@@ -9,6 +9,7 @@ import { Deck } from "./server/runtime.ts";
 import { Gate } from "./server/gate.ts";
 import { fetchSummary } from "./server/canvas-port.ts";
 import { Permission } from "./server/permission.ts";
+import { ProfileCheck, registerProfileCheck } from "./server/profile-check.ts";
 import { Enforcer } from "./server/enforcer.ts";
 
 const AGENT_EVENTS = [
@@ -37,6 +38,7 @@ export default function contribute(server: PluginServerContext) {
     home,
     extraBanner: (): string | null => permission.problem(),
     agentsDir: join(home ?? join(homedir(), ".paseo"), "agents"),
+    pushDir: join(home ?? join(homedir(), ".paseo"), "plugin-settings", "firstmate-deck", "push"),
     log,
     readConfig: async () => {
       const st = await settings.read();
@@ -66,6 +68,9 @@ export default function contribute(server: PluginServerContext) {
   enforcerTick.unref?.();
   // The permission hook: classifies crew permission requests against state/decisions.md (shadow: log only; enforce: auto-allow the safe ones).
   const permission = new Permission({ ports, root: (): string => deck.root(), paseoHome: home ?? join(homedir(), ".paseo"), log });
+  // The profile check: a crew launch that matches no firstmate Paseo profile is refused by the daemon (before any session exists).
+  const profileCheck = new ProfileCheck({ paseoHome: home ?? join(homedir(), ".paseo"), root: (): string => deck.root(), log });
+  registerProfileCheck(server, profileCheck, log);
   deck.start().catch((e) => log(`start failed: ${e?.stack ?? e}`));
   const unsub = settings.subscribe(() => void deck.configure().catch((e) => log(`reconfigure failed: ${e}`)));
 

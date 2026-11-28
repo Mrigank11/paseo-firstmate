@@ -2,6 +2,8 @@
 // Plugin-side only: the browser never talks to agent-canvas from the page (Lavish's sandbox makes that cross-origin), the deck
 // pulls here and writes the result into the page. Polls every POLL_MS while some page tracks an agent, backs off while
 // agent-canvas is unreachable, and fetches a card only when its summary `rev` moved. It never throws: no canvas is a soft state.
+// A failed read changes nothing on the page: the last good canvases stay until reads have failed for DOWN_AFTER_MS (one slow
+// answer, a restart of agent-canvas or a busy deck must not blank every card).
 
 import { assetLink, saveAsset } from "./asset-store.ts";
 import { inlineImages, linkImages, type LoadedImage } from "./canvas-images.ts";
@@ -26,7 +28,7 @@ export type FmSummary = {
   auto: boolean;
 };
 
-/** ok: the last read worked. down: it failed (the page shows a soft badge). off: no canvas URL is configured. */
+/** ok: the canvases are current, or failing for less than the grace time. down: they are not (the page shows a soft badge). off: no canvas URL is configured. */
 export type CanvasStatus = "ok" | "down" | "off";
 
 /** What a render reads: a plain snapshot, so render stays pure. */
@@ -44,6 +46,8 @@ export const PAGE_THEME = "light" as const;
 export const POLL_MS = 3000;
 export const MAX_BACKOFF_MS = 60_000;
 const TIMEOUT_MS = 4000;
+/** How long reads must keep failing before the page drops the canvases it has. */
+export const DOWN_AFTER_MS = 60_000;
 
 type FetchLike = (url: string, init?: { signal?: AbortSignal }) => Promise<{ ok: boolean; status: number; text(): Promise<string>; json(): Promise<any>; arrayBuffer?(): Promise<ArrayBuffer>; headers?: { get(name: string): string | null } }>;
 
@@ -56,6 +60,8 @@ export type CanvasPortOpts = {
   fetch?: FetchLike;
   pollMs?: number;
   maxBackoffMs?: number;
+  /** Failures shorter than this keep the last good canvases (DOWN_AFTER_MS). */
+  graceMs?: number;
   /** The theme of the page the canvas is embedded in (the deck page is light). agent-canvas then draws that theme, not the OS's. */
   theme?: "light" | "dark";
   /** Where pictures are stored (the deck's asset dir). Set: a card links to its pictures (the deck's web server serves them). Unset: they are embedded as data: URIs. */
@@ -71,6 +77,11 @@ export class CanvasPort {
   private css = "";
   private st: CanvasStatus = "off";
   private fails = 0;
+  private failingSince = 0;
+  /** Agents a successful cycle has asked about. */
+  private covered = new Set<string>();
+  /** Agents with news nobody has been told about yet (a cycle that failed half way keeps what it did read). */
+  private changed = new Set<string>();
   private timer: ReturnType<typeof setTimeout> | null = null;
   private flight: Promise<void> | null = null;
   private stopped = false;
@@ -79,7 +90,12 @@ export class CanvasPort {
   constructor(o: CanvasPortOpts) { this.o = o; }
 
   get status(): CanvasStatus { return this.st; }
+  /** A canvas URL is set (whether or not it answered yet). */
+  get configured(): boolean { return !!this.o.url().trim(); }
   summary(agentId: string): FmSummary | undefined { return this.sums.get(agentId); }
+
+  /** Has agent-canvas answered about all of these (whether or not it knows them)? */
+  covers(ids: string[]): boolean { return ids.every((i) => this.covered.has(i)); }
 
   /** Everything a render needs, for the agents `ids` (all wanted agents when omitted). */
   data(ids?: Iterable<string>): CanvasData {
@@ -161,7 +177,7 @@ export class CanvasPort {
     const ids = [...this.allWanted()];
     if (!base) { this.setStatus("off", ids); return; }
     if (!ids.length) return;
-    let changed = new Set<string>();
+    const changed = this.changed;
     try {
       if (!this.css || this.st !== "ok") {
         const c = await this.get(`/api/fm/css?theme=${this.o.theme ?? PAGE_THEME}`, base);
@@ -182,13 +198,15 @@ export class CanvasPort {
         this.sums.set(s.agentId, s);
         if (!card || card.rev !== s.rev || card.archived !== s.archived) {
           const c = await this.get(`/api/fm/card/${encodeURIComponent(s.agentId)}${s.archived ? "?archived=1" : ""}`, base);
-          if (c.ok) this.cards.set(s.agentId, { rev: s.rev, archived: s.archived, html: await this.pictures(await c.text(), base) });
+          if (c.ok) { this.cards.set(s.agentId, { rev: s.rev, archived: s.archived, html: await this.pictures(await c.text(), base) }); changed.add(s.agentId); }
         }
       }
       // agents the canvas no longer knows (or that nobody wants any more) leave the cache
       for (const id of [...this.sums.keys()]) if (!seen.has(id)) { this.sums.delete(id); this.cards.delete(id); if (ids.includes(id)) changed.add(id); }
       for (const id of [...this.cards.keys()]) if (!seen.has(id)) this.cards.delete(id);
+      for (const id of ids) this.covered.add(id);
       this.fails = 0;
+      this.failingSince = 0;
       this.lastErr = "";
       if (this.st !== "ok") { this.st = "ok"; this.log("agent-canvas reachable"); ids.forEach((i) => changed.add(i)); }
     } catch (e) {
@@ -196,11 +214,15 @@ export class CanvasPort {
       const msg = (e as Error).message || String(e);
       if (msg !== this.lastErr) this.log(`agent-canvas unreachable at ${base}: ${msg}`);
       this.lastErr = msg;
-      // the cache is kept (not shown while down) so the page is whole again the moment the canvas is back
-      this.setStatus("down", ids);
+      this.failingSince ||= Date.now();
+      // what was never read cannot be kept; what was read stays on the page until the failures have outlasted the grace time
+      // (the cache is kept even then, so the page is whole again the moment the canvas is back)
+      if (this.st !== "ok" || Date.now() - this.failingSince >= (this.o.graceMs ?? DOWN_AFTER_MS)) this.setStatus("down", ids);
       return;
     }
-    if (changed.size) this.o.onChange([...changed]);
+    const news = [...changed];
+    changed.clear();
+    if (news.length) this.o.onChange(news);
   }
 
   private setStatus(s: CanvasStatus, ids: string[]): void {

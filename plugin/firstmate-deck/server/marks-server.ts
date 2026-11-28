@@ -11,6 +11,7 @@ import { join } from "node:path";
 import { cleanUi, emptyUi, mergeUi, type UiState } from "./marks.ts";
 import { assetDir, readAsset } from "./asset-store.ts";
 import { projectDir, withLock, writeAtomic } from "./store.ts";
+import type { PushReply } from "./push.ts";
 
 export const uiStatePath = (root: string, project: string) => join(projectDir(root, project), "ui-state.json");
 
@@ -30,9 +31,12 @@ export function updateUi(root: string, project: string, inc: UiState): UiState {
 }
 
 const MAX_BODY = 1 << 20;
+const MAX_PUSH_BODY = 16 * 1024;
 
 export class MarksServer {
   private servers: Server[] = [];
+  /** Web push's page, worker and posts, everything under /_push/ (no project can be named so). No CORS: this origin only. */
+  push?: (path: string, method: string, body: string, from: { ip: string; agent: string }) => PushReply;
   /** "host:port" each listener is bound to. */
   bound: string[] = [];
   private getRoot: () => string;
@@ -56,6 +60,8 @@ export class MarksServer {
 
   private handle = (req: IncomingMessage, res: ServerResponse): void => {
     try {
+      const path = (req.url ?? "").split("?")[0];
+      if (this.push && path.startsWith("/_push/")) return this.handlePush(path, req, res);
       if (req.method === "OPTIONS") return this.send(res, 204);
       const a = /^\/asset\/([0-9a-f]{32})$/.exec((req.url ?? "").split("?")[0]);
       if (a) {
@@ -88,6 +94,23 @@ export class MarksServer {
       });
     } catch { try { this.send(res, 500); } catch {} }
   };
+
+  private handlePush(path: string, req: IncomingMessage, res: ServerResponse): void {
+    const chunks: Buffer[] = [];
+    let size = 0;
+    req.on("data", (c: Buffer) => { if ((size += c.length) <= MAX_PUSH_BODY) chunks.push(c); });
+    req.on("end", () => {
+      try {
+        const r = size > MAX_PUSH_BODY ? { code: 413, type: "text/plain", body: "" }
+          : this.push!(path, req.method ?? "", Buffer.concat(chunks).toString("utf8"), { ip: req.socket.remoteAddress ?? "?", agent: req.headers["user-agent"] ?? "?" });
+        res.writeHead(r.code, { "Content-Type": r.type, "Content-Length": Buffer.byteLength(r.body), "Cache-Control": "no-store", "X-Frame-Options": "DENY" });
+        res.end(r.body);
+      } catch (e) {
+        this.log(`web push request failed: ${(e as Error).message}`);
+        try { res.writeHead(500).end(); } catch {}
+      }
+    });
+  }
 
   /** Listen on every host (127.0.0.1 and the tailnet IP). A host that cannot be bound is logged and skipped. Resolves with the hosts that worked. */
   async listen(hosts: string[], port: number): Promise<string[]> {

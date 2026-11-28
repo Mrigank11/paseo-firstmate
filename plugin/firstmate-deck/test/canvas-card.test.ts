@@ -38,7 +38,7 @@ test("the card pulls in the canvas: verdict, BLUF, steps strip with the Now row,
   assert.match(html, /1\/4 steps/);
   assert.match(html, /<b>Now<\/b> implement/);
   assert.equal((html.match(/<i class="on">/g) ?? []).length, 1);
-  assert.match(html, /<a class="cv-open" href="http:\/\/canvas\.test\/a\/ag-1">Open canvas ↗<\/a><a class="open" href="http:\/\/paseo\.test\/agent\/ag-1">Open in Paseo<\/a>/);
+  assert.match(html, /<a class="cv-open" href="http:\/\/canvas\.test\/a\/ag-1" target="_blank" rel="noopener noreferrer">Open canvas ↗<\/a><a class="open" href="http:\/\/paseo\.test\/agent\/ag-1" target="_blank" rel="noopener noreferrer">Open in Paseo<\/a>/);
   assert.ok(html.indexOf('class="ag"') < html.indexOf('class="cv has-full"') && html.indexOf('class="cv has-full"') < html.indexOf("cv-links"));
   // the canvas's steps replace the recent-steps block, and there is no iframe
   assert.ok(!html.includes("stp") && !html.includes("<iframe"));
@@ -50,8 +50,8 @@ test("the full embed card sits in a collapsed fold (the focus view opens it), an
   assert.match(html, /<details class="cnotes cv-d" id="cvd-ag-1"><summary>Full canvas<\/summary><div class="cv-f acv"><div class="blk">FULL<\/div><\/div><\/details>/);
   assert.equal(r.page.split(".acv .blk{color:red}").length - 1, 1);
   assert.ok(r.page.indexOf(".acv .blk") < r.page.indexOf("<body>"));
-  assert.match(r.page, /body\.tn-focus \.task\.tn-sel \.cv\.has-full \.cv-c\{display:none\}/);
-  assert.match(r.page, /q\(t,"details\.cv-d"\)\.forEach\(function\(x\)\{x\.open=true\}\)/, "the focus view opens the fold");
+  assert.ok(r.page.includes('.cv.has-full .cv-c{display:none}"'), "the focus view's rule for the selected card is written by the navigator (nav-script.ts)");
+  assert.match(r.page, /q\(t,"details\.cv-d,details\.lz"\)\.forEach\(function\(x\)\{x\.open=true\}\)/, "the focus view opens the fold");
   assert.ok(!r.live.includes(".acv .blk{color:red}"), "css is page-level, not per card");
 });
 
@@ -140,7 +140,7 @@ test("a canvas ask without usable options is shown read-only: it says why and li
   const s = summary("ag-1", { openAsks: [{ id: "my-ask", question: "Free text?", blocking: false, options: [] }] });
   const html = card(render(project([T]), data({}, s)).live);
   assert.match(html, /Free text\?/);
-  assert.match(html, /No buttons here: this question has no options\. <a href="http:\/\/canvas\.test\/a\/ag-1">Answer it on the canvas ↗<\/a>, or comment on this card\./);
+  assert.match(html, /No buttons here: this question has no options\. <a href="http:\/\/canvas\.test\/a\/ag-1" target="_blank" rel="noopener noreferrer">Answer it on the canvas ↗<\/a>, or comment on this card\./);
   assert.ok(!html.includes("<button"));
   const one = summary("ag-1", { openAsks: [{ id: "q1", question: "Sure?", blocking: false, options: [{ value: "y", label: "Yes" }] }] });
   assert.match(card(render(project([T]), data({}, one)).live), /this question has only one option/);
@@ -151,7 +151,7 @@ test("a canvas ask whose id the page cannot carry says so; agent-canvas's own id
   for (const id of ["9lives", "has space", "x".repeat(33), "a.b"]) {
     const html = card(render(project([T]), data({}, summary("ag-1", { openAsks: [{ id, question: "Q?", blocking: false, options: two }] }))).live);
     assert.ok(!html.includes("<button"), id);
-    assert.match(html, /No buttons here: its id .* is not one the page can carry in a button\. <a href="http:\/\/canvas\.test\/a\/ag-1">/, id);
+    assert.match(html, /No buttons here: its id .* is not one the page can carry in a button\. <a href="http:\/\/canvas\.test\/a\/ag-1" target="_blank" rel="noopener noreferrer">/, id);
   }
   for (const id of ["merge-option", "q-1", "a_b-c", "x".repeat(32)]) {
     const html = card(render(project([T]), data({}, summary("ag-1", { openAsks: [{ id, question: "Q?", blocking: false, options: two }] }))).live);
@@ -232,18 +232,18 @@ body{margin:0;background:#fff}
     return loadProject(lastRoot, "demo");
   };
   const r = render(withSnap({ "canvas.final.html": snap, "card.md": "short card text" }));
-  const both = r.live.slice(r.live.indexOf(`id="t-t1"`)); // the snapshot has its own <article>, so card() would cut short
+  const both = withBodies(r).slice(withBodies(r).indexOf(`id="t-t1"`)); // the snapshot has its own <article>, so card() would cut short
   assert.match(both, /<details class="cnotes cv-d" id="cvf-t1" open><summary>Final canvas<\/summary><div class="cv-f cv-fin acv"><div class="acv"><article class="canvas"><div class="sheet">.*FINAL "canvas"/s);
   assert.ok(!both.includes("<iframe") && !both.includes("statusline") && !both.includes("Open agent in Paseo"), "inline, without the frozen status line and title row");
   assert.ok(both.indexOf("cv-fin") < both.indexOf("short card text"), "canvas first");
   assert.match(both, /<details class="cnotes" id="cd-t1"><summary>Card<\/summary>.*short card text/s);
   // its stylesheet is hoisted once, without the standalone document's body and wrapper rules
-  assert.equal((r.live.match(/<style data-cv-snap>/g) ?? []).length, 1);
-  assert.match(r.live, /<style data-cv-snap>\n\.acv \.lede\{color:red\}\n<\/style>/);
-  const cardOnly = card(render(withSnap({ "card.md": "short card text" })).live);
+  assert.equal((withBodies(r).match(/<style data-cv-snap>/g) ?? []).length, 1);
+  assert.match(withBodies(r), /<style data-cv-snap>\n\.acv \.lede\{color:red\}\n<\/style>/);
+  const cardOnly = card(withBodies(render(withSnap({ "card.md": "short card text" }))));
   assert.ok(!cardOnly.includes("cv-fin") && /<div class="nt">.*short card text/s.test(cardOnly));
   // a snapshot that is not the expected shape still shows, in a sandboxed frame
-  const odd = card(render(withSnap({ "canvas.final.html": "<p>odd</p>" })).live);
+  const odd = card(withBodies(render(withSnap({ "canvas.final.html": "<p>odd</p>" }))));
   assert.match(odd, /<iframe class="cv-final" title="Final canvas" sandbox srcdoc="&lt;p&gt;odd/);
 });
 
@@ -271,6 +271,7 @@ test("relay: a click on a canvas ask is parsed, validated against the canvas, an
 
 // ---------- recap strip ----------
 import { recapOfSource } from "../server/recap.ts";
+import { withBodies } from "./bodies.ts";
 
 const RECAP = { asked: "Use SQLite, keep the migration path open", did: "Switched the store to SQLite behind a flag" };
 const recapData = (over: object = {}) => data({}, summary("ag-1", { recap: RECAP, updatedAt: Date.parse("2026-10-24T11:30:00Z"), ...over }));
@@ -310,10 +311,10 @@ test("recap strip: a done card reads canvas.final.tsx; no file means no strip", 
   const m = project([D]);
   const dir = join(lastRoot, "state", "tasks", "t1");
   mkdirSync(dir, { recursive: true });
-  assert.equal(stripOf(card(render(m).live)), "");
+  assert.equal(stripOf(card(withBodies(render(m)))), "");
   writeFileSync(join(dir, "canvas.final.tsx"), tsx);
   const m2 = loadProject(lastRoot, "demo");
-  const html = card(render(m2).live);
+  const html = card(withBodies(render(m2)));
   assert.match(stripOf(html), /Ship the API &amp; docs\./);
   assert.match(stripOf(html), /Shipped both\./);
 });

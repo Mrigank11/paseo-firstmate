@@ -1,6 +1,6 @@
 // The deck's daemon-side brain: watches the first mate's state, renders each project page, owns each page's
 // Lavish poll, and relays page comments to the first mate.
-import { existsSync, readdirSync, readFileSync, statSync, watch, type FSWatcher } from "node:fs";
+import { closeSync, existsSync, mkdirSync, openSync, readdirSync, readSync, readFileSync, statSync, unlinkSync, watch, type FSWatcher } from "node:fs";
 import { basename, join, relative } from "node:path";
 import { createHash } from "node:crypto";
 import { execFile, type ChildProcess } from "node:child_process";
@@ -16,12 +16,14 @@ import { NO_CLAIM_MESSAGE, NoFirstMateError, PortSelector, resolveFirstMate, sen
 import { Relay, newEntries, parseTarget, type AskLookup, type TargetInfo } from "./relay.ts";
 import type { Known } from "./target.ts";
 import { CanvasPort, type FmSummary } from "./canvas-port.ts";
-import { liveJs, liveVersionJs, liveVersionFileOf, renderProject, stageOf, stagesOf, type AgentView, type Banner } from "./render.ts";
+import { bodyDirOf, bodyFileName, bodyJs, liveJs, pageSigOf, liveVersionJs, liveVersionFileOf, renderProject, stageOf, stagesOf, type AgentView, type Banner, type Body } from "./render.ts";
 import { currentAgent, type LabeledAgent } from "./stage.ts";
 import { inputsMtimeMs, readSnapshot, writeSnapshot, type Snapshot, type StageRow } from "./stages-file.ts";
 import { ownerOf } from "./gate.ts";
 import { branchMerged } from "./merged.ts";
 import { MarksServer, readUi, updateUi } from "./marks-server.ts";
+import { canvasQuestion, needsList } from "./notify.ts";
+import { WebPush } from "./push.ts";
 import { loadLive, loadProject, type ProjectModel, type Task } from "./state.ts";
 import { appendInbox, inboxPath, pageJsonPath, patchPageJson, pidPath, projectDir, readInbox, readPageJson, updateInbox, writeAtomic, type InboxEntry, type PageJson } from "./store.ts";
 
@@ -35,6 +37,12 @@ export type Summary = {
 };
 
 export type DeckOpts = {
+  /** Folder for web push's keys, browsers and log (the deck's settings folder). Without one there is no web push. */
+  pushDir?: string;
+  /** Tests stand in for the push service, the clock behind "once per wait" and the waits between tries. */
+  pushFetch?: typeof fetch;
+  pushNow?: () => number;
+  pushRetryMs?: number[];
   /** The `paseo` CLI: the cold-start delivery fallback, and `paseo status` for the agent links. */
   exec: Exec;
   /** Which API to use; defaults to the CLI until `capture()` hands it an SDK handle. */
@@ -88,9 +96,6 @@ const STALE_UNKNOWN: AgentView = { status: "unknown", stepCount: 0, recent: [], 
 
 const plainTitle = (t: Task) => t.title || t.intent || t.id;
 
-/** The first question still open on a crew canvas, for a Needs-you line that has no registry ask behind it. */
-const canvasQuestion = (s: FmSummary | undefined): string => s?.openAsks.find((a) => !a.pending)?.question ?? "";
-
 type PollerEntry = { poller: PagePoller; child: ChildProcess | null; last: ChildProcess | null; ac: AbortController; http: number; lastEnd: number };
 const killEntry = (e: PollerEntry) => { e.poller.stop(); e.ac.abort(); try { e.child?.kill("SIGTERM"); } catch {} };
 
@@ -142,6 +147,7 @@ export class Deck {
   private stalePollsChecked = new Set<string>();
   private failing = new Map<string, number>();
   private webBase = "";
+  private serverId = "";
   private lavishBin: string | null = null;
   private fmCache = new Map<string, { at: number; id: string | null }>();
   private stopped = false;
@@ -199,6 +205,13 @@ export class Deck {
     this.log = o.log ?? (() => {});
     this.agents = new AgentViews((m) => this.log(m));
     this.marks = new MarksServer(() => this.cfg.root, (m) => this.log(m));
+    if (o.pushDir) {
+      try {
+        const push = new WebPush(o.pushDir, { fetch: o.pushFetch, now: o.pushNow, retryMs: o.pushRetryMs, log: (m) => this.log(m) });
+        this.push = push;
+        this.marks.push = (path, method, body, from) => push.route(path, method, body, from);
+      } catch (e) { this.log(`PROBLEM: web push is off: ${(e as Error).message}`); }
+    }
     this.ports = o.ports ?? new PortSelector(new CliPort(o.exec), (m) => this.log(m));
     // the first handle: everything on the pages was last-known until now, so ask about it all
     this.ports.onFirstHandle = () => this.scheduleAll("handle", 0);
@@ -236,6 +249,9 @@ export class Deck {
   async start(): Promise<void> {
     await this.configure();
     this.timers.push(setInterval(() => void this.configure().catch((e) => this.log(`rescan failed: ${e}`)), this.o.rescanMs ?? RESCAN_MS));
+    // Every tick re-renders: for the things that change by the clock alone (a stage that goes quiet, a day-old answered comment),
+    // and as the page's "still alive" watch, so a page whose rendering has stopped warns. An unchanged payload is not rewritten
+    // (only the tiny version file moves), so an idle tab downloads nothing.
     this.timers.push(setInterval(() => { this.scheduleAll("tick", 0); this.scheduleStages(0); }, this.o.tickMs ?? TICK_MS));
     this.scheduleStages(500);
   }
@@ -253,6 +269,7 @@ export class Deck {
     for (const e of this.pollers.values()) killEntry(e);
     this.pollers.clear();
     killAllPolls();
+    this.push?.stop();
     void this.marks.close();
   }
 
@@ -347,10 +364,34 @@ export class Deck {
     return `http://${host}:${port}`;
   }
 
+  /** Web push (push.ts); null without a settings folder for its keys. */
+  private push: WebPush | null = null;
+
+  /** Resolves when no push is on its way. */
+  pushIdle(): Promise<void> { return this.push?.idle() ?? Promise.resolve(); }
+
+  /** Where the page's "Notify me" button opens the opt-in tab: the https address if one is set, else the web server's own. */
+  private notifyUrl(pj: PageJson): string | undefined {
+    const own = this.marksBase(pj);
+    return own && this.push ? `${this.cfg.notifyUrl || own}/_push/#k=${this.push.linkKey}` : undefined;
+  }
+
+  /**
+   * Has this render read enough to say who needs the captain? Not before the task files and the crews' labels are in, nor
+   * while a canvas answer is still on its way: such a list would show tasks leaving that never left. With agent-canvas down
+   * there is no answer to wait for, and the list goes out marked partial.
+   */
+  private sawAll(project: string, ids: string[]): boolean {
+    if (this.loadErrors.has(project) && !this.lastGood.has(project)) return false;
+    if ((this.ports.sdkPort() || this.o.agentsDir) && !this.labeledKey) return false;
+    return !this.canvas.configured || !ids.length || this.canvas.status === "down" || (this.canvas.status === "ok" && this.canvas.covers(ids));
+  }
+
   private async detectWebBase(): Promise<void> {
     try {
       const st = JSON.parse(await this.o.exec(["status", "--json"]));
       const listen = String(st.listen ?? "").replace("0.0.0.0", st.hostname || "127.0.0.1");
+      if (st.serverId) this.serverId = String(st.serverId);
       if (listen && st.serverId) this.webBase = `http://${listen}/h/${st.serverId}`;
     } catch (e) {
       this.log(`could not read daemon status for agent links: ${e}`);
@@ -358,6 +399,8 @@ export class Deck {
   }
 
   private agentUrl = (id: string) => `${this.webBase || "http://localhost:6767"}/agent/${id}`;
+  /** Paseo's agent deep link (@getpaseo/protocol agent-deep-link: the app rejects any other shape). */
+  private appUrl = (id: string) => (this.serverId ? `paseo://h/${encodeURIComponent(this.serverId)}/agent/${encodeURIComponent(id)}` : null);
 
   // ---------- discovery + watching ----------
 
@@ -705,6 +748,41 @@ export class Deck {
     }
   }
 
+  /** Body files written so far, per project: content-named, so each is written once and never changes. */
+  private bodyFiles = new Map<string, Set<string>>();
+  private bodyGcAt = new Map<string, number>();
+  /** When each page's content last really changed (ISO): the page shows it as "last update". */
+  private changedAt = new Map<string, string>();
+
+  /**
+   * Writes the bodies of the one-line cards next to the page in `<page>.d/`. Each is named by its content, so an existing one is
+   * never rewritten and a page that holds an older version can still fetch it; files nothing references for 10 minutes are removed.
+   */
+  private writeBodies(project: string, target: string, bodies: Record<string, Body>): void {
+    const dir = bodyDirOf(target);
+    const have = this.bodyFiles.get(project) ?? new Set<string>();
+    this.bodyFiles.set(project, have);
+    const keep = new Set<string>();
+    try {
+      mkdirSync(dir, { recursive: true });
+      for (const [id, b] of Object.entries(bodies)) {
+        const name = bodyFileName(id, b.hash);
+        keep.add(name);
+        if (have.has(name) && existsSync(join(dir, name))) continue;
+        writeAtomic(join(dir, name), bodyJs(id, b));
+        have.add(name);
+      }
+      const now = Date.now();
+      if (now - (this.bodyGcAt.get(project) ?? 0) > 600_000) {
+        this.bodyGcAt.set(project, now);
+        for (const f of readdirSync(dir)) {
+          if (keep.has(f) || !f.endsWith(".js")) continue;
+          try { if (now - statSync(join(dir, f)).mtimeMs > 600_000) { unlinkSync(join(dir, f)); have.delete(f); } } catch { /* gone already */ }
+        }
+      }
+    } catch (e) { this.log(`card bodies for ${project}: ${e}`); }
+  }
+
   /** Has `bin/page stop` stopped this page? Remembers it, so the resume is noticed. */
   private pageHalted(project: string): boolean {
     if (readPageJson(pageJsonPath(this.cfg.root, project)).session === "stopped") { this.haltedPages.add(project); return true; }
@@ -771,10 +849,20 @@ export class Deck {
     return [...new Set(ids)];
   }
 
+  /** The signature the page file on disk was written with ("" when it is missing or has none). Reads the first bytes only. */
+  private pageSignature(target: string): string {
+    try {
+      const fd = openSync(target, "r");
+      try { const b = Buffer.alloc(256); return pageSigOf(b.subarray(0, readSync(fd, b, 0, 256, 0)).toString("utf8")); } finally { closeSync(fd); }
+    } catch { return ""; }
+  }
+
   /** Cheap identity of the page on disk (mtime + size); "" when it is missing. */
   private pageStamp(target: string): string {
     try { const st = statSync(target); return `${st.mtimeMs}:${st.size}`; } catch { return ""; }
   }
+
+  private readonly startedAt = Date.now();
 
   private writePage(project: string, model: ProjectModel): void {
     // a project exists only while its project.json does; never resurrect a deleted project's dir
@@ -792,9 +880,15 @@ export class Deck {
     const target = this.pagePath(project);
     const now = new Date();
     const banner = this.bannerFor(project, pj.session);
+    const canvas = this.canvas.data(ids);
+    const stages = () => stagesOf(model, views, { now, labeled: this.labeledFor(model), canvas, stalled: this.stalled });
+    if (this.push && pj.session !== "stopped" && this.sawAll(project, ids)) {
+      try { this.push.see(project, projectDir(this.cfg.root, project), { partial: canvas.status === "down" && ids.length > 0, tasks: needsList(model.tasks, stages(), canvas) }, pj.lavishUrl); }
+      catch (e) { this.log(`web push failed for ${project}: ${(e as Error).message}`); } // the page is rendered regardless
+    }
     const r = renderProject(model, views, {
-      now, tickSeconds: 1, refreshSeconds: Math.round((this.o.tickMs ?? TICK_MS) / 1000), paseoAgentUrl: this.agentUrl, banner, pageFile: basename(target),
-      marksUrl: this.marksUrl(project, pj), labeled: this.labeledFor(model), canvas: this.canvas.data(ids), stalled: this.stalled,
+      now, tickSeconds: 1, refreshSeconds: Math.round((this.o.tickMs ?? TICK_MS) / 1000), paseoAgentUrl: this.agentUrl, paseoAppUrl: this.appUrl, banner, pageFile: basename(target),
+      marksUrl: this.marksUrl(project, pj), notifyUrl: this.notifyUrl(pj), labeled: this.labeledFor(model), canvas, stalled: this.stalled,
     });
     // first render of a page that has never stored what the captain saw: seed it, so turning this on does not light every page
     // pictures are links to the deck's web server (or, with no server, the bytes inline)
@@ -802,26 +896,34 @@ export class Deck {
     r.page = resolveAssets(r.page, abase, adir);
     r.live = resolveAssets(r.live, abase, adir);
     if (!model.seen && !readUi(this.cfg.root, project).s) updateUi(this.cfg.root, project, { o: {}, r: {}, s: { at: now.toISOString(), keys: r.attention.keys } });
-    const p2 = (n: number) => String(n).padStart(2, "0");
-    const ts = `${p2(now.getHours())}:${p2(now.getMinutes())}:${p2(now.getSeconds())}`;
     let rewrote = false;
     // also rewrite when the file is not the one we wrote (`bin/page start` re-renders it without the canvas stylesheet)
-    if (r.signature !== this.sigs.get(project) || this.pageStamp(target) !== this.stamps.get(project)) {
-      writeAtomic(target, r.page);
+    // Lavish reloads the page frame whenever this file changes, so it is written only when its shell really changed: a plugin
+    // restart finds the signature it would write already on disk and leaves the file (and every open tab) alone.
+    // Just after a restart the canvas stylesheet has not arrived yet, so the shell would differ from the one on disk (no canvas css)
+    // and be rewritten twice (without it, then with it): two reloads of every open tab. A page already on disk waits for it.
+    const cv = this.canvas.data(ids);
+    const waitCss = this.canvas.configured && !cv.css && Date.now() - this.startedAt < 90_000 && this.pageSignature(target) !== "";
+    if (!waitCss && (r.signature !== this.sigs.get(project) || this.pageStamp(target) !== this.stamps.get(project))) {
+      if (this.pageSignature(target) !== r.signature) {
+        writeAtomic(target, r.page);
+        rewrote = true;
+      }
       this.sigs.set(project, r.signature);
       this.stamps.set(project, this.pageStamp(target));
-      rewrote = true;
     }
     // The page polls the tiny version file each second and fetches the full payload only when its content hash moved, so
     // the payload is rewritten only then (the clock stamp is not part of the hash: it shows the last real change).
+    this.writeBodies(project, target, r.bodies);
     const hash = createHash("sha1").update(r.live).digest("hex").slice(0, 16);
     const liveFile = target.replace(/\.[^./]*$/, "") + ".live.js";
     const seq = ++this.liveSeq;
     if (hash !== this.liveHashes.get(project) || !existsSync(liveFile)) {
-      writeAtomic(liveFile, liveJs(r.live.replace(/\{TS\}/g, ts), now.toISOString(), seq, hash));
+      this.changedAt.set(project, now.toISOString());
+      writeAtomic(liveFile, liveJs(r.live, this.changedAt.get(project), seq, hash));
       this.liveHashes.set(project, hash);
     }
-    writeAtomic(liveVersionFileOf(target), liveVersionJs(hash, now.toISOString(), seq));
+    writeAtomic(liveVersionFileOf(target), liveVersionJs(hash, now.toISOString(), seq, this.changedAt.get(project)));
     patchPageJson(pageJsonPath(this.cfg.root, project), { lastRender: now.toISOString(), banner: banner?.text ?? null, agentViews: this.agents.snapshot(ids) });
     if (rewrote) this.log(`rendered ${project} (${r.signature.slice(0, 8)})`);
   }
@@ -1157,7 +1259,7 @@ export class Deck {
         if (g === "you") {
           counts.needsYou++;
           if (t.asks.length) for (const a of t.asks.filter((a) => !a.repliedAt)) needsYou.push({ taskId: t.id, askId: a.id, taskTitle: plainTitle(t), text: a.text, since: a.since ?? "" });
-          else needsYou.push({ taskId: t.id, askId: null, taskTitle: plainTitle(t), text: st.stage.endsWith("first mate stalled") ? st.reason : canvasQuestion(canvas.summaries[st.agentId ?? ""]) || t.notes || "Needs your call", since: "" });
+          else needsYou.push({ taskId: t.id, askId: null, taskTitle: plainTitle(t), text: st.stage.endsWith("first mate stalled") ? st.reason : canvasQuestion(canvas, st.agentId) || t.notes || "Needs your call", since: "" });
         } else if (g === "fm") {
           counts.withFirstMate++; // the next move is the first mate's, so it does not count as needing the captain
         } else if (g === "running") {
