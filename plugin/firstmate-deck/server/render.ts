@@ -39,6 +39,8 @@ export type Banner = { kind: "unreachable" | "ended" | "plugin-down" | "state"; 
 export type RenderOpts = {
   now: Date;
   paseoAgentUrl: (id: string) => string;
+  /** The paseo:// link that opens an agent in the Paseo app. Null (or no function) while the daemon's server ID is unknown: no "app ↗" link then. */
+  paseoAppUrl?: (id: string) => string | null;
   banner?: Banner;
   tickSeconds: number;
   /** How often the plugin re-renders even when nothing changed (it says so in the page text). Default 20. */
@@ -129,17 +131,27 @@ function pill(group: GroupKey, ast: string): [string, string] {
 // a flag that counts time ("silent 41 min") carries when it began and the browser writes the count (page-script.ts clocks)
 const flagBadges = (flags: StageFlag[]) => flags.map((f) => `<span class="fl${f.drift ? " fl-d" : ""}" title="${esc(f.key)}">${f.since ? `${esc(f.text.replace(/\s*\d+ min$/, ""))} <span class="ck" data-ago="${f.since}"></span>` : esc(f.text)}</span>`).join("");
 
+// The page runs inside Lavish's sandboxed frame: a link without a target loads where it points in place of the page. Every
+// link that leaves the page takes this (paseo:// ones too).
+const NEW_TAB = ` target="_blank" rel="noopener noreferrer"`;
+
+/** "Open in Paseo" (the web UI) and, when the app link is known, "app ↗" (the same agent in the Paseo app) kept beside it. */
+function paseoLinks(o: RenderOpts, id: string): string {
+  const web = `<a class="open" href="${esc(o.paseoAgentUrl(id))}"${NEW_TAB}>Open in Paseo</a>`;
+  const app = o.paseoAppUrl?.(id);
+  return app ? `<span class="open-pair">${web}<a class="app-open" href="${esc(app)}"${NEW_TAB} title="Open in the Paseo app">app ↗</a></span>` : web;
+}
+
 function agentBlock(t: Task, group: GroupKey, view: AgentView | undefined, o: RenderOpts, st: Stage, withCanvas = false): string {
   const aid = st.agentId;
   if (!aid) { // no agent to show: Dispatching and Lost still say where the task stands, and so does any drift flag
     if (!st.flags.length && group !== "running" && group !== "fm") return "";
     return `<div class="ag"><span class="pill p-idle"><span class="dot"></span>${esc(st.stage)}</span>${flagBadges(st.flags)}</div>`;
   }
-  const url = esc(o.paseoAgentUrl(aid));
   if (group === "done") { // frozen: the agent id may be reused later, so show none of its live state
     const [cls, label] = st.failed ? ["error", "failed"] : ["done", "done"];
     const who = t.provider ? `<span class="facts">${esc(t.provider)}</span>` : "";
-    return `<div class="ag"><span class="pill p-${cls}"><span class="dot"></span>${label}</span>${who}${flagBadges(st.flags)}<a class="open" href="${url}">Open in Paseo</a></div>`;
+    return `<div class="ag"><span class="pill p-${cls}"><span class="dot"></span>${label}</span>${who}${flagBadges(st.flags)}${paseoLinks(o, aid)}</div>`;
   }
   const a: AgentView = view ?? { status: "unknown", stepCount: 0, recent: [] };
   const ast = a.stale ? "unknown" : a.status;
@@ -159,7 +171,7 @@ function agentBlock(t: Task, group: GroupKey, view: AgentView | undefined, o: Re
   // with a canvas fragment the links move below it (cvLinks) and the canvas's BLUF/steps/Now replace the recent-steps block
   const head =
     `<div class="ag"><span class="pill p-${cls}"><span class="dot"></span>${esc(label)}</span>` +
-    `<span class="stg">${esc(st.stage)}</span>${flagBadges(st.flags)}<span class="facts">${facts}</span>${withCanvas ? "" : `<a class="open" href="${url}">Open in Paseo</a>`}</div>`;
+    `<span class="stg">${esc(st.stage)}</span>${flagBadges(st.flags)}<span class="facts">${facts}</span>${withCanvas ? "" : paseoLinks(o, aid)}</div>`;
   if (withCanvas || !cur) return head;
   if (!a.recent.length) return head + `<div class="cur">${esc(cut(cur, 160))}</div>`;
   const lis = a.recent.map((s) => `<li>${esc(s)}</li>`).join("");
@@ -212,7 +224,7 @@ function rawAsks(t: Task, s: FmSummary, comments: TrailComment[], now: Date, act
     if (!SAFE_ASK.test(a.id) || a.options.length < 2) {
       // say why there are no buttons, and link the canvas itself (the card's "Open canvas" link may sit far below)
       const why = a.options.length < 2 ? `this question has ${a.options.length === 1 ? "only one option" : "no options"}` : `its id “${cut(a.id, 40)}” is not one the page can carry in a button`;
-      body = `${q}<div class="m">No buttons here: ${why}. <a href="${esc(s.url)}">Answer it on the canvas ↗</a>, or comment on this card.</div>`;
+      body = `${q}<div class="m">No buttons here: ${why}. <a href="${esc(s.url)}"${NEW_TAB}>Answer it on the canvas ↗</a>, or comment on this card.</div>`;
     } else {
       const btns = a.options.map((o, k) => {
         const on = picked !== undefined && o.value === picked;
@@ -363,7 +375,7 @@ function row(t: Task, group: GroupKey, ctx: Ctx, idx = 0): string {
   const name = esc(t.title || t.intent || t.id);
   const st = ctx.stages.get(t.id)!;
   const aid = st.agentId;
-  const title = aid ? `<a href="${esc(ctx.o.paseoAgentUrl(aid))}">${name}</a>` : name;
+  const title = aid ? `<a href="${esc(ctx.o.paseoAgentUrl(aid))}"${NEW_TAB}>${name}</a>` : name;
   const failed = st.failed;
   const chip = failed ? `<span class="chip c-fail">failed</span>` : "";
   // Done cards carry their position (data-i) so the page can put a card back in order when it moves it between the
@@ -451,7 +463,7 @@ function row(t: Task, group: GroupKey, ctx: Ctx, idx = 0): string {
     if (ans || detail) out.push(`<div class="askbox answered" id="a-${esc(t.id)}-${esc(a.id)}"><div class="ask-tag">Answered</div>${ans}${detail}</div>`);
   }
   if (sum) {
-    out.push(...raw, `<div class="cv-links"><a class="cv-open" href="${esc(sum.url)}">Open canvas ↗</a><a class="open" href="${esc(ctx.o.paseoAgentUrl(sum.agentId))}">Open in Paseo</a></div>`);
+    out.push(...raw, `<div class="cv-links"><a class="cv-open" href="${esc(sum.url)}"${NEW_TAB}>Open canvas ↗</a>${paseoLinks(ctx.o, sum.agentId)}</div>`);
   } else out.push(agentBlock(t, group, aid ? ctx.agents[aid] : undefined, ctx.o, st));
   if (group === "blocked") out.push(`<div class="bo"><b>Blocked on:</b> ${esc(t.blocked_on || "an outside dependency")}</div>`);
   const body = t.card.trim() ? cardHtml(t) : esc(t.notes);

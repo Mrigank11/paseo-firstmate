@@ -38,7 +38,7 @@ test("the card pulls in the canvas: verdict, BLUF, steps strip with the Now row,
   assert.match(html, /1\/4 steps/);
   assert.match(html, /<b>Now<\/b> implement/);
   assert.equal((html.match(/<i class="on">/g) ?? []).length, 1);
-  assert.match(html, /<a class="cv-open" href="http:\/\/canvas\.test\/a\/ag-1">Open canvas ↗<\/a><a class="open" href="http:\/\/paseo\.test\/agent\/ag-1">Open in Paseo<\/a>/);
+  assert.match(html, /<a class="cv-open" href="http:\/\/canvas\.test\/a\/ag-1" target="_blank" rel="noopener noreferrer">Open canvas ↗<\/a><a class="open" href="http:\/\/paseo\.test\/agent\/ag-1" target="_blank" rel="noopener noreferrer">Open in Paseo<\/a>/);
   assert.ok(html.indexOf('class="ag"') < html.indexOf('class="cv has-full"') && html.indexOf('class="cv has-full"') < html.indexOf("cv-links"));
   // the canvas's steps replace the recent-steps block, and there is no iframe
   assert.ok(!html.includes("stp") && !html.includes("<iframe"));
@@ -140,7 +140,7 @@ test("a canvas ask without usable options is shown read-only: it says why and li
   const s = summary("ag-1", { openAsks: [{ id: "my-ask", question: "Free text?", blocking: false, options: [] }] });
   const html = card(render(project([T]), data({}, s)).live);
   assert.match(html, /Free text\?/);
-  assert.match(html, /No buttons here: this question has no options\. <a href="http:\/\/canvas\.test\/a\/ag-1">Answer it on the canvas ↗<\/a>, or comment on this card\./);
+  assert.match(html, /No buttons here: this question has no options\. <a href="http:\/\/canvas\.test\/a\/ag-1" target="_blank" rel="noopener noreferrer">Answer it on the canvas ↗<\/a>, or comment on this card\./);
   assert.ok(!html.includes("<button"));
   const one = summary("ag-1", { openAsks: [{ id: "q1", question: "Sure?", blocking: false, options: [{ value: "y", label: "Yes" }] }] });
   assert.match(card(render(project([T]), data({}, one)).live), /this question has only one option/);
@@ -151,7 +151,7 @@ test("a canvas ask whose id the page cannot carry says so; agent-canvas's own id
   for (const id of ["9lives", "has space", "x".repeat(33), "a.b"]) {
     const html = card(render(project([T]), data({}, summary("ag-1", { openAsks: [{ id, question: "Q?", blocking: false, options: two }] }))).live);
     assert.ok(!html.includes("<button"), id);
-    assert.match(html, /No buttons here: its id .* is not one the page can carry in a button\. <a href="http:\/\/canvas\.test\/a\/ag-1">/, id);
+    assert.match(html, /No buttons here: its id .* is not one the page can carry in a button\. <a href="http:\/\/canvas\.test\/a\/ag-1" target="_blank" rel="noopener noreferrer">/, id);
   }
   for (const id of ["merge-option", "q-1", "a_b-c", "x".repeat(32)]) {
     const html = card(render(project([T]), data({}, summary("ag-1", { openAsks: [{ id, question: "Q?", blocking: false, options: two }] }))).live);
