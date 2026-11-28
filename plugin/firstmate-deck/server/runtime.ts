@@ -142,6 +142,7 @@ export class Deck {
   private stalePollsChecked = new Set<string>();
   private failing = new Map<string, number>();
   private webBase = "";
+  private serverId = "";
   private lavishBin: string | null = null;
   private fmCache = new Map<string, { at: number; id: string | null }>();
   private stopped = false;
@@ -354,6 +355,7 @@ export class Deck {
     try {
       const st = JSON.parse(await this.o.exec(["status", "--json"]));
       const listen = String(st.listen ?? "").replace("0.0.0.0", st.hostname || "127.0.0.1");
+      if (st.serverId) this.serverId = String(st.serverId);
       if (listen && st.serverId) this.webBase = `http://${listen}/h/${st.serverId}`;
     } catch (e) {
       this.log(`could not read daemon status for agent links: ${e}`);
@@ -361,6 +363,8 @@ export class Deck {
   }
 
   private agentUrl = (id: string) => `${this.webBase || "http://localhost:6767"}/agent/${id}`;
+  /** Paseo's agent deep link (@getpaseo/protocol agent-deep-link: the app rejects any other shape). */
+  private appUrl = (id: string) => (this.serverId ? `paseo://h/${encodeURIComponent(this.serverId)}/agent/${encodeURIComponent(id)}` : null);
 
   // ---------- discovery + watching ----------
 
@@ -841,7 +845,7 @@ export class Deck {
     const now = new Date();
     const banner = this.bannerFor(project, pj.session);
     const r = renderProject(model, views, {
-      now, tickSeconds: 1, refreshSeconds: Math.round((this.o.tickMs ?? TICK_MS) / 1000), paseoAgentUrl: this.agentUrl, banner, pageFile: basename(target),
+      now, tickSeconds: 1, refreshSeconds: Math.round((this.o.tickMs ?? TICK_MS) / 1000), paseoAgentUrl: this.agentUrl, paseoAppUrl: this.appUrl, banner, pageFile: basename(target),
       marksUrl: this.marksUrl(project, pj), labeled: this.labeledFor(model), canvas: this.canvas.data(ids), stalled: this.stalled,
     });
     // first render of a page that has never stored what the captain saw: seed it, so turning this on does not light every page
