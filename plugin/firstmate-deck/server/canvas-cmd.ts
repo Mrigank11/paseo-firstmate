@@ -14,6 +14,7 @@ import { projectClaimedId } from "./claims.ts";
 import { loadAllLive } from "./state.ts";
 import { currentAgent } from "./stage.ts";
 import { inlineImages } from "./canvas-images.ts";
+import { linkBluf } from "./markdown.ts";
 
 const DEFAULT_URL = "http://127.0.0.1:6790";
 
@@ -257,7 +258,7 @@ async function snapshot(root: string, args: string[]): Promise<void> {
   const src = await getText(`${base}/api/canvas/${enc}`).catch(() => null);
   const dir = join(root, "state", "tasks", task);
   mkdirSync(dir, { recursive: true });
-  const html = `<!doctype html>\n<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">\n<title>Canvas · ${task.replace(/[<>&"]/g, "")}</title>\n<style>\nbody{margin:0;background:#fff}\n.cv-snap{max-width:860px;margin:24px auto;padding:0 16px}\n${css?.ok ? css.text.replace(/<\/style/gi, "<\\/style") : ""}\n</style></head><body>\n<div class="cv-snap acv">${card.text}</div>\n</body></html>\n`;
+  const html = `<!doctype html>\n<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">\n<title>Canvas · ${task.replace(/[<>&"]/g, "")}</title>\n<style>\nbody{margin:0;background:#fff}\n.cv-snap{max-width:860px;margin:24px auto;padding:0 16px}\n${css?.ok ? css.text.replace(/<\/style/gi, "<\\/style") : ""}\n</style></head><body>\n<div class="cv-snap acv">${linkBluf(card.text)}</div>\n</body></html>\n`;
   writeFileSync(join(dir, "canvas.final.html"), html);
   const tsx = src?.ok && src.text && !/^No canvas yet\.?$/.test(src.text.trim());
   if (tsx) writeFileSync(join(dir, "canvas.final.tsx"), src!.text.endsWith("\n") ? src!.text : `${src!.text}\n`);
