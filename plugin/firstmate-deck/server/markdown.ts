@@ -1,6 +1,7 @@
 // Small dependency-free Markdown -> HTML for the subset the first mate writes. Everything is escaped first:
 // raw HTML in the source is shown as text, never passed through (the input can be crew output). Only links to
 // http:, https:, mailto:, #fragments and relative paths become anchors.
+import { cut } from "./humanize.ts";
 
 const escCode = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 const escText = (s: string) => escCode(s).replace(/"/g, "&quot;").replace(/'/g, "&#x27;");
@@ -37,6 +38,35 @@ export function inline(src: string): string {
   s = s.replace(/\*\*([^*]+)\*\*/g, "<b>$1</b>");
   s = s.replace(/(^|[^*\w])\*([^*\s][^*]*?)\*(?![*\w])/g, "$1<i>$2</i>");
   return s.replace(/\u0000(\d+)\u0000/g, (_m, i: string) => codes[Number(i)]);
+}
+
+// A canvas's BLUF and recap lines are plain text apart from simple [text](http(s) url) links. The url ends before any space,
+// bracket, quote or angle bracket, so it cannot leave the href it is put in; anything else stays text.
+// eslint-disable-next-line no-control-regex
+const LINE_LINK = /\[([^[\]]+)\]\((https?:\/\/[^\s()<>"'\u0000-\u001f\u007f]+)\)/gi;
+
+/**
+ * A BLUF or recap line as escaped HTML with its links as anchors, cut to `max` characters as read (a url costs nothing and a
+ * link is never left half). `text` is the whole line as read, for a tooltip.
+ */
+export function linkLine(src: string, max = Infinity): { html: string; text: string } {
+  const parts = src.split(LINE_LINK); // text, then (label, url, text) for each link
+  const segs = parts.flatMap((p, i) => (i % 3 === 0 ? [{ t: p, url: "" }] : i % 3 === 1 ? [{ t: p, url: parts[i + 1] }] : []));
+  const text = segs.map((s) => s.t).join("");
+  const shown = cut(text, max);
+  let left = shown === text ? text.length : shown.length - 1; // the last character of a cut line is the ellipsis
+  let html = "";
+  for (const { t, url } of segs) {
+    const s = t.slice(0, left);
+    left -= s.length;
+    if (s) html += url ? anchor(escText(url), escText(s)) : escText(s);
+  }
+  return { html: shown === text ? html : `${html}…`, text };
+}
+
+/** The same links in a canvas body agent-canvas drew, where the BLUF is already-escaped text in `<p class="lede">`. */
+export function linkBluf(html: string): string {
+  return html.replace(/<p class="lede">[^<]*(?=<\/p>)/g, (lede) => lede.replace(LINE_LINK, (_m, label: string, url: string) => anchor(url, label)));
 }
 
 const LIST = /^(\s*)([-*+]|\d+\.)\s+(.*)$/;

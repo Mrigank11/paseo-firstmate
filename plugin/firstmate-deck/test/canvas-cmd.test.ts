@@ -41,7 +41,7 @@ async function rig() {
       const send = (code: number, type: string, body: string) => { res.writeHead(code, { "content-type": type }); res.end(body); };
       if (u.pathname === "/api/fm/deliver") return req.headers["x-canvas-key"] === KEY ? send(200, "application/json", JSON.stringify({ ok: true })) : send(403, "application/json", JSON.stringify({ ok: false, error: "wrong key" }));
       if (u.pathname === "/api/fm/css") return send(200, "text/css", ".acv .blk{color:red}");
-      if (u.pathname === "/api/fm/card/ag-1") return send(200, "text/html", `<div class="blk">CANVAS ag-1</div><img src="/asset/${"d".repeat(32)}" alt="shot"><img src="http://127.0.0.1:6790/asset/${"e".repeat(32)}" alt="tag">`);
+      if (u.pathname === "/api/fm/card/ag-1") return send(200, "text/html", `<p class="lede">see [PR](https://x.test/pr/1)</p><div class="blk">CANVAS ag-1</div><img src="/asset/${"d".repeat(32)}" alt="shot"><img src="http://127.0.0.1:6790/asset/${"e".repeat(32)}" alt="tag">`);
       if (u.pathname === `/asset/${"d".repeat(32)}` || u.pathname === `/asset/${"e".repeat(32)}`) { res.writeHead(200, { "content-type": "image/png" }); return void res.end(Buffer.from("PNGBYTES")); }
       if (u.pathname === "/api/canvas/ag-1") return send(200, "text/plain", `<Canvas title="x" status="done"><Bluf>shipped</Bluf></Canvas>`);
       send(404, "text/plain", "no");
@@ -128,6 +128,7 @@ test("canvas-snapshot: writes the final canvas (standalone html + source) into t
   assert.equal(out.code, 0, out.err);
   const html = readFileSync(join(r.root, "state", "tasks", "t-one", "canvas.final.html"), "utf8");
   assert.match(html, /CANVAS ag-1/);
+  assert.match(html, /<p class="lede">see <a href="https:\/\/x\.test\/pr\/1" target="_blank" rel="noopener noreferrer">PR<\/a><\/p>/, "the saved canvas's BLUF links are anchors");
   assert.match(html, /\.acv \.blk\{color:red\}/);
   const uri = `data:image/png;base64,${Buffer.from("PNGBYTES").toString("base64")}`;
   assert.equal(html.split(uri).length - 1, 2, "the picture is inside the snapshot: it must outlive the daemon's asset cache and render with no host");

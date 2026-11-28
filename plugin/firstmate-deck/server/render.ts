@@ -3,7 +3,7 @@ import { createHash } from "node:crypto";
 import { cut } from "./humanize.ts";
 import type { Recap } from "./recap.ts";
 import { cardHash } from "./marks.ts";
-import { inline, markdown } from "./markdown.ts";
+import { inline, linkBluf, linkLine, markdown } from "./markdown.ts";
 import { ICON, svg } from "./icons.ts";
 import { navScript } from "./nav-script.ts";
 import { pageScript } from "./page-script.ts";
@@ -190,8 +190,8 @@ export function canvasFragment(s: FmSummary, card?: string, full = false): strin
   const compact =
     `<div class="cv-c"><div class="cv-top"><span class="cv-v cv-${verdictTone(s.verdict.label)}">${esc(s.verdict.label)}</span>${flags}${s.auto ? `<span class="fl" title="no canvas was written: this is the one agent-canvas drew from the agent's timeline">auto canvas</span>` : ""}</div>` +
     // a whole canvas carries its own BLUF and steps: the strip keeps only the verdict
-    `${whole ? "" : s.bluf ? `<div class="cv-bluf">${esc(full ? s.bluf : cut(s.bluf, 280))}</div>` : ""}${whole ? "" : steps}</div>`;
-  return `<div class="cv${card ? " has-full" : ""}${whole ? " cv-whole" : ""}" data-rev="${s.rev}">${compact}${card ? `<details class="cnotes cv-d" id="cvd-${esc(s.agentId)}"${whole ? " open" : ""}><summary>Full canvas</summary><div class="cv-f acv">${card}</div></details>` : ""}</div>`;
+    `${whole ? "" : s.bluf ? `<div class="cv-bluf">${linkLine(s.bluf, full ? Infinity : 280).html}</div>` : ""}${whole ? "" : steps}</div>`;
+  return `<div class="cv${card ? " has-full" : ""}${whole ? " cv-whole" : ""}" data-rev="${s.rev}">${compact}${card ? `<details class="cnotes cv-d" id="cvd-${esc(s.agentId)}"${whole ? " open" : ""}><summary>Full canvas</summary><div class="cv-f acv">${linkBluf(card)}</div></details>` : ""}</div>`;
 }
 
 /**
@@ -280,7 +280,8 @@ export function recapStrip(t: Task, group: GroupKey, recap: Recap | null | undef
       consumes: last.target === `t-${t.id}` ? last.id : undefined,
     };
   }
-  return { html: `<div class="recap">${row("You asked", esc(cut(recap.asked, 200)), recap.asked)}${row(`Crew did${crewAt ? hm(crewAt) : ""}`, esc(cut(recap.did, 200)), recap.did)}</div>` };
+  const line = (k: string, v: string) => { const l = linkLine(v, 200); return row(k, l.html, l.text); };
+  return { html: `<div class="recap">${line("You asked", recap.asked)}${line(`Crew did${crewAt ? hm(crewAt) : ""}`, recap.did)}</div>` };
 }
 
 type Ctx = { bodies: Map<string, Body>; snapCss: Set<string>; byId: Map<string, Task>; unblocks: Map<string, string[]>; agents: Record<string, AgentView>; o: RenderOpts; comments: TrailComment[]; stages: Map<string, Stage>; canvas?: CanvasData };
@@ -340,7 +341,7 @@ export function snapshotParts(doc: string): { css: string; body: string } | unde
     .replace(/<(script|style)\b[\s\S]*?<\/\1>/gi, "");
   // the page and wrapper rules (body, .cv-snap) belong to the standalone document, not to the card
   const scoped = css.replace(/(?<=^|\})\s*(?:body|\.cv-snap)\s*\{[^}]*\}/g, "").replace(/@import[^;]*;/gi, "").trim();
-  return { css: scoped, body };
+  return { css: scoped, body: linkBluf(body) };
 }
 
 /**
