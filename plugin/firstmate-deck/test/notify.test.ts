@@ -12,6 +12,7 @@ import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import vm from "node:vm";
+import { createServer } from "node:net";
 import { Deck, type DeckOpts } from "../server/runtime.ts";
 import { readPageJson } from "../server/store.ts";
 import { notifyPageSide } from "../server/notify.ts";
@@ -32,6 +33,8 @@ async function until(cond: () => boolean, ms = 3000) {
 type T = { id: string; state?: string; title?: string; asks?: { id: string; text: string }[] };
 const ask = (id: string, text: string) => ({ id, text, since: "2026-11-28T10:00:00Z" });
 
+const freePort = () => new Promise<number>((done) => { const s = createServer(); s.listen(0, "127.0.0.1", () => { const { port } = s.address() as { port: number }; s.close(() => done(port)); }); });
+
 async function rig(tasks: T[], o: { cfg?: Record<string, unknown>; deck?: Partial<DeckOpts>; crew?: string[]; brokenFleet?: boolean; agents?: { broken: boolean } } = {}) {
   const root = mkdtempSync(join(tmpdir(), "deck-nt-"));
   const pdir = join(root, "state", "projects", "demo");
@@ -48,7 +51,7 @@ async function rig(tasks: T[], o: { cfg?: Record<string, unknown>; deck?: Partia
   const list = paseo.agents.list;
   paseo.agents.list = async (q: any) => { if (o.agents?.broken) throw new Error("daemon busy"); return list(q); };
   ports.capture({ paseo }, "test");
-  const port = 42000 + Math.floor(Math.random() * 1500);
+  const port = await freePort(); // a guessed port can collide with a test file running alongside
   const cfg = { root, firstmateLabel: "firstmate=true", readMarksPort: port, canvasUrl: "", lavishBin: "/nonexistent/lavish-axi.mjs", lavishPort: "1", lavishStateDir: join(root, "lavish"), ...o.cfg };
   const start = async () => {
     const d = new Deck({ exec, ports, tailnetIp: async () => "", readConfig: async () => cfg as any, ...o.deck });
