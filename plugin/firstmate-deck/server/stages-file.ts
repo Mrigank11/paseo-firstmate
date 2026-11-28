@@ -22,6 +22,8 @@ export type StageRow = {
   /** When the current (owner, fingerprint) took over, ISO. Absent on a row computed locally. */
   owedSince?: string;
   note?: string;
+  /** The label of the host the current agent runs on; absent for an agent on this daemon. */
+  host?: string;
   canvas?: { verdict: string; bluf: string; asks: number };
   /** Where the row came from: the plugin's snapshot, or a local computation (no plugin, degraded). */
   source?: "plugin" | "local";

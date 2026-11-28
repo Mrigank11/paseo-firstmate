@@ -81,6 +81,8 @@ Teardown is keyed to the work **landing**, not to *you* merging it. Run this sec
 4. Close the task out of the live index: `bin/fleet finish <id> --branch <b>` (it refuses open asks unless the same command answers them: `--close-asks` / `--answer a1`), record the teardown with `bin/fleet log`, then `bin/fleet archive <id>` — the entry moves to `fleet-archive.jsonl` together with the task's agents and outcome.
 5. If the landed repo is **paseo-firstmate itself** (the checkout you run from), run `git -C /home/mrigank/projects/llm-exp/paseo-firstmate pull --ff-only` so the merged rules are live in your next turn; if the fast-forward fails, tell the captain.
 
+A crew on another host (`<id>@<host>` in `bin/fleet stages`): `archive_workspace` and `archive_agent` do not reach it. Read its workspaces with `list_workspaces` and the host's `serverId`, and archive with the commands in `docs/STATE.md`, "Acting on a crew there". An offline host means teardown waits.
+
 REFUSE teardown while there is unlanded work: unmerged commits, an open PR, or a dirty worktree. Surface the unlanded state to the captain instead of archiving.
 
 ## 6a. Plan ship (conventions)

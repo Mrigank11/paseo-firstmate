@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # bin/isolated — a throwaway firstmate-v2 environment: its OWN Paseo daemon, plugins and state. Never touches ~/.paseo.
 #
-#   bin/isolated up [--no-canvas]   create the home and state on first use, start the daemon, install firstmate-deck from THIS
+#   bin/isolated up [--no-canvas] [--no-lavish]   create the home and state on first use, start the daemon, install firstmate-deck from THIS
 #                                   checkout (and agent-canvas), seed the sample fleet and project page; idempotent, and re-run
 #                                   from another worktree it re-points the plugin there
 #   bin/isolated down               stop the daemon (state and home are kept)
@@ -10,9 +10,13 @@
 #   bin/isolated paseo <args...>    the paseo CLI against the isolated daemon (--home added for you)
 #   bin/isolated fleet|page <args>  bin/fleet / bin/page against the isolated state (FIRSTMATE_ROOT + PASEO_HOME set)
 #   bin/isolated env                print the variables to eval for a shell that talks only to the isolated environment
+#   bin/isolated fake-mac up|down   a second throwaway daemon (no plugins), registered as host "mac" of the isolated one: remote crews
+#                                   without a Mac. `down` stops it and leaves it registered, so its crews read as offline.
+#   bin/isolated fake-mac paseo ... the paseo CLI against that second daemon
 #
 # Overrides: ISO_BASE (default /home/mrigank/projects/llm-exp/paseo-firstmate/.isolated), ISO_HOME (default $ISO_BASE/paseo-home), ISO_ROOT (state, default $ISO_BASE/fm-root), ISO_WORK ($ISO_BASE/work), ISO_PORT (6782),
-# ISO_CANVAS_PORT (6791), ISO_LAVISH_PORT (4411), ISO_MARKS_PORT (4412), ISO_HOST (tailnet IP), ISO_CANVAS_DIR (agent-canvas checkout).
+# ISO_CANVAS_PORT (6791), ISO_LAVISH_PORT (4411), ISO_MARKS_PORT (4412), ISO_HOST (tailnet IP), ISO_CANVAS_DIR (agent-canvas checkout),
+# ISO_MAC_HOME ($ISO_BASE/fake-mac-home), ISO_MAC_PORT (6783).
 set -euo pipefail
 
 REPO="$(cd "$(dirname "$0")/.." && pwd)"
@@ -28,14 +32,19 @@ ISO_HOST="${ISO_HOST:-100.101.33.17}"
 ISO_NAME="${ISO_NAME:-manjaro.tail2e75.ts.net}"
 ISO_CANVAS_DIR="${ISO_CANVAS_DIR:-/home/mrigank/projects/paseo-plugins/agent-canvas}"
 PROJECT="${ISO_PROJECT:-demo-app}"
+ISO_MAC_HOME="${ISO_MAC_HOME:-$ISO_BASE/fake-mac-home}"
+ISO_MAC_PORT="${ISO_MAC_PORT:-6783}"
 
 die() { echo "isolated: $*" >&2; exit 1; }
 # Hard guards: never the live home, never the live state, never another task's demo home.
 case "${ISO_HOME%/}" in "$HOME/.paseo"|"$HOME/.paseo-canvas-demo") die "refusing: $ISO_HOME is not an isolated home" ;; esac
 case "${ISO_PORT}" in 6767|6790) die "refusing: port $ISO_PORT belongs to the live setup" ;; esac
+case "${ISO_MAC_HOME%/}" in "$HOME/.paseo"|"$HOME/.paseo-canvas-demo"|"${ISO_HOME%/}") die "refusing: $ISO_MAC_HOME is not a fake-mac home" ;; esac
+case "${ISO_MAC_PORT}" in 6767|6790|"$ISO_PORT"|"$ISO_CANVAS_PORT") die "refusing: port $ISO_MAC_PORT is taken by the live or isolated setup" ;; esac
 [[ "$(cd "$ISO_ROOT" 2>/dev/null && pwd -P || echo "$ISO_ROOT")" != "/home/mrigank/projects/llm-exp/paseo-firstmate" ]] || die "refusing: ISO_ROOT is the main checkout"
 
 P() { paseo --home "$ISO_HOME" "$@"; }
+M() { paseo --home "$ISO_MAC_HOME" "$@"; }
 export_env() {
   export PASEO_HOME="$ISO_HOME" FIRSTMATE_ROOT="$ISO_ROOT" FLEET_FILE="$ISO_ROOT/state/fleet.json" AGENT_CANVAS_PORT="$ISO_CANVAS_PORT"
   export AGENT_CANVAS_PUBLIC_URL="http://$ISO_NAME:$ISO_CANVAS_PORT" AGENT_CANVAS_APP_URL="http://$ISO_NAME:$ISO_PORT"
@@ -81,7 +90,10 @@ seed_state() {
 
 cmd_up() {
   command -v paseo >/dev/null && command -v jq >/dev/null || die "paseo and jq are required"
-  local canvas=1; [[ "${1:-}" == --no-canvas ]] && canvas=0
+  local canvas=1 lavish=1 a
+  for a in "$@"; do
+    case "$a" in --no-canvas) canvas=0 ;; --no-lavish) lavish=0 ;; *) die "unknown option '$a'" ;; esac
+  done
   export_env
   write_config
   mkdir -p "$ISO_ROOT/state"
@@ -107,18 +119,51 @@ cmd_up() {
     fm="$(P run --no-wait --quiet --provider claude --model claude-sonnet-5-5 --mode bypassPermissions --title "First mate (isolated stand-in)" --cwd "$ISO_WORK" "Reply with the single word ready, then stop. Do nothing else." | tail -1)"
     echo "$fm" >"$ISO_ROOT/fm-agent"
   fi
-  PASEO_AGENT_ID="$fm" "$REPO/bin/page" start "$PROJECT" --title "Demo app (isolated)" >/dev/null || echo "isolated: bin/page start reported a problem (bin/isolated page status)" >&2
+  if ((lavish)); then
+    PASEO_AGENT_ID="$fm" "$REPO/bin/page" start "$PROJECT" --title "Demo app (isolated)" >/dev/null || echo "isolated: bin/page start reported a problem (bin/isolated page status)" >&2
+  else
+    # no Lavish: claim and create the page only; the plugin renders its files, comments are not polled
+    node "$REPO/plugin/firstmate-deck/server/page-tool.ts" scaffold "$ISO_ROOT" "$PROJECT" --title "Demo app (isolated)" >/dev/null || die "could not create the project"
+    PASEO_AGENT_ID="$fm" "$REPO/bin/page" claim "$PROJECT" >/dev/null || die "could not claim $PROJECT"
+  fi
   cmd_status
 }
 
-cmd_down() { export_env; P daemon stop >/dev/null 2>&1 || true; echo "isolated: daemon stopped"; }
+cmd_down() { export_env; M daemon stop >/dev/null 2>&1 || true; P daemon stop >/dev/null 2>&1 || true; echo "isolated: daemon stopped"; }
 
 cmd_reset() {
   cmd_down || true
   sleep 1
   [[ -n "$ISO_HOME" && "$ISO_HOME" != / && "$ISO_ROOT" != / ]] || die "bad paths"
-  rm -rf "$ISO_HOME" "$ISO_ROOT"
+  rm -rf "$ISO_HOME" "$ISO_ROOT" "$ISO_MAC_HOME"
   cmd_up
+}
+
+cmd_fake_mac() {
+  local sub="${1:-}"; shift || true
+  case "$sub" in
+    up)
+      command -v paseo >/dev/null && command -v jq >/dev/null || die "paseo and jq are required"
+      P daemon status >/dev/null 2>&1 || die "the isolated daemon is not running: bin/isolated up first"
+      mkdir -p "$ISO_MAC_HOME" "$ISO_WORK"
+      [[ -f "$ISO_MAC_HOME/config.json" ]] || cat >"$ISO_MAC_HOME/config.json" <<JSON
+{
+  "version": 1,
+  "daemon": { "listen": "$ISO_HOST:$ISO_MAC_PORT", "hostnames": ["manjaro", "$ISO_NAME"], "mcp": { "injectIntoAgents": false }, "relay": { "enabled": false } },
+  "pluginsEnabled": false
+}
+JSON
+      if ! ss -ltn 2>/dev/null | grep -q "$ISO_HOST:$ISO_MAC_PORT "; then
+        ss -ltn 2>/dev/null | grep -qE "[:.]$ISO_MAC_PORT " && die "port $ISO_MAC_PORT is taken by another process"
+        (cd "$ISO_MAC_HOME" && M start >/dev/null)
+      fi
+      P host ls --json | jq -e --arg t "tcp://$ISO_HOST:$ISO_MAC_PORT" 'any(.[]; .targetDescription == $t)' >/dev/null \
+        || P host add "tcp://$ISO_HOST:$ISO_MAC_PORT" --label mac >/dev/null || die "could not register the fake mac as a host"
+      P host ls ;;
+    down) M daemon stop >/dev/null 2>&1 || true; echo "isolated: fake mac stopped (still registered: its crews read as offline)" ;;
+    paseo) M "$@" ;;
+    *) die "usage: bin/isolated fake-mac up|down|paseo <args>" ;;
+  esac
 }
 
 cmd_status() {
@@ -142,6 +187,7 @@ case "${1:-}" in
   paseo) shift; P "$@" ;;
   fleet) shift; export_env; exec "$REPO/bin/fleet" "$@" ;;
   page) shift; export_env; exec "$REPO/bin/page" "$@" ;;
+  fake-mac) shift; cmd_fake_mac "$@" ;;
   env) export_env; echo "export PASEO_HOME=$ISO_HOME FIRSTMATE_ROOT=$ISO_ROOT FLEET_FILE=$ISO_ROOT/state/fleet.json" ;;
-  *) sed -n '2,15p' "$0"; exit 2 ;;
+  *) sed -n '2,18p' "$0"; exit 2 ;;
 esac

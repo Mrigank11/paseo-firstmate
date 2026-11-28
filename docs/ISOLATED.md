@@ -16,13 +16,18 @@
 
 ```
 bin/isolated up         # start + install + seed (idempotent; from another worktree it re-points the plugin there)
+bin/isolated up --no-lavish   # the same without opening a Lavish session (page files only, no comment polling)
 bin/isolated status     # URLs, plugins, agents
 bin/isolated down       # stop the daemon, keep everything
 bin/isolated reset      # wipe home + state, up again
 bin/isolated paseo ...  # paseo CLI with --home added;  bin/isolated fleet|page ...  # bin/fleet|bin/page on the isolated state
 ```
 
-`up` seeds a `demo-app` project page with three sample tasks (done scout, queued ship, scout with an ask) and a stand-in first-mate agent that claims the page. Dispatch demo crew with `bin/isolated paseo run --no-wait --provider claude --model claude-sonnet-5-5 --label fm.task=… --label fm.project=… --label fm.shape=… …` (the MCP `create_agent` tool talks to the live daemon, so use the CLI here) and record it with `bin/isolated fleet add …`.
+`up` seeds a `demo-app` project page with three sample tasks (done scout, queued ship, scout with an ask) and a stand-in first-mate agent that claims the page. Dispatch demo crew with `bin/isolated paseo run --no-wait --provider claude --model claude-sonnet-5-5 --thinking medium --mode bypassPermissions --label fm.task=… --label fm.project=… --label fm.shape=… …` (the MCP `create_agent` tool talks to the live daemon, so use the CLI here) and record it with `bin/isolated fleet add …`. Those are the contributor profile's settings: once the isolated daemon has the profiles (`bin/isolated page profiles --apply`), the deck refuses crew launches that match none (`docs/PROFILES.md`, "Launch check").
+
+## Remote crews without a Mac
+
+`bin/isolated fake-mac up` starts a second throwaway daemon (`$ISO_BASE/fake-mac-home`, tailnet port 6783, no plugins) and registers it as host `mac` of the isolated daemon. `bin/isolated fake-mac paseo run … --label fm.task=<id>` starts a crew on it; `bin/isolated fake-mac down` makes the host go offline. Its crews run on this same machine, so their canvas writes take the local path: the keyed tailnet path is only covered by agent-canvas tests.
 
 ## Rules
 

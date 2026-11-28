@@ -6,13 +6,16 @@
 // A strict crew (`canvas.strict=on`) that ends `BLOCKED: canvas ask <id>` with no such open Ask on its canvas (agent-canvas refused
 // the question, so the canvas lacks the structure) is sent back once with the plugin's error; it is neither logged as a verdict nor
 // woken on. The second time it is an ordinary BLOCKED.
+// Crews on other Paseo hosts: one queue per host; what their event carries is used when the host cannot be asked; a turn the
+// sweep found and the host's event then names is one wake ("duplicate"). The wake target is always an agent of this daemon.
 import { appendFileSync, mkdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import type { PortSelector } from "./paseo-port.ts";
+import { isLocal, type PortSelector } from "./paseo-port.ts";
 import { projectClaimedId, claimedId } from "./claims.ts";
+import { redact } from "./redact.ts";
 
 export type Verdict = "DONE" | "BLOCKED" | "ERROR" | "CANCELED" | "CLOSED" | "NARRATION";
-export type GateResult = "woke" | "shadow" | "deferred" | "failed" | "narration" | "near-miss" | "no-target" | "bounced";
+export type GateResult = "woke" | "shadow" | "deferred" | "failed" | "narration" | "near-miss" | "no-target" | "bounced" | "duplicate";
 
 export type GateEntry = {
   at: string;
@@ -26,6 +29,8 @@ export type GateEntry = {
   result: GateResult;
   /** Where it went (agent id), or why it did not. */
   note?: string;
+  /** For a finish the sweep found (no turn id): the agent's `updatedAt` when it was swept. */
+  agentAt?: string;
 };
 
 /** The timeline items the gate reads (structurally a subset of AgentTimelineItem). */
@@ -63,7 +68,7 @@ export function messageVerdict(items: readonly GateItem[]): { verdict: "DONE" | 
     if (it.type === "user_message" || it.type === "tool_call") break;
     if (it.type === "assistant_message" && typeof it.text === "string") run.unshift(it.text);
   }
-  const lines = run.join("").split("\n").map((l) => l.trimEnd());
+  const lines = redact(run.join("")).split("\n").map((l) => l.trimEnd());
   const first = lines.findIndex((l) => l.trim() !== "");
   if (first < 0) return { verdict: "NARRATION", line: "" };
   const line = lines[first].trimStart();
@@ -73,9 +78,12 @@ export function messageVerdict(items: readonly GateItem[]): { verdict: "DONE" | 
   return { verdict: "NARRATION", line, ...(late ? { nearMiss: late } : {}) };
 }
 
+/** This daemon's agents: a crew on another host is never a first mate, and listing never waits for one. */
+const localAgents = async (ports: PortSelector) => (await ports.current().listAgents({ local: true })).filter(isLocal);
+
 /** The first mate that owns a project: its own claim, else the checkout-wide claim, and only a live (not archived) agent counts. */
 export async function ownerOf(ports: PortSelector, root: string, project: string | undefined): Promise<string | null> {
-  const live = await ports.current().listAgents();
+  const live = await localAgents(ports);
   for (const c of [project ? projectClaimedId(root, project) : null, claimedId(root)]) {
     if (c && live.some((a) => a.id === c && !a.archived)) return c;
   }
@@ -89,15 +97,20 @@ export async function ownerOf(ports: PortSelector, root: string, project: string
 export async function wakeTarget(ports: PortSelector, root: string, parentId: string | null, project: string | undefined): Promise<string | null> {
   const owner = await ownerOf(ports, root, project);
   if (owner) return owner;
-  const live = await ports.current().listAgents();
+  const live = await localAgents(ports);
   return parentId && live.some((a) => a.id === parentId && !a.archived) ? parentId : null;
 }
 
 export type GateAgentInfo = { id: string; status: string; labels: Record<string, string>; archived: boolean; updatedAt: string | null };
 
+/** The agent of a hook event. A crew on another host (remote-events) also carries where it lives and what it was seen as. */
+export type HookAgent = { id: string; parentAgentId?: string | null; serverId?: string; labels?: Record<string, string>; status?: string };
+
 export type TurnEndedEvent = {
-  agent: { id: string; parentAgentId?: string | null };
+  agent: HookAgent;
   turnId: string | null;
+  /** When the turn began, on the agent's host (remote-events only). */
+  turnStartedAt?: string;
   outcome: { kind: "completed" } | { kind: "failed"; error: { message: string } } | { kind: "canceled"; reason?: string };
   timeline: readonly GateItem[];
 };
@@ -133,13 +146,13 @@ export type GateOptions = {
 export class Gate {
   private o: GateOptions;
   private seen: Set<string> | null = null;
-  private lastByAgent = new Map<string, { verdict: Verdict; line: string }>();
+  private lastByAgent = new Map<string, { verdict: Verdict; line: string; turnId: string | null; agentAt?: string }>();
   private bounced = new Set<string>(); // agentId|askId already sent back once (also from the log, so a restart keeps it)
   private timers = new Set<ReturnType<typeof setTimeout>>();
   private sweepTimer: ReturnType<typeof setInterval> | null = null;
   private sweeping = false;
   private stopped = false;
-  private chain: Promise<unknown> = Promise.resolve();
+  private chains = new Map<string, Promise<unknown>>(); // one per host ("" = this one): a hung host holds up only its own
 
   constructor(o: GateOptions) {
     this.o = o;
@@ -177,8 +190,7 @@ export class Gate {
         if (!l.trim()) continue;
         try {
           const e = JSON.parse(l) as GateEntry;
-          if (e.result === "woke" || e.result === "shadow") seen.add(this.key(e.agentId, e.turnId, e.verdict, e.line));
-          if (e.result === "woke" || e.result === "shadow" || e.result === "narration") this.lastByAgent.set(e.agentId, { verdict: e.verdict, line: e.line });
+          this.remember(e, seen);
           if (e.result === "bounced" && e.note) this.bounced.add(`${e.agentId}|${e.note.split(" ")[0]}`);
         } catch {}
       }
@@ -191,9 +203,7 @@ export class Gate {
 
   private append(e: Omit<GateEntry, "at">): void {
     const entry: GateEntry = { at: new Date(this.now()).toISOString(), ...e };
-    const seen = this.load();
-    if (e.result === "woke" || e.result === "shadow") seen.add(this.key(e.agentId, e.turnId, e.verdict, e.line));
-    if (e.result === "woke" || e.result === "shadow" || e.result === "narration") this.lastByAgent.set(e.agentId, { verdict: e.verdict, line: e.line });
+    this.remember(entry, this.load());
     try {
       mkdirSync(join(this.o.root(), "state"), { recursive: true });
       appendFileSync(this.logPath(), JSON.stringify(entry) + "\n");
@@ -202,49 +212,62 @@ export class Gate {
     }
   }
 
+  private remember(e: GateEntry, seen: Set<string>): void {
+    const handled = e.result === "woke" || e.result === "shadow" || e.result === "duplicate";
+    if (handled) seen.add(this.key(e.agentId, e.turnId, e.verdict, e.line));
+    if (handled || e.result === "narration") this.lastByAgent.set(e.agentId, { verdict: e.verdict, line: e.line, turnId: e.turnId, agentAt: e.agentAt });
+  }
+
   // ---------- agents ----------
 
-  private async info(id: string): Promise<GateAgentInfo | null> {
+  /** The agent as it is now. A remote one whose host cannot be asked is taken from what its event carried. */
+  private async info(agent: HookAgent, status = agent.status ?? "idle"): Promise<GateAgentInfo | null> {
     const sdk = this.o.ports.sdkPort();
-    return sdk ? sdk.agentInfo(id) : null;
+    const carried: GateAgentInfo | null = agent.serverId && agent.labels ? { id: agent.id, status, labels: agent.labels, archived: false, updatedAt: null } : null;
+    try {
+      return (sdk ? await sdk.agentInfo(agent.id) : null) ?? carried;
+    } catch (e) {
+      if (carried) return carried;
+      throw e;
+    }
   }
 
   // ---------- events ----------
 
   /** `agent.turn_ended`. Handlers run serially per event in the daemon; the chain also serialises our own async work. */
   onTurnEnded(ev: TurnEndedEvent): Promise<void> {
-    return this.enqueue(() => this.handleTurn(ev, true));
+    return this.enqueue(() => this.handleTurn(ev, true), ev.agent.serverId);
   }
 
   /** `agent.closed` of a plugin-notified agent. */
-  onClosed(ev: { agent: { id: string; parentAgentId?: string | null } }): Promise<void> {
+  onClosed(ev: { agent: HookAgent }): Promise<void> {
     return this.enqueue(async () => {
-      const info = await this.info(ev.agent.id);
+      const info = await this.info(ev.agent, "closed");
       const task = info?.labels["fm.task"];
       if (!info || !task || !this.root()) return;
       const line = "agent closed";
       await this.decide({ agentId: ev.agent.id, task, turnId: null, verdict: "CLOSED", line, labels: info.labels, parentId: ev.agent.parentAgentId ?? info.labels[PARENT_LABEL] ?? null });
-    });
+    }, ev.agent.serverId);
   }
 
   private root(): string { return this.o.root(); }
 
-  private enqueue(fn: () => Promise<void>): Promise<void> {
-    const run = this.chain.then(fn, fn).catch((e) => this.o.log(`gate failed: ${(e as Error)?.stack ?? e}`));
-    this.chain = run;
+  private enqueue(fn: () => Promise<void>, host = ""): Promise<void> {
+    const run = (this.chains.get(host) ?? Promise.resolve()).then(fn, fn).catch((e) => this.o.log(`gate failed: ${(e as Error)?.stack ?? e}`));
+    this.chains.set(host, run);
     return run as Promise<void>;
   }
 
   private async handleTurn(ev: TurnEndedEvent, allowRecheck: boolean): Promise<void> {
     if (this.stopped || !this.root()) return;
     const id = ev.agent.id;
-    const info = await this.info(id);
+    const info = await this.info(ev.agent);
     const task = info?.labels["fm.task"];
     if (!info || !task) return; // not crew
     const base = { agentId: id, task, turnId: ev.turnId, labels: info.labels, parentId: ev.agent.parentAgentId ?? info.labels[PARENT_LABEL] ?? null };
 
-    if (ev.outcome.kind === "failed") return this.decide({ ...base, verdict: "ERROR", line: ev.outcome.error.message });
-    if (ev.outcome.kind === "canceled") return this.decide({ ...base, verdict: "CANCELED", line: ev.outcome.reason ?? "canceled" });
+    if (ev.outcome.kind === "failed") return this.decide({ ...base, verdict: "ERROR", line: redact(ev.outcome.error.message) });
+    if (ev.outcome.kind === "canceled") return this.decide({ ...base, verdict: "CANCELED", line: redact(ev.outcome.reason ?? "canceled") });
 
     // the event's own timeline is deprecated and always empty on current daemons: read the tail on demand
     const items = ev.timeline.length ? ev.timeline : ((await this.o.ports.sdkPort()?.tailItems(id).catch(() => null)) ?? ev.timeline);
@@ -255,10 +278,19 @@ export class Gate {
       return;
     }
     // Settle rule: a step-scoped turn can end while the agent keeps working. Only an idle (or closed) agent is finished.
-    const fresh = (await this.info(id)) ?? info;
+    const fresh = (await this.info(ev.agent)) ?? info;
     if (fresh.status !== "idle" && fresh.status !== "closed") {
       this.append({ agentId: id, task, turnId: ev.turnId, verdict: m.verdict, line: m.line, acted: false, result: "deferred", note: `agent is ${fresh.status}; re-evaluated on the next turn end` });
-      if (allowRecheck) this.later(() => this.enqueue(() => this.handleTurn(ev, false)), this.o.settleMs ?? SETTLE_RECHECK_MS);
+      if (allowRecheck) this.later(() => this.enqueue(() => this.handleTurn(ev, false), ev.agent.serverId), this.o.settleMs ?? SETTLE_RECHECK_MS);
+      return;
+    }
+    // another host's turn can reach us twice: first found by a sweep (no turn id), then from the host's own event. A turn
+    // that began after the agent was swept is another one, whatever its line says.
+    this.load();
+    const last = this.lastByAgent.get(id);
+    const later = Date.parse(ev.turnStartedAt ?? "") > Date.parse(last?.agentAt ?? ""); // both the host's clock; unknown = not later
+    if (ev.agent.serverId && ev.turnId && last && !last.turnId && !later && last.verdict === m.verdict && last.line === m.line && !this.load().has(this.key(id, ev.turnId, m.verdict, m.line))) {
+      this.append({ agentId: id, task, turnId: ev.turnId, verdict: m.verdict, line: m.line, acted: false, result: "duplicate", note: "already handled by the sweep" });
       return;
     }
     if (m.verdict === "BLOCKED" && (await this.bounce(id, task, ev.turnId, m.line, info.labels))) return;
@@ -305,11 +337,11 @@ export class Gate {
   }
 
   /** Log the decision and, in notify mode, wake the first mate. Deduped on (agent, turn, verdict) across restarts. */
-  private async decide(d: { agentId: string; task: string; turnId: string | null; verdict: Verdict; line: string; labels: Record<string, string>; parentId: string | null }): Promise<void> {
+  private async decide(d: { agentId: string; task: string; turnId: string | null; verdict: Verdict; line: string; labels: Record<string, string>; parentId: string | null; agentAt?: string | null }): Promise<void> {
     const seen = this.load();
     if (seen.has(this.key(d.agentId, d.turnId, d.verdict, d.line))) return;
     const notify = d.labels["fm.notify"] === "plugin" && notifySwitchOn(this.root());
-    const rec = { agentId: d.agentId, task: d.task, turnId: d.turnId, verdict: d.verdict, line: d.line };
+    const rec = { agentId: d.agentId, task: d.task, turnId: d.turnId, verdict: d.verdict, line: d.line, ...(d.agentAt ? { agentAt: d.agentAt } : {}) };
     if (!notify) {
       this.append({ ...rec, acted: false, result: "shadow", note: d.labels["fm.notify"] === "plugin" ? "switch off (decisions.md notify: off)" : "no fm.notify=plugin label" });
       return;
@@ -341,6 +373,13 @@ export class Gate {
 
   // ---------- startup sweep ----------
 
+  /** The latest logged turn of this agent already ended this way. */
+  private handled(agentId: string, verdict: Verdict, line: string): boolean {
+    const last = this.lastByAgent.get(agentId);
+    return !!last && last.verdict === verdict && last.line === line;
+  }
+
+
   /**
    * The same sweep without an SDK handle, for plugin start-up (a handle only arrives with the first hook or RPC). The CLI
    * shows no labels, so it asks per task: for every task `state/fleet.json` holds as active it lists agents carrying
@@ -369,12 +408,12 @@ export class Gate {
           if (!info?.finalLine || info.status !== "idle") continue;
           if (this.now() - (Date.parse(info.updatedAt ?? "") || 0) > SWEEP_WINDOW_MS) continue;
           const verdict = info.finalLine.startsWith("DONE:") ? "DONE" : "BLOCKED";
-          const last = this.lastByAgent.get(a.id);
-          if (last && last.verdict === verdict && last.line === info.finalLine) continue;
+          if (this.handled(a.id, verdict, info.finalLine)) continue;
           await this.enqueue(async () => {
-            await this.decide({ agentId: a.id, task: t.id!, turnId: null, verdict, line: info.finalLine!, labels, parentId: info.parentAgentId });
+            if (this.handled(a.id, verdict, info.finalLine!)) return; // its event got there while we waited
+            await this.decide({ agentId: a.id, task: t.id!, turnId: null, verdict, line: info.finalLine!, labels, parentId: info.parentAgentId, agentAt: info.updatedAt });
             n++;
-          });
+          }, a.serverId);
         }
       }
     } finally {
@@ -405,13 +444,13 @@ export class Gate {
         if (!items) continue;
         const m = messageVerdict(items);
         if (m.verdict === "NARRATION") continue;
-        const last = this.lastByAgent.get(a.id);
-        if (last && last.verdict === m.verdict && last.line === m.line) continue;
+        if (this.handled(a.id, m.verdict, m.line)) continue;
         await this.enqueue(async () => {
+          if (this.handled(a.id, m.verdict, m.line)) return; // its event got there while we waited
           // turnId is unknown for a missed turn; the sweep key is the line itself so a re-run is a no-op
-          await this.decide({ agentId: a.id, task: a.labels["fm.task"], turnId: null, verdict: m.verdict, line: m.line, labels: a.labels, parentId: a.labels[PARENT_LABEL] ?? null });
+          await this.decide({ agentId: a.id, task: a.labels["fm.task"], turnId: null, verdict: m.verdict, line: m.line, labels: a.labels, parentId: a.labels[PARENT_LABEL] ?? null, agentAt: a.updatedAt });
           n++;
-        });
+        }, a.serverId);
       }
     } finally {
       this.sweeping = false;

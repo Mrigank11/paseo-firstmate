@@ -14,6 +14,7 @@ state/
   firstmate.json        # {"agentId","claimedAt"}: the checkout-wide first mate (fallback for pages with no claim.json), written by plain bin/page claim
   # projects/<project>/claim.json  {"agentId","claimedAt"}: that page's own first mate, written by bin/page claim <project> / start
   decisions.md          # captain prefs, routing lanes, permission + merge policy; `notify: off` / `enforcer: off` switch the plugin's wake / enforcer off
+  remote-agents.json    # DERIVED: last-known crews of other Paseo hosts (see "Crews on other Paseo hosts"); never edited
   stages.json           # DERIVED, plugin-written: every live task's owner, reason, stage (what bin/fleet stage(s) print); never edited
   enforcer.json         # plugin-owned: reminder counts per item, stalled items, reminded crews; safe to delete
   tasks/
@@ -106,6 +107,18 @@ Rules:
 - `bin/fleet answer` first appends the ask (id, text, `since`, context path, options, `answeredAt`) to `state/tasks/<id>/asks.jsonl`, so a finished card keeps showing it with its context file; `fleet.json` stays small. The Done group sorts by `since`, newest first (an explicit `order` still pins ahead), and a done card also shows a pointer to `report.md`.
 - A `done`/`failed` task with no open asks leaves the index: `bin/fleet archive <id>` appends it to `fleet-archive.jsonl` (adding `agents:[ids]` and `outcome: done|failed`) and removes it. Never delete a task any other way. Archive lines are history and stay append-only; old v1 lines (`status`, `agentId`, `notes`, `lastEvent`) are never rewritten and stay readable.
 
+## Task tree (groups and second mates)
+
+Optional, additive: a project with no `parent`/`kind` anywhere reads, routes and renders exactly as before. Design and demo: `docs/plans/2026-11-26-task-tree.md`; the second-mate role: `docs/SECOND-MATE.md`.
+
+- **Registry:** two optional fields on a task. `parent=<group-id>` hangs it under a group; `kind=group` makes it a group (a node with no crew of its own). A parent is a live group of the same project, a node has at most two ancestors (project > group > group > task), no cycles, and a child with no `project=` inherits its parent's. `bin/fleet children <id>` and `bin/fleet tree [<project>]` read the tree; `parent=` / `kind=` (empty) remove them. An archived child keeps its `parent`, so the group still counts it as done.
+- **Roll-up (computed, never stored):** a group's stage comes from its leaves: the most urgent open one (Needs you, With the first mate, Running, Blocked, Next up, Parked), done only when every leaf is done (live or archived), failed leaves flag it. A group with its own open ask keeps Needs you; a parked group stays parked. `bin/fleet stage <group>` / `stages` carry it (`kind`, `parent`, `rollup` counts); `bin/fleet rollup <id> [--markdown]` prints the counts and each child's stage, `bin/fleet group-card <id>` writes `tasks/<id>/card.md` from it. A group is not finished or archived while a descendant is open.
+- **Owner (nearest first):** the live second mate claiming the task's node or an ancestor (`state/tasks/<node>/claim.json`, written only by `bin/fleet claim-node <group> <agentId>`, removed only by the first mate's `bin/fleet release-node <group>`), then the project's first mate, then the checkout's. The finish gate, permission wakes, page comments and the enforcer all use that chain; a second mate's own finish goes up to the next owner, never to itself. `stages.json` carries `nodeOwners`.
+- **Enforcer:** an item belongs to its nearest owner. A second mate that ignores it through both reminders does not stall it: it moves up one level with a fresh count, and only after the first mate's reminders does it reach the captain as "first mate stalled". Group rows are never items (their leaves are).
+- **Asks** stay on their leaf, in the flat Needs you list; a group card never counts them again (the tab count skips groups).
+- **Scope:** `bin/fleet` refuses a second mate (an agent whose id a `claim.json` holds) any write outside its subtree, and changes to its own group's state, parent or kind, `finish`/`archive` of it, `claim-node` and `release-node`. Any other agent is unrestricted, as before.
+- **Page:** group cards (roll-up line, progress bar, one chip per child, the second mate's agent link, "Zoom into group") in a Groups section above the stage groups, breadcrumbs on every child card, a "Groups" section in the task navigator (tree, with done/total per group) and a zoom bar that hides every card outside the group until "Show all tasks".
+
 ## The finish gate (`state/gate-log.jsonl`)
 
 The deck plugin's `agent.turn_ended` hook (`plugin/firstmate-deck/server/gate.ts`) audits every turn of an agent carrying `fm.task`. Plugin-owned and append-only; the registry is never written. One JSON line per decision: `{at, agentId, task, turnId, verdict, line, acted, result, note}`.
@@ -180,6 +193,15 @@ A task's stage is never stored. `computeStage()` (`plugin/firstmate-deck/server/
 **First mate stalled.** The enforcer (below) can turn a With-the-first-mate task into **Needs you · first mate stalled** (owner captain; `reason` says why). It applies only while the task is still in the situation (`fp`) it was judged in.
 
 "The crew worked since" (rules 4 and the canvas pick) is measured from the crew's last **turn start** (the `agent.turn_started` hook, in the plugin's memory), not Paseo's `updatedAt`, which also moves on a label change or a steer; without a turn start it falls back to the last activity.
+
+### Crews on other Paseo hosts
+
+A task's agents are looked for on this daemon and on every host in `paseo host ls`, by the same `fm.task` label. On another host only **our** agents count (`plugin/firstmate-deck/server/ownership.ts`): those labelled `paseo.parent-server-id` with this daemon's server id (`$PASEO_HOME/server-id`, default `~/.paseo/server-id`), or whose `canvas.relay` names a live agent of this daemon. Any other agent there (another orchestrator's crew with the same labels) is never listed, stored, read, sent to or relabelled; a crew once shown to be ours stays ours. A row whose current agent lives elsewhere carries `host` (the host's label) and the table shows it as `c0c0c0c0@mac`.
+
+- **The CLI** (`bin/fleet stage(s)`, `by-agent`, `finish`/`archive`; `bin/page status`, `canvas-*`, and the crew re-labelling of `claim`) reads each enabled online host with `paseo ls --host <targetDescription>` (twice: archived is what `-a` lists and the default listing lacks) plus `inspect` for what `ls` does not show: the creation date (once, then cached) and, for running or idle crews of the tasks asked about, open permissions. A server id is not a `--host` target, and `--host` excludes `--home`. Each call is bounded by `PASEO_HOST_TIMEOUT_MS` (default 8000; one host gets at most twice that for its calls).
+- **Acting on a crew there.** `create_agent`, `send_agent_prompt`, `get_agent_status`, `get_agent_activity`, `list_agents`, `create_workspace` and `list_workspaces` take the host's `serverId`: use them. The other Paseo tools reach only this daemon, so for our crew on another host run Paseo's command line with `--host "$(bin/page host-target <agentId>)"`: `paseo inspect <agentId> --json` (its `PendingPermissions`), `paseo permit allow|deny <agentId> <requestId>` (always give the request id: without it every pending request is answered), `paseo stop <agentId>`, `paseo agent update <agentId> --label k=v`, `paseo workspace archive <workspaceId>`, `paseo archive <agentId>`. Look the target up before archiving anything, and reuse it. A command that fails (host offline) did nothing: do not record it as done.
+- **`state/remote-agents.json`** (derived, safe to delete) keeps our last-known crews per host, each with `owner` (this daemon's server id; a record without it is not read and is dropped on the next write). A host that is offline, disabled or cannot be listed has them read as status `unknown` with the stage `Unknown · <label> offline`: never closed, lost or silent. If `host ls` itself fails the file is left alone and every stored crew reads that way. A host removed from `host ls` is forgotten.
+- `bin/page` runs `inspect` and `agent update` on this daemon first, then, for one of our agents only, on the online host that has it (bound: `PASEO_HOST_TIMEOUT` seconds, default 10, where `timeout` exists). **The first mate is always local:** `claim` accepts only an agent of this daemon.
 
 ### One evaluation: `state/stages.json`
 

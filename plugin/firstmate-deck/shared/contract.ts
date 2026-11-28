@@ -43,6 +43,7 @@ const runningSchema = z.object({
   agentStatus: z.string(), // initializing | idle | running | error | closed | archived | unknown
   current: z.string(), // humanized current step, may be ""
   startedAt: z.string().nullable(),
+  host: z.string().optional(), // the Paseo host it runs on; absent for this daemon
 });
 
 export const projectSummarySchema = z.object({

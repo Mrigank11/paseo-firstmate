@@ -1,5 +1,6 @@
-// Stage rows for the CLI: the SAME computeStage() the page uses, fed from Paseo's agent files on disk plus one `paseo ls`,
-// with no daemon connection and no plugin. Used by stage-cli.ts (bin/fleet stage/stages) and page-tool.ts (bin/page status).
+// Stage rows for the CLI: the SAME computeStage() the page uses, fed from Paseo's agent files on disk plus one `paseo ls`
+// (and, for the other hosts of `paseo host ls`, their crews through host-cli.ts), with no daemon connection and no plugin.
+// Used by stage-cli.ts (bin/fleet stage/stages), page-tool.ts (bin/page status) and canvas-cmd.ts.
 // Env: PASEO_HOME (default ~/.paseo) names the daemon; STAGE_AGENTS_JSON (a file of agent records) replaces the lookup (tests).
 // The agent files are daemon-internal; their shape was checked on Paseo 0.12.0 (the plugin pins >=0.12 <0.13). If they are
 // missing, each task falls back to `paseo ls -a -g --label fm.task=<id>`. The last message of an agent is not on the CLI path,
@@ -11,13 +12,17 @@ import { execFileSync } from "node:child_process";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { activeSinceOf, computeStage, currentAgent, type Stage, type StageAgent } from "./stage.ts";
+import { activeSinceOf, computeStage, currentAgent, type HostOffline, type StageAgent } from "./stage.ts";
 import { loadAllLive, type Task } from "./state.ts";
 import { canvasInput } from "./canvas-view.ts";
 import type { FmSummary } from "./canvas-port.ts";
 import { freshSnapshot, type StageRow } from "./stages-file.ts";
+import { readRemote } from "./host-cli.ts";
+import { daemonServerId } from "./ownership.ts";
+import { readRemoteStore, remoteRecords } from "./remote-store.ts";
+import { makeExec } from "./paseo-cli.ts";
 
-export type Rec = { id: string; task: string; status: string; archived: boolean; createdAt: string | null; lastActivityAt: string | null; pending: number; labels?: Record<string, string>; relayGone?: string };
+export type Rec = { id: string; task: string; status: string; archived: boolean; createdAt: string | null; lastActivityAt: string | null; pending: number; labels?: Record<string, string>; relayGone?: string; host?: string; serverId?: string; hostOffline?: HostOffline };
 
 
 const home = () => process.env.PASEO_HOME || join(homedir(), ".paseo");
@@ -31,27 +36,34 @@ function paseoLs(args: string[]): any[] {
   }
 }
 
-/** Every agent carrying an fm.task label: status from one `paseo ls`, labels and archive state from the agent files. */
-export function labelledAgents(taskIds: string[]): Rec[] {
-  const fake = process.env.STAGE_AGENTS_JSON;
-  if (fake) return JSON.parse(readFileSync(fake, "utf8"));
+const fakeAgents = (): Rec[] | null => (process.env.STAGE_AGENTS_JSON ? JSON.parse(readFileSync(process.env.STAGE_AGENTS_JSON, "utf8")) : null);
+
+/**
+ * This daemon's agents carrying an fm.task label: status from one `paseo ls`, labels and archive state from the agent files.
+ * `status` (every live agent id -> status) and `ids` (every agent file) are null without agent files.
+ */
+function localAgents(taskIds: string[]): { recs: Rec[]; status: Map<string, string> | null; ids: Set<string> | null } {
   const dir = join(home(), "agents");
   if (!existsSync(dir)) {
-    // no agent files to read: ask per task (labels are not in the CLI output, so the filter is the label)
-    return taskIds.flatMap((task) => paseoLs(["ls", "-a", "-g", "--label", `fm.task=${task}`]).map((a): Rec => ({
+    // no agent files to read: ask per task (labels are not read here, so the filter is the label)
+    const recs = taskIds.flatMap((task) => paseoLs(["ls", "-a", "-g", "--label", `fm.task=${task}`]).map((a): Rec => ({
       id: String(a.id), task, status: String(a.status), archived: false, createdAt: null, lastActivityAt: null, pending: 0,
     })));
+    return { recs, status: null, ids: null };
   }
   const status = new Map<string, string>(paseoLs(["ls", "-g", "--background"]).map((a) => [String(a.id), String(a.status)]));
   const out: Rec[] = [];
+  const ids = new Set<string>();
   for (const sub of readdirSync(dir)) {
     let files: string[] = [];
     try { files = readdirSync(join(dir, sub)).filter((f) => f.endsWith(".json")); } catch { continue; }
     for (const f of files) {
       let a: any;
       try { a = JSON.parse(readFileSync(join(dir, sub, f), "utf8")); } catch { continue; }
-      const task = a?.labels?.["fm.task"];
-      if (typeof task !== "string" || !task || typeof a.id !== "string") continue;
+      if (typeof a?.id !== "string") continue;
+      ids.add(a.id);
+      const task = a.labels?.["fm.task"];
+      if (typeof task !== "string" || !task) continue;
       const archived = !!a.archivedAt;
       const relay = a.labels?.["canvas.relay"];
       out.push({
@@ -61,10 +73,55 @@ export function labelledAgents(taskIds: string[]): Rec[] {
       });
     }
   }
-  return out;
+  return { recs: out, status, ids };
 }
 
-const toAgent = (r: Rec): StageAgent => ({ id: r.id, status: r.status, archived: r.archived, createdAt: r.createdAt, lastActivityAt: r.lastActivityAt, pendingPermissions: r.pending, relayGone: r.relayGone });
+/** `local` plus the crews of every other host (remembered under `root` for when a host is away). */
+async function withRemote(root: string, taskIds: string[], local: ReturnType<typeof localAgents>): Promise<Rec[]> {
+  const { records } = await readRemote(makeExec(process.env.PASEO_HOME || undefined), { root, tasks: new Set(taskIds) });
+  const mine = new Set(local.recs.map((r) => r.id));
+  const others = records.filter((r) => !mine.has(r.id));
+  const live = new Set(others.filter((r) => !r.archived).map((r) => r.id));
+  return [...local.recs, ...others.map((r): Rec => {
+    const relay = r.labels?.["canvas.relay"];
+    return { ...r, ...(local.status && relay && !r.archived && !r.hostOffline && !local.status.has(relay) && !live.has(relay) ? { relayGone: relay } : {}) };
+  })];
+}
+
+/** Every agent carrying an fm.task label, on this daemon, and ours (ownership.ts) on every other host. `taskIds`: the tasks being asked about. */
+export async function labelledAgents(root: string, taskIds: string[]): Promise<Rec[]> {
+  return fakeAgents() ?? withRemote(root, taskIds, localAgents(taskIds));
+}
+
+/**
+ * `labelledAgents` without a call to another host: their crews as last seen (the plugin keeps that current). One live read of the
+ * other hosts takes seconds, and longer when one is asleep, while `bin/fleet` allows a canvas snapshot 5 s.
+ */
+export function rememberedAgents(root: string, taskIds: string[]): Rec[] {
+  const fake = fakeAgents();
+  if (fake) return fake;
+  const local = localAgents(taskIds).recs;
+  const mine = new Set(local.map((r) => r.id));
+  return [...local, ...remoteRecords(readRemoteStore(root, daemonServerId())).filter((r) => !mine.has(r.id))];
+}
+
+/** What `--host` accepts for our agent `id` on another host that is online; "" for any other agent. */
+export async function hostTarget(root: string, id: string): Promise<string> {
+  const { records, others, targets } = await readRemote(makeExec(process.env.PASEO_HOME || undefined), { root, tasks: new Set() });
+  const hit = records.find((r) => r.id === id && !r.hostOffline) ?? others.find((a) => a.id === id);
+  return (hit?.serverId && targets.get(hit.serverId)) || "";
+}
+
+/** The fm.task label of an agent, "" when it has none. Other hosts are asked only about an agent this daemon does not have. */
+export async function taskOf(root: string, id: string): Promise<string> {
+  const find = (recs: Rec[]) => recs.find((r) => r.id === id)?.task ?? "";
+  const fake = fakeAgents();
+  if (fake) return find(fake);
+  const local = localAgents([]);
+  return local.ids?.has(id) ? find(local.recs) : find(await withRemote(root, [], local));
+}
+
+const toAgent = (r: Rec): StageAgent => ({ id: r.id, status: r.status, archived: r.archived, createdAt: r.createdAt, lastActivityAt: r.lastActivityAt, pendingPermissions: r.pending, relayGone: r.relayGone, host: r.host, hostOffline: r.hostOffline });
 
 export type Row = StageRow;
 
@@ -102,9 +159,10 @@ export function rowOf(t: Task, recs: Rec[], now: Date, canvas: Record<string, Fm
   const cur = currentAgent(mine);
   const sum = cur && !cur.archived ? canvas[cur.id] : undefined;
   const s = computeStage(t, mine, now, { finalKnown: false, canvas: canvasInput(sum, t.id, [], activeSinceOf(cur)) });
+  const host = mine.find((a) => a.id === s.agentId)?.host;
   return {
     id: t.id, project: t.project ?? null, state: t.state, stage: s.stage, group: s.group, agentId: s.agentId, flags: s.flags,
-    owner: s.owner, reason: s.reason, clears: s.clears, fp: s.fp, source: "local",
+    owner: s.owner, reason: s.reason, clears: s.clears, fp: s.fp, source: "local", ...(host ? { host } : {}),
     ...(s.stage === "Idle" ? { note: "final line unknown on CLI" } : {}),
     ...(sum ? { canvas: { verdict: sum.verdict.label, bluf: sum.bluf.replace(/\s+/g, " ").slice(0, 80), asks: sum.openAsks.length } } : {}),
   };
@@ -125,7 +183,7 @@ export function archiveRow(root: string, id: string): Row | null {
 
 export function table(rows: Row[]): string {
   const head = ["TASK", "PROJECT", "STATE", "STAGE", "OWNER", "AGENT", "FLAGS"];
-  const body = rows.map((r) => [r.id, r.project ?? "-", r.state, r.stage + (r.note ? ` (${r.note})` : ""), r.owner, r.agentId?.slice(0, 8) ?? "-", r.flags.map((f) => (f.drift ? "!" : "") + f.key).join(",") || "-"]);
+  const body = rows.map((r) => [r.id, r.project ?? "-", r.state, r.stage + (r.note ? ` (${r.note})` : ""), r.owner, r.agentId ? r.agentId.slice(0, 8) + (r.host ? `@${r.host}` : "") : "-", r.flags.map((f) => (f.drift ? "!" : "") + f.key).join(",") || "-"]);
   const w = head.map((_, i) => Math.max(head[i].length, ...body.map((b) => b[i].length)));
   const lines = [head, ...body].map((r) => r.map((c, i) => c.padEnd(w[i])).join("  ").trimEnd());
   // a running task's canvas verdict and BLUF, so "status?" needs no chat: an indented line under its row
@@ -135,7 +193,7 @@ export function table(rows: Row[]): string {
 }
 
 /** The plugin's snapshot rows for the live tasks that still exist (its source is the same engine the page uses), else a local computation. */
-export function stages(root: string, project?: string): Row[] {
+export async function stages(root: string, project?: string): Promise<Row[]> {
   const tasks = loadAllLive(root).filter((t) => !project || t.project === project);
   if (!tasks.length) return [];
   const snap = freshSnapshot(root, Number(process.env.STAGE_SNAPSHOT_WAIT_MS ?? 4000));
@@ -143,15 +201,15 @@ export function stages(root: string, project?: string): Row[] {
     const by = new Map(snap.rows.map((r) => [r.id, r]));
     if (tasks.every((t) => by.has(t.id))) return tasks.map((t) => ({ ...by.get(t.id)!, source: "plugin" as const }));
   }
-  const recs = labelledAgents(tasks.map((t) => t.id));
+  const recs = await labelledAgents(root, tasks.map((t) => t.id));
   const canvas = canvasSummaries(root, recs.filter((r) => !r.archived).map((r) => r.id));
   const now = new Date();
   return tasks.map((t) => rowOf(t, recs, now, canvas));
 }
 
 /** One live task's row: the snapshot's, else local. Null when the task is not live. */
-export function stageRow(root: string, id: string): Row | null {
+export async function stageRow(root: string, id: string): Promise<Row | null> {
   const t = loadAllLive(root).find((x) => x.id === id);
   if (!t) return null;
-  return stages(root).find((r) => r.id === id) ?? null;
+  return (await stages(root)).find((r) => r.id === id) ?? null;
 }

@@ -12,7 +12,8 @@
 #
 #   bin/fleet get <id>                print one task entry (compact JSON)
 #   bin/fleet by-agent <agentId>      the entry of the task an agent works on: its fm.task label first, then the archive
-#                                     (agents/agentId lists). Prints nothing for an agent that is not crew
+#                                     (agents/agentId lists). Prints nothing for an agent that is not crew. Agents of every
+#                                     Paseo host count, here and below (docs/STATE.md, "Crews on other Paseo hosts")
 #   bin/fleet stage <id>              the task's COMPUTED stage (JSON): {stage, group, owner, reason, clears, agentId, flags,
 #                                     source}. The deck plugin's snapshot (state/stages.json, the page's own evaluation) when
 #                                     fresh, else computed locally and marked source:"local" (degraded: no comments, no last
@@ -67,6 +68,20 @@
 #                                     the given card (stdin with -), else from the intent + branch/PR when there is no card yet; for
 #                                     a project task whose branch is known and whose project.json has a repo, appends
 #                                     `git log --oneline <base>..<branch>` to projects/<p>/sections/code.md (dated, no duplicates)
+#   bin/fleet children <id>           the direct children of a group (JSON array of {id, kind, state, title})
+#   bin/fleet tree [<project>]        the live tasks as an indented tree (registry facts only; `rollup` has the computed stage)
+#   bin/fleet rollup <id> [--markdown]  a group's computed stage: the most urgent leaf stage, counts, each child's stage (node + the
+#                                     plugin's snapshot, like `stage`). --markdown prints the card text rebuilt from the children
+#   bin/fleet group-card <id>         write tasks/<id>/card.md from the rollup (the group's card, rebuilt from its children)
+#   bin/fleet claim-node <id> <agentId> [--replace]   a second mate takes a group (tasks/<id>/claim.json). Only the first mate
+#                                     claims; a node's second mate never claims or releases (PASEO_AGENT_ID is checked)
+#   bin/fleet release-node <id>       the first mate retires a second mate (removes the claim); refused for the claim's own agent
+#
+# Task tree: `parent=<group-id>` (optional) hangs a task under a group, `kind=group` makes a task a group (no crew of its own).
+# A parent is a live group of the same project; at most two ancestors (project > group > group > task), no cycles. A task with no
+# parent is top-level, exactly as before. A child with no project= inherits its parent's. A group is not archived or finished while
+# a descendant is open. A second mate (PASEO_AGENT_ID equal to a node claim) may write only inside that node's subtree (and log,
+# card and ask on the node itself); every other agent is unrestricted, as before. See docs/STATE.md.
 #
 # States: queued (planned), active (dispatched; Paseo says what is happening), parked (the captain paused it), blocked
 # (waiting on an outside dependency, not the captain, not crew; REQUIRES blocked_on="<what/who>", <=200 chars; dropped when
@@ -96,7 +111,9 @@ KINDS='["issue","plan","research","explainer","review"]'
 MAXLEN=200
 TITLEMAX=160
 SLUG_RE='^[a-z0-9][a-z0-9-]*$'
-SETTABLE="intent shape state branch pr project title order legacyId blocked_on canvas_kind"
+SETTABLE="intent shape state branch pr project title order legacyId blocked_on canvas_kind parent kind"
+NODE_KINDS='["group"]'
+MAX_ANCESTORS=2
 # v1 run-state keys: Paseo's now (label fm.task), the log, the task folder, or computed. Named so the refusal can point at the new home.
 RUNSTATE_KEYS="status agentId workspaceId lastEvent notes preview provider"
 
@@ -151,7 +168,7 @@ check_entry() { # id — validate enum + length invariants on one entry
 
 # validate a fresh k=v object (from add/set) BEFORE touching the file
 check_obj() { # obj-json
-  jq -e --argjson st "$STATES" --argjson sh "$SHAPES" --argjson kd "$KINDS" --argjson max "$MAXLEN" \
+  jq -e --argjson nk "$NODE_KINDS" --argjson st "$STATES" --argjson sh "$SHAPES" --argjson kd "$KINDS" --argjson max "$MAXLEN" \
     --argjson tmax "$TITLEMAX" --arg re "$SLUG_RE" -n --argjson o "$1" '
     (((($o.state // null) as $s | if $s == null then true else ($st | index($s)) != null end))
       and ((($o.project // "") | length == 0) or ($o.project | test($re)))
@@ -160,8 +177,10 @@ check_obj() { # obj-json
       and ((($o.canvas_kind // null) as $k | if $k == null then true else ($kd | index($k)) != null end))
       and ((($o.order // 0) | type) == "number" and (($o.order // 0) >= 0) and ((($o.order // 0) | floor) == ($o.order // 0)))
       and ((($o.legacyId // "") | length == 0) or (($o.legacyId | type) == "string" and ($o.legacyId | test($re))))
+      and ((($o.kind // null) as $k | if $k == null then true else ($nk | index($k)) != null end))
+      and ((($o.parent // "") | length == 0) or (($o.parent | type) == "string" and ($o.parent | test($re))))
       and ((($o.blocked_on // "") | length) <= $max))
-  ' >/dev/null || die "refused: bad state/shape/canvas_kind enum, project slug, title over $TITLEMAX chars, blocked_on over $MAXLEN chars, order that is not a whole number, or legacyId that is not a kebab slug";
+  ' >/dev/null || die "refused: bad state/shape/canvas_kind enum, project slug, title over $TITLEMAX chars, blocked_on over $MAXLEN chars, order that is not a whole number, or legacyId that is not a kebab slug, kind other than group, or parent that is not a kebab slug";
 }
 
 # blocked <=> blocked_on: a blocked task must say what it waits on, and blocked_on on any other state is refused
@@ -175,6 +194,63 @@ check_blocked() { # obj state blocked_on
   elif [[ -n "$3" ]]; then
     die "refused: blocked_on only goes with state=blocked (state is '$2')"
   fi
+}
+
+# --- task tree -------------------------------------------------------------------------------------------------
+# Why <parent> cannot be the parent of <id> (mirrors server/tree.ts parentError); prints nothing when it can.
+parent_error() { # id parent [kind]
+  jq -r --arg id "$1" --arg p "$2" --arg kind "${3:-}" --argjson max "$MAX_ANCESTORS" '
+    (.tasks | map({(.id): .}) | add // {}) as $by
+    | def up($x): limit(10; ($by[$x].parent? // empty) as $q | ($q, up($q)));
+      def kids($x): [$by[] | select(.parent == $x) | .id];
+      def desc($x): kids($x)[] as $c | ($c, desc($c));
+      if $p == $id then "a task cannot be the parent of itself"
+      elif $by[$p] == null then "no live task \($p) to be the parent"
+      elif ($by[$p].kind // "") != "group" then "\($p) is not a group (kind=group): only a group can have children"
+      else ([up($p)]) as $upp
+        | if ($upp | index($id)) != null then "that would be a cycle: \($id) is already above \($p)"
+          else ([desc($id) | ([up(.)] | index($id) + 1)] | max // 0) as $below
+            | (if ($kind == "group" or ($by[$id].kind // "") == "group") then ([$below, 1] | max) else $below end) as $below
+            | if ($upp | length) + 1 + $below > $max then "\($id) would sit deeper than \($max) levels under the project" else empty end
+          end
+      end' "$FLEET"
+}
+node_field() { # id field -> value or empty (live tasks)
+  jq -r --arg id "$1" --arg f "$2" '.tasks | map(select(.id == $id))[0][$f] // empty' "$FLEET"
+}
+# ids of every live descendant of <id>, one per line
+descendants_of() {
+  jq -r --arg id "$1" '(.tasks | map({(.id): .}) | add // {}) as $by
+    | def kids($x): [$by[] | select(.parent == $x) | .id];
+      def desc($x): kids($x)[] as $c | ($c, desc($c));
+      desc($id)' "$FLEET"
+}
+# open (not done/failed) leaf or group descendants of <id>; count on stdout
+open_descendants() {
+  jq -r --arg id "$1" '(.tasks | map({(.id): .}) | add // {}) as $by
+    | def kids($x): [$by[] | select(.parent == $x) | .id];
+      def desc($x): kids($x)[] as $c | ($c, desc($c));
+    [desc($id) | $by[.] | select(.state != "done" and .state != "failed" and (.kind // "") != "group")] | length' "$FLEET"
+}
+# node claims: tasks/<id>/claim.json holds the second mate's agent id
+claim_of() { jq -r '.agentId // empty' "$TASKS/$1/claim.json" 2>/dev/null || true; }
+# the node a second mate (agent id in PASEO_AGENT_ID) holds, if any
+actor_node() {
+  local a="${PASEO_AGENT_ID:-}" f
+  [[ -n "$a" && -d "$TASKS" ]] || return 0
+  for f in "$TASKS"/*/claim.json; do
+    [[ -e "$f" ]] || continue
+    if [[ "$(jq -r '.agentId // empty' "$f" 2>/dev/null)" == "$a" ]]; then basename "$(dirname "$f")"; return; fi
+  done
+}
+# A second mate writes only inside its node's subtree. $2 = "node-ok" also allows the node itself (log, card, ask).
+scope_guard() { # id [node-ok]
+  local node; node="$(actor_node)"
+  [[ -n "$node" ]] || return 0
+  local id="$1"
+  if [[ "$id" == "$node" && "${2:-}" == "node-ok" ]]; then return 0; fi
+  if descendants_of "$node" | grep -qxF "$id"; then return 0; fi
+  die "refused: this agent is the second mate of '$node' and may only write inside its subtree${2:+ (or log/card/ask on the group itself)}; '$id' is outside it. Ask the first mate."
 }
 
 cmd_get() { jq -c --arg id "$1" '.tasks | map(select(.id == $id))[0] // empty' "$FLEET"; }
@@ -266,6 +342,23 @@ project_of_deps() { # dep-id...
   done
 }
 
+# parent handling for add: validate, inherit the parent's project, and keep a second mate inside its subtree.
+tree_check_new() { # id objvar
+  local id="$1" ov="$2" par err pp
+  par="$(jq -r '.parent // empty' <<<"${!ov}")"
+  if [[ -n "$par" ]]; then
+    err="$(parent_error "$id" "$par" "$(jq -r '.kind // empty' <<<"${!ov}")")"; [[ -z "$err" ]] || die "refused: $err"
+    pp="$(node_field "$par" project)"
+    local cp; cp="$(jq -r '.project // empty' <<<"${!ov}")"
+    if [[ -n "$cp" && -n "$pp" && "$cp" != "$pp" ]]; then die "refused: $id is in project $cp but its parent $par is in $pp"; fi
+    if [[ -z "$cp" && -n "$pp" ]]; then printf -v "$ov" '%s' "$(jq -c --arg p "$pp" '.project = $p' <<<"${!ov}")"; fi
+    scope_guard "$par" node-ok
+  else
+    local node; node="$(actor_node)"
+    [[ -z "$node" ]] || die "refused: this agent is the second mate of '$node': a new task needs parent=$node (or a group below it)"
+  fi
+}
+
 cmd_add() {
   local id="$1"; shift
   [[ "$id" =~ ^[a-z0-9][a-z0-9-]*$ ]] || die "id must be a kebab slug, got '$id'"
@@ -275,6 +368,8 @@ cmd_add() {
     jq -e --arg k "$req" '.[$k] // empty | length > 0' <<<"$obj" >/dev/null \
       || die "add needs $req=... (got: $*)";
   done
+  obj="$(jq -c 'if .parent == "" then del(.parent) else . end | if .kind == "" then del(.kind) else . end' <<<"$obj")"
+  tree_check_new "$id" obj
   # depends_on=a,b -> an array of slugs; project is inherited from the first dependency that has one
   local deps=() d
   if jq -e 'has("depends_on")' <<<"$obj" >/dev/null; then
@@ -299,6 +394,39 @@ cmd_add() {
     '.version = 2 | .tasks += [($o + {id: $id, asks: [], since: $ts})]';
 }
 
+# tree rules for set: a second mate stays in its subtree and never edits its own group's state/parent/kind; a new parent must be a
+# valid group of the same project; a group with children keeps kind and project.
+tree_check_set() { # id obj unset-keys
+  local id="$1" obj="$2" un=" $3 " node par err
+  node="$(actor_node)"
+  if [[ -n "$node" ]]; then
+    if [[ "$id" == "$node" ]]; then
+      die "refused: this agent is the second mate of '$node' and cannot change its own group (state, parent, kind). Status goes up through scripts: bin/fleet rollup, the finish gate"
+    fi
+    scope_guard "$id"
+    if jq -e 'has("parent")' <<<"$obj" >/dev/null || [[ "$un" == *" parent "* ]]; then
+      par="$(jq -r '.parent // empty' <<<"$obj")"
+      [[ -n "$par" ]] || die "refused: a second mate cannot move a task out of its group"
+      scope_guard "$par" node-ok
+    fi
+  fi
+  if jq -e 'has("parent")' <<<"$obj" >/dev/null; then
+    par="$(jq -r '.parent' <<<"$obj")"
+    err="$(parent_error "$id" "$par" "$(jq -r '.kind // empty' <<<"$obj")")"; [[ -z "$err" ]] || die "refused: $err"
+    local pp cp; pp="$(node_field "$par" project)"
+    cp="$(jq -r --arg d "$(node_field "$id" project)" 'if has("project") then (.project // "") else $d end' <<<"$obj")"
+    if [[ -n "$cp" && -n "$pp" && "$cp" != "$pp" ]]; then die "refused: $id is in project $cp but its parent $par is in $pp"; fi
+  fi
+  if [[ "$(node_field "$id" kind)" == "group" ]] && [[ -n "$(descendants_of "$id")" ]]; then
+    if [[ "$un" == *" kind "* ]] || { jq -e 'has("kind")' <<<"$obj" >/dev/null && [[ "$(jq -r .kind <<<"$obj")" != "group" ]]; }; then
+      die "refused: $id is a group with children; move or archive them before it stops being a group"
+    fi
+    if jq -e 'has("project")' <<<"$obj" >/dev/null && [[ "$(jq -r '.project // empty' <<<"$obj")" != "$(node_field "$id" project)" ]]; then
+      die "refused: $id is a group with children; changing its project would split the tree"
+    fi
+  fi
+}
+
 cmd_set() {
   local id="$1"; shift
   entry_exists "$id" || die "no task $id";
@@ -307,12 +435,13 @@ cmd_set() {
   local kv rest=() unset_keys=()
   for kv in "$@"; do
     case "$kv" in
-      order=|branch=|pr=|title=|blocked_on=) unset_keys+=("${kv%=}");;
+      order=|branch=|pr=|title=|blocked_on=|parent=|kind=) unset_keys+=("${kv%=}");;
       *) rest+=("$kv");;
     esac
   done
-  local obj; obj="$(build_obj "$SETTABLE" "${rest[@]}")"
+  local obj; obj="$(build_obj "$SETTABLE" ${rest[@]+"${rest[@]}"})"
   check_obj "$obj"  # validate BEFORE touching the file: a refusal changes nothing
+  tree_check_set "$id" "$obj" "${unset_keys[*]-}"
   # blocked_on follows the state: required while blocked, dropped when the state moves off blocked
   local cur_st cur_bo new_st new_bo
   cur_st="$(jq -r --arg id "$id" '.tasks | map(select(.id == $id))[0].state' "$FLEET")"
@@ -465,6 +594,7 @@ check_context() {
 }
 
 cmd_ask() {
+  scope_guard "${1:-}" node-ok
   local id="$1" text="$2" ctx="${3:-}" optraw="${4:-}" refraw="${5:-}"
   entry_exists "$id" || die "no task $id"
   ((${#text} > 0)) || die "ask text is empty"
@@ -498,6 +628,7 @@ cmd_ask() {
 }
 
 cmd_reask() {
+  scope_guard "${1:-}" node-ok
   local id="$1" ref="$2" settext="$3" text="$4" ctx="$5" optraw="${6:-}"
   local opts="null"
   [[ -z "$optraw" ]] || opts="$(parse_options "$optraw")"
@@ -528,6 +659,7 @@ cmd_reask() {
 }
 
 cmd_pending() {
+  scope_guard "${1:-}" node-ok
   local id="$1" ref="$2"
   entry_exists "$id" || die "no task $id"
   local aid; aid="$(resolve_ask "$id" "$ref")"
@@ -536,6 +668,7 @@ cmd_pending() {
 }
 
 cmd_depend() {
+  scope_guard "${1:-}"
   local id="$1"; shift
   entry_exists "$id" || die "no task $id"
   for d in "$@"; do
@@ -556,6 +689,7 @@ cmd_depend() {
 }
 
 cmd_undepend() {
+  scope_guard "${1:-}"
   local id="$1" dep="$2"
   entry_exists "$id" || die "no task $id"
   atomic_jq --arg id "$id" --arg d "$dep" \
@@ -563,6 +697,7 @@ cmd_undepend() {
 }
 
 cmd_answer() {
+  scope_guard "${1:-}" node-ok
   local id="$1" ref="$2"
   entry_exists "$id" || die "no task $id"
   local aid; aid="$(resolve_ask "$id" "$ref")"
@@ -577,6 +712,7 @@ cmd_answer() {
 
 # the preview server is an operational kill handle, not status: it lives in tasks/<id>/preview.json
 cmd_preview() {
+  scope_guard "${1:-}"
   local id="$1" port="$2" pid="$3"
   entry_exists "$id" || die "no task $id"
   [[ "$port" =~ ^[0-9]+$ ]] && [[ "$pid" =~ ^[0-9]+$ ]] || die "preview needs numeric port and pid"
@@ -585,12 +721,14 @@ cmd_preview() {
 }
 
 cmd_clear_preview() {
+  scope_guard "${1:-}"
   local id="$1"
   entry_exists "$id" || die "no task $id"
   rm -f "$TASKS/$id/preview.json"
 }
 
 cmd_log() {
+  scope_guard "${1:-}" node-ok
   local id="$1" text="$2"
   [[ "$id" =~ ^[a-z0-9][a-z0-9-]*$ ]] || die "bad id '$id'"
   mkdir -p "$TASKS/$id"
@@ -600,6 +738,8 @@ cmd_log() {
 cmd_archive() {
   local id="$1"
   entry_exists "$id" || die "no task $id"
+  scope_guard "$id"
+  [[ -z "$(descendants_of "$id")" ]] || die "archive refuses $id: it still has live children ($(descendants_of "$id" | paste -sd, - | sed 's/,/, /g')); archive them first"
   local st; st="$(jq -r --arg id "$id" '.tasks | map(select(.id == $id))[0].state' "$FLEET")"
   [[ "$st" == "done" || "$st" == "failed" ]] \
     || die "archive refuses $id with state '$st' — only done/failed archive";
@@ -621,6 +761,7 @@ agents_of() { # task-id
 
 # card <id> (--file f | -): the task's card.md, atomically; unchanged content is not rewritten
 cmd_card() {
+  scope_guard "${1:-}" node-ok
   local id="${1:-}" src="" content
   shift || true
   case "${1:-}" in
@@ -671,6 +812,14 @@ cmd_finish() {
   [[ -n "$id" ]] || die "usage: fleet finish <id> [--failed] [--card -|--card-file <f>] [--branch <b>] [--base main] [--close-asks|--answer <ask>...] [--no-canvas]"
   entry_exists "$id" || die "no task $id"
   [[ "$id" =~ ^[a-z0-9][a-z0-9-]*$ ]] || die "bad id '$id'"
+  local actor_n; actor_n="$(actor_node)"
+  if [[ -n "$actor_n" && "$id" == "$actor_n" ]]; then die "refused: this agent is the second mate of '$id' and cannot finish its own group; the first mate does, once every child is done"; fi
+  scope_guard "$id"
+  if [[ "$(node_field "$id" kind)" == "group" ]]; then
+    local n_open; n_open="$(open_descendants "$id")"
+    ((n_open == 0)) || die "finish refuses group $id: $n_open task(s) under it are still open (a group is done only when every child is)"
+    nocanvas=1  # a group has no crew canvas of its own to save: its card is rebuilt from its children (group-card)
+  fi
   local card=""
   [[ "$cardsrc" != stdin ]] || card="$(cat)"
   [[ -z "$cardfile" ]] || card="$(cat "$cardfile")"
@@ -783,6 +932,61 @@ parse_reask_args() {
   else cmd_reask "${pos[0]}" "${pos[1]}" 0 "" "$ctx" "$opts"; fi
 }
 
+
+# --- task tree commands ----------------------------------------------------------------------------------------
+cmd_children() {
+  entry_exists "$1" || die "no task $1"
+  jq -c --arg id "$1" '[.tasks[] | select(.parent == $id) | {id, kind: (.kind // "task"), state, title: (.title // null)}]' "$FLEET"
+}
+cmd_tree() {
+  local p="${1:-}"
+  [[ -z "$p" || "$p" =~ $SLUG_RE ]] || die "bad project slug '$p'"
+  jq -r --arg p "$p" '
+    (.tasks | map(select($p == "" or .project == $p))) as $ts
+    | ($ts | map(.id)) as $ids
+    | def line($t; $d): ("  " * $d) + $t.id + (if ($t.kind // "") == "group" then " [group]" else "" end) + "  " + $t.state
+        + (if ($t.title // "") != "" then "  " + $t.title else "" end);
+      def walk($t; $d): line($t; $d), ($ts[] | select(.parent == $t.id) | walk(.; $d + 1));
+    $ts[] | . as $n | select(($n.parent // "") == "" or (($ids | index($n.parent)) == null)) | walk(.; 0)' "$FLEET"
+}
+cmd_claim_node() {
+  local id="" agent="" replace=0
+  while [[ $# -gt 0 ]]; do
+    case "$1" in --replace) replace=1; shift;; -*) die "unknown option '$1'";; *) if [[ -z "$id" ]]; then id="$1"; else agent="$1"; fi; shift;; esac
+  done
+  [[ -n "$id" && -n "$agent" ]] || die "usage: fleet claim-node <id> <agentId> [--replace]"
+  [[ -z "$(actor_node)" ]] || die "refused: a second mate cannot claim a node; only the first mate hands a group to a second mate"
+  entry_exists "$id" || die "no task $id"
+  [[ "$(node_field "$id" kind)" == "group" ]] || die "refused: $id is not a group (kind=group); only a group can have a second mate"
+  [[ "$agent" =~ ^[A-Za-z0-9][A-Za-z0-9_.-]*$ ]] || die "bad agent id '$agent'"
+  local cur; cur="$(claim_of "$id")"
+  if [[ -n "$cur" && "$cur" != "$agent" && $replace -eq 0 ]]; then die "refused: $id is already claimed by $cur (use --replace to hand it to $agent)"; fi
+  local a other
+  for other in "$TASKS"/*/claim.json; do
+    [[ -e "$other" ]] || continue
+    if [[ "$(jq -r '.agentId // empty' "$other")" == "$agent" && "$(basename "$(dirname "$other")")" != "$id" ]]; then
+      die "refused: $agent already owns $(basename "$(dirname "$other")"); a second mate owns one group"
+    fi
+  done
+  mkdir -p "$TASKS/$id"
+  jq -n --arg a "$agent" --arg t "$(now)" '{agentId: $a, claimedAt: $t}' >"$TASKS/$id/claim.json.tmp.$$" && mv "$TASKS/$id/claim.json.tmp.$$" "$TASKS/$id/claim.json"
+}
+cmd_release_node() {
+  local id="$1"
+  entry_exists "$id" || die "no task $id"
+  local cur; cur="$(claim_of "$id")"
+  [[ -n "$cur" ]] || die "$id has no second mate"
+  [[ "${PASEO_AGENT_ID:-}" != "$cur" ]] || die "refused: a second mate cannot retire itself; only the first mate releases it (bin/fleet release-node)"
+  [[ -z "$(actor_node)" ]] || die "refused: only the first mate retires a second mate"
+  rm -f "$TASKS/$id/claim.json"
+}
+cmd_rollup() { stage_tool rollup "$@"; }
+cmd_group_card() {
+  [[ "$(node_field "$1" kind)" == "group" ]] || die "$1 is not a group (kind=group)"
+  local md; md="$(stage_tool rollup "$1" --markdown)" || die "could not compute the rollup of $1"
+  printf '%s\n' "$md" | cmd_card "$1" -
+}
+
 # Serialize writers: hold an exclusive lock for the whole command (released when the process exits). The lock file is
 # separate from fleet.json, which is replaced by rename. Without flock(1) (macOS) an mkdir lock does the same job.
 lock() {
@@ -814,7 +1018,7 @@ require_v2() {
 need_jq
 cmd="${1:-}"; shift || true
 case "$cmd" in
-  add|set|ask|reask|pending|depend|undepend|answer|preview|clear-preview|archive|archive-update|finish) lock; require_v2;; esac
+  add|set|ask|reask|pending|depend|undepend|answer|preview|clear-preview|archive|archive-update|finish|claim-node|release-node) lock; require_v2;; esac
 case "$cmd" in
   get)           [[ $# -eq 1 ]] || die "usage: fleet get <id>"; cmd_get "$1";;
   by-agent)      [[ $# -eq 1 ]] || die "usage: fleet by-agent <agentId>"; cmd_by_agent "$1";;
@@ -839,5 +1043,11 @@ case "$cmd" in
   card)          [[ $# -ge 2 ]] || die "usage: fleet card <id> (--file <f>|-)"; cmd_card "$@";;
   archive-update) [[ $# -ge 2 ]] || die "usage: fleet archive-update <id> k=v ..."; cmd_archive_update "$@";;
   finish)        cmd_finish "$@";;
+  children)      [[ $# -eq 1 ]] || die "usage: fleet children <id>"; cmd_children "$1";;
+  tree)          [[ $# -le 1 ]] || die "usage: fleet tree [<project>]"; cmd_tree "$@";;
+  rollup)        [[ $# -ge 1 ]] || die "usage: fleet rollup <id> [--markdown]"; cmd_rollup "$@";;
+  group-card)    [[ $# -eq 1 ]] || die "usage: fleet group-card <id>"; cmd_group_card "$1";;
+  claim-node)    cmd_claim_node "$@";;
+  release-node)  [[ $# -eq 1 ]] || die "usage: fleet release-node <id>"; cmd_release_node "$1";;
   *) usage; [[ -n "$cmd" ]] && exit 1; exit 0;;
 esac

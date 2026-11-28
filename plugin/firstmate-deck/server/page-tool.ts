@@ -106,10 +106,10 @@ function claimLabel(root: string, project: string): string {
 }
 
 /** Drift flags per project (tasks with no project under ""), from the same stage engine the page uses. null when Paseo cannot be asked. */
-function driftByProject(root: string): Map<string, number> | null {
+async function driftByProject(root: string): Promise<Map<string, number> | null> {
   try {
     const out = new Map<string, number>();
-    for (const r of stages(root)) {
+    for (const r of await stages(root)) {
       const bad = r.flags.filter((f) => f.drift);
       if (!bad.length) continue;
       out.set(r.project ?? "", (out.get(r.project ?? "") ?? 0) + bad.length);
@@ -122,12 +122,12 @@ function driftByProject(root: string): Map<string, number> | null {
   }
 }
 
-function status(root: string, only?: string): void {
+async function status(root: string, only?: string): Promise<void> {
   const base = join(root, "state", "projects");
   const names = (only ? [only] : existsSync(base) ? readdirSync(base) : []).filter((n) => existsSync(join(base, n, "project.json")));
   const plugin = process.env.PAGE_PLUGIN_STATUS || "unknown";
   const mine = real(root);
-  const drift = names.length ? driftByProject(root) : null;
+  const drift = names.length ? await driftByProject(root) : null;
   const rows = [["PROJECT", "CLAIM", "SESSION", "LISTENER", "BANNER", "RENDERED", "PLUGIN ROOT", "UNDELIVERED", "DRIFT", "LAST DELIVERY", "PLUGIN", "URL", "LOAD ERROR"]];
   for (const n of names) {
     const pj = readPageJson(pageJsonPath(root, n));
@@ -224,7 +224,7 @@ switch (cmd) {
     break;
   }
   case "status":
-    status(root, rest[0]);
+    await status(root, rest[0]);
     break;
   case "stop": {
     const project = slug(rest[0]);

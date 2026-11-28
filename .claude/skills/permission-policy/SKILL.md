@@ -9,6 +9,7 @@ You are the first mate. The captain does not click through crew permission promp
 
 1. A `## Crew PERMISSION · <task>` message carries the request summary, the rule that failed, the agent and request ids, and the request JSON. A bare Paseo permission notification (crew without `fm.notify=plugin`) carries none of that: map the agent with `bin/fleet by-agent <agentId>`, then call `mcp__paseo__list_pending_permissions`.
 2. **Not pending any more → nothing to do, end the turn** (the hook allowed it in enforce mode, or someone answered it). `state/permission-log.jsonl` shows what the hook decided and why if you need to know.
+   A wake that says `on <host>` is a crew on another host, which `list_pending_permissions` and `respond_to_permission` do not reach: an empty list there says nothing. Check with `paseo inspect <agentId> --json --host "$(bin/page host-target <agentId>)"` (`PendingPermissions`) and answer with the `paseo permit` command in the wake (`docs/STATE.md`, "Acting on a crew there").
 3. Pending → it needs the captain. Get the why with `mcp__paseo__get_agent_activity` (`limit: 10`): what the crew member was doing just before the request.
 
 ## Escalate
@@ -19,6 +20,6 @@ Wait. Do not approve while the captain is away, do not rephrase the request into
 
 ## After the captain decides
 
-Answer with `mcp__paseo__respond_to_permission`, record the decision with `bin/fleet log` and `bin/fleet answer` the ask, then end the turn. The crew member resumes on its own.
+Answer with `mcp__paseo__respond_to_permission` (a crew on another host: `paseo permit allow|deny` as above), record the decision with `bin/fleet log` and `bin/fleet answer` the ask, then end the turn. The crew member resumes on its own.
 
 If the captain keeps approving the same class of request, suggest widening the `fm-permission-rules` block in `state/decisions.md` (the captain edits it; the hook re-reads it on change) instead of approving it by hand each time.

@@ -2,10 +2,10 @@ process.env.TZ = "UTC";
 process.env.FM_DECK_POLL_MODE ??= "cli"; // the older tests drive a fake lavish-axi CLI; the HTTP path has its own tests (http-poll, runtime-http)
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { Deck } from "../server/runtime.ts";
+import { Deck, type DeckOpts } from "../server/runtime.ts";
 import { hasLivePoll } from "../server/lavish.ts";
 import { readInbox, readPageJson } from "../server/store.ts";
 
@@ -16,14 +16,14 @@ async function until(cond: () => boolean, ms = 3000) {
 }
 
 import { CliPort } from "../server/paseo-cli.ts";
-import { PortSelector } from "../server/paseo-port.ts";
-import { FakeWorld, fakePaseo, shell } from "./fake-paseo.ts";
+import { PortSelector, SdkPort } from "../server/paseo-port.ts";
+import { FakeHosts, FakeWorld, fakePaseo, shell, type FakeHost } from "./fake-paseo.ts";
 
 /**
  * A daemon with two agents (ag-1 running, fm-1 the labelled first mate), reachable through a fake `paseo` CLI
  * (exec) and, once `sdk` is on (the default), through a fake SDK handle that is already captured.
  */
-function rig(fleet: object, o: { sdk?: boolean } = {}) {
+function rig(fleet: object, o: { sdk?: boolean; hosts?: FakeHosts; ttlMs?: number; deck?: Partial<DeckOpts> } = {}) {
   const root = mkdtempSync(join(tmpdir(), "deck-rt-"));
   const pdir = join(root, "state", "projects", "demo");
   mkdirSync(join(pdir, "sections"), { recursive: true });
@@ -51,8 +51,8 @@ function rig(fleet: object, o: { sdk?: boolean } = {}) {
     }
     throw new Error("unexpected " + args.join(" "));
   };
-  const ports = new PortSelector(new CliPort(exec));
-  if (o.sdk ?? true) ports.capture({ paseo: fakePaseo(fw) }, "test");
+  const ports = new PortSelector(new CliPort(exec), () => {}, o.ttlMs === undefined ? undefined : (api) => new SdkPort(api, { root: () => root, ttlMs: o.ttlMs, patienceMs: 100 }));
+  if (o.sdk ?? true) ports.capture({ paseo: fakePaseo(fw, o.hosts) }, "test");
   const world = {
     set status(v: string) { fw.agents.get("ag-1")!.status = v as any; },
     set sendFails(v: boolean) { fw.sendFails = v; },
@@ -60,7 +60,7 @@ function rig(fleet: object, o: { sdk?: boolean } = {}) {
     set labelled(l: unknown[]) { if (!l.length) fw.agents.get("fm-1")!.labels = {}; },
     set all(l: { id: string; status: string }[]) { for (const a of l) fw.add({ id: a.id, status: a.status as any }); },
   };
-  const mkDeck = (cfg: Record<string, string> = {}) => new Deck({ exec, ports, batchMs: 30, readConfig: async () => ({ root, firstmateLabel: "firstmate=true", ...cfg }) });
+  const mkDeck = (cfg: Record<string, string> = {}) => new Deck({ exec, ports, batchMs: 30, readConfig: async () => ({ root, firstmateLabel: "firstmate=true", ...cfg }), ...o.deck });
   const deck = mkDeck();
   return {
     root, pdir, world, fw, cliCalls, ports, deck, mkDeck, page: join(pdir, "page.html"), live: join(pdir, "page.live.js"),
@@ -436,7 +436,7 @@ test("C3: with no last good view (plugin just started) a broken fleet.json rende
 test("M4: every version file carries a growing sequence number", async () => {
   const r = rig(FLEET);
   await r.deck.configure();
-  const seq = () => Number(/,(\d+),"[^"]*"\);\n$/.exec(readFileSync(r.live.replace(".live.js", ".live.v.js"), "utf8"))?.[1]);
+  const seq = () => Number(/__fdVer\("[^"]*",(\d+),/.exec(readFileSync(r.live.replace(".live.js", ".live.v.js"), "utf8"))?.[1]);
   await r.deck.render("demo");
   const a = seq();
   await r.deck.render("demo");
@@ -1055,5 +1055,170 @@ test("enforcement reaches the page and stages.json together: a stalled task move
   r.deck.setEnforcement([], { l1: { fp: "old", why: "x" } });
   await r.deck.publishStages();
   assert.equal(l1().group, "fm");
+  r.deck.stop();
+});
+
+// ---------- crews on other Paseo hosts ----------
+
+const MACTASK = { tasks: [{ id: "demo-ux-task", intent: "ux", state: "active", project: "demo", shape: "ship" }] };
+const macLabels = { "fm.task": "demo-ux-task", "fm.project": "demo" };
+
+/** One task with three crews: an old one here, an older and the newest on the Mac. */
+function macRig(o: { ttlMs?: number } = {}) {
+  const crew = (id: string, createdAt: string, status: "running" | "idle") => ({ id, status, createdAt, updatedAt: createdAt, labels: macLabels, items: [assistant(`working in ${id}`)] });
+  const mac: FakeHost = {
+    serverId: "srv_mac", label: "mac", lastOnlineAt: "2026-10-22T14:03:00Z",
+    world: new FakeWorld().add(crew("mac-older", "2026-10-21T09:00:00Z", "idle"), crew("mac-new", "2026-10-22T09:00:00Z", "running")),
+  };
+  const r = rig(MACTASK, { hosts: new FakeHosts(mac), ttlMs: o.ttlMs ?? 0 });
+  r.fw.add(crew("old-local", "2026-10-20T09:00:00Z", "idle"));
+  const row = () => r.deck.snapshot()?.rows.find((x) => x.id === "demo-ux-task");
+  const show = async () => { await r.deck.configure(); await r.deck.render("demo"); await r.deck.publishStages(); return readFileSync(r.live, "utf8"); };
+  return { ...r, mac, row, show };
+}
+
+test("a task with an old local crew and two on the Mac shows the newest Mac crew, named and linked to its host", async () => {
+  const r = macRig();
+  const live = await r.show();
+  assert.match(live, /\/h\/srv_mac\/agent\/mac-new/);
+  assert.match(live, /on mac/);
+  assert.doesNotMatch(live, /agent\/(old-local|mac-older)/);
+  assert.deepEqual([r.row()?.agentId, r.row()?.host, r.row()?.stage], ["mac-new", "mac", "Running"]);
+  const s = (await r.deck.summary()).projects[0];
+  assert.deepEqual(s.running.map((x) => [x.agentId, x.agentStatus, x.host]), [["mac-new", "running", "mac"]]);
+  r.deck.stop();
+});
+
+test("while the Mac is offline its crew is unknown since then: never the old local one, never asked", async () => {
+  const r = macRig();
+  await r.show();
+  r.mac.status = "offline";
+  r.mac.world.calls.length = 0;
+  r.deck.onAgentEvent("mac-new", "srv_mac");
+  await sleep(600); // past the shared label read
+  const live = await r.show();
+  // since it was first seen gone, not since it last connected (the fixture's lastOnlineAt, 14:03 on 22 Oct)
+  assert.match(live, /unknown · mac offline since \d/);
+  assert.doesNotMatch(live, /mac offline since (22 Oct )?14:03/);
+  assert.match(live, /\/h\/srv_mac\/agent\/mac-new/);
+  assert.doesNotMatch(live, /agent\/old-local|so far|mac offline since 2026|1 agent working/);
+  assert.deepEqual([r.row()?.agentId, r.row()?.host, r.row()?.stage], ["mac-new", "mac", "Unknown · mac offline"]);
+  assert.deepEqual(r.mac.world.calls, []);
+  const run = (await r.deck.summary()).projects[0].running[0];
+  assert.deepEqual([run.agentStatus, run.host], ["unknown", "mac"]);
+  assert.match(run.current, /^mac offline since .*\d{1,2}:\d{2}/);
+  r.deck.stop();
+});
+
+test("a Mac card names its host beside the title; offline it keeps the lost permission, dates the canvas tag and says an answer waits", async () => {
+  const fc = await new FakeCanvas().start();
+  const since = "2026-10-22T09:00:00Z";
+  const task = (id: string, over: object = {}) => ({ id, intent: id, state: "active", project: "demo", shape: "ship", ...over });
+  const crew = (id: string, t: string, over: object = {}) => ({ id, status: "running" as const, createdAt: since, updatedAt: since, labels: { "fm.task": t, "fm.project": "demo" }, items: [assistant("on it")], ...over });
+  const mac: FakeHost = {
+    serverId: "srv_mac", label: "mac", lastOnlineAt: since,
+    world: new FakeWorld().add(
+      crew("m-ask", "asks"), crew("m-raw", "raw"),
+      crew("m-perm", "perm", { pendingPermissions: [{ id: "p1", name: "Bash", kind: "tool" }] }),
+      crew("m-done", "old", { status: "idle" }),
+    ),
+  };
+  fc.set(canvasSummary("m-ask"));
+  fc.set(canvasSummary("m-raw", { openAsks: [{ id: "db", question: "pg or sqlite?", blocking: true, options: [{ value: "pg", label: "pg" }, { value: "sqlite", label: "sqlite" }] }] }));
+  fc.set(canvasSummary("m-perm"));
+  const r = rig({ tasks: [task("asks", { asks: [{ id: "q", text: "Which way?", since, options: ["A", "B"] }] }), task("raw"), task("perm"), task("old", { state: "done", outcome: "ok" })] }, { hosts: new FakeHosts(mac), ttlMs: 0, deck: { canvasPollMs: 30 } });
+  const deck = r.mkDeck({ canvasUrl: fc.url });
+  await deck.configure();
+  await deck.render("demo");
+  const card = (id: string) => taskCard(readFileSync(r.live, "utf8"), id);
+  const NOTE = /mac is offline: your answer is saved here\. The crew can only get it once mac is back\./;
+  await until(() => /FULL CANVAS m-perm/.test(card("perm")) && /Uncurated/.test(card("raw")), 3000);
+  for (const id of ["asks", "raw", "perm", "old"]) {
+    assert.match(card(id), /class=\\"chip c-host\\">on mac</, `${id} names the host in its title row`);
+    assert.equal(card(id).match(/on mac/g)?.length, 1, `${id} names it once`);
+    assert.doesNotMatch(card(id), NOTE);
+    assert.doesNotMatch(card(id), /last seen/);
+  }
+  assert.match(card("perm"), /Needs you · permission/);
+
+  mac.status = "offline";
+  deck.onAgentEvent("m-ask", "srv_mac");
+  await until(() => /last seen: Working/.test(card("perm")) && /unknown · mac offline/.test(card("perm")), 3000);
+  assert.match(card("perm"), /was waiting for a permission/);
+  assert.doesNotMatch(card("perm"), /Needs you · permission/);
+  assert.match(card("asks"), /last seen: Working/);
+  assert.match(card("asks"), NOTE);
+  assert.match(card("raw"), NOTE);
+  assert.doesNotMatch(card("perm"), NOTE, "no question, so nothing to say about answers");
+  assert.match(card("old"), /class=\\"chip c-host\\">on mac</);
+  assert.doesNotMatch(card("old"), /was waiting|your answer is saved/);
+  deck.stop(); await fc.stop();
+});
+
+test("a hung host does not hold up a page", async () => {
+  const r = macRig();
+  await r.show();
+  r.mac.world.hang = true;
+  await sleep(600);
+  const t0 = Date.now();
+  await r.deck.render("demo");
+  await r.deck.publishStages();
+  assert.ok(Date.now() - t0 < 2500, `took ${Date.now() - t0} ms`);
+  assert.equal(r.row()?.agentId, "mac-new");
+  r.deck.stop();
+  r.ports.sdkPort()!.hosts!.stop();
+});
+
+test("a remote crew's event refreshes its host at once, and its turn start is the one the host reported", async () => {
+  const r = macRig({ ttlMs: 60_000 });
+  await r.show();
+  r.mac.world.agents.get("mac-new")!.status = "idle";
+  r.mac.world.agents.get("mac-new")!.items = [assistant("DONE: mac @ abc")];
+  await sleep(600);
+  r.deck.onAgentEvent("mac-new", "srv_mac");
+  await r.show();
+  assert.equal(r.row()?.stage, "Review");
+  r.deck.stop();
+});
+
+test("before the first SDK handle, remembered Mac crews are not replaced by an old local one", async () => {
+  const agentsDir = mkdtempSync(join(tmpdir(), "deck-agents-"));
+  mkdirSync(join(agentsDir, "a"));
+  writeFileSync(join(agentsDir, "a", "old-local.json"), JSON.stringify({ id: "old-local", labels: macLabels, createdAt: "2026-10-20T09:00:00Z", lastStatus: "idle" }));
+  const r = rig(MACTASK, { sdk: false, deck: { agentsDir } });
+  writeFileSync(join(r.root, "state", "remote-agents.json"), JSON.stringify({ version: 1, hosts: { srv_mac: { label: "mac", offlineSince: null, agents: [{ id: "mac-new", task: "demo-ux-task", status: "running", archived: false, createdAt: "2026-10-22T09:00:00Z", lastActivityAt: "2026-10-22T09:00:00Z", pending: 0, labels: macLabels, owner: "srv_local" }] } } }));
+  await r.deck.configure();
+  await r.deck.publishStages();
+  const row = r.deck.snapshot()!.rows[0];
+  assert.deepEqual([row.agentId, row.host], ["mac-new", "mac"]);
+  r.deck.stop();
+});
+
+test("the page's 'still alive' number comes from rendering: it moves on every tick, and stops when rendering stops working", async () => {
+  const r = rig(FLEET);
+  const deck = new Deck({ exec: async () => "", ports: r.ports, batchMs: 30, tickMs: 40, readConfig: async () => ({ root: r.root, firstmateLabel: "firstmate=true" }) });
+  const seq = () => Number(/__fdVer\("[^"]*",(\d+),/.exec(readFileSync(r.live.replace(".live.js", ".live.v.js"), "utf8"))?.[1]);
+  try {
+    await deck.start();
+    await until(() => existsSync(r.live), 3000);
+    const a = seq();
+    await until(() => seq() > a, 3000);
+    (deck as any).writePage = () => { throw new Error("the render is broken"); };
+    await sleep(100);
+    const b = seq();
+    await sleep(200); // five ticks
+    assert.equal(seq(), b, "no render, no new number: the open page warns that it is stale");
+  } finally { deck.stop(); }
+});
+
+test("a one-line card's body file has a name safe for any task id, the same one the page asks for", async () => {
+  const id = "odd id#1?";
+  const r = rig({ tasks: [{ id, intent: "done thing", state: "done", project: "demo", notes: "the body" }] });
+  await r.deck.configure();
+  await r.deck.render("demo");
+  const files = readdirSync(r.page.replace(/\.html$/, ".d"));
+  assert.equal(files.length, 1);
+  assert.match(files[0], /^b\.odd_id_1_\.[0-9a-f]{12}\.js$/);
+  assert.match(readFileSync(r.page, "utf8"), /sc\.src=D\+"b\."\+id\.replace\(\/\[\^\\w\.-\]\/g,"_"\)\+"\."\+h\+"\.js"/);
   r.deck.stop();
 });

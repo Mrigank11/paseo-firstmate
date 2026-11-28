@@ -11,8 +11,13 @@ type PaseoApi = PluginHandlerContext["paseo"];
 type PaseoAgentHandle = ReturnType<PaseoApi["agents"]["ref"]>;
 import { COMMENT_ROW_KIND, COMMENT_ROW_VERSION } from "../shared/contract.ts";
 import { claimedId, projectClaimedId } from "./claims.ts";
+import { Hosts, within, type HostInfo, type HostRef, type HostsOptions } from "./hosts.ts";
+import { claims } from "./ownership.ts";
+import { redact } from "./redact.ts";
+import { mergeHosts, readRemoteStore, recordHosts, remoteRecords, type HostSeen, type RemoteRecord, type RemoteStore } from "./remote-store.ts";
 import { human } from "./humanize.ts";
 import type { AgentView } from "./render.ts";
+import type { HostOffline } from "./stage.ts";
 
 export type PortAgent = {
   id: string;
@@ -27,15 +32,34 @@ export type PortAgent = {
   lastActivityAt?: string | null;
   /** Open permission requests (0 when unknown, as on the CLI). */
   pendingPermissions?: number;
+  /** Set for an agent on another Paseo host: its label and server id. */
+  host?: string;
+  serverId?: string;
+  /** That host is offline: this is the last known record, with status "unknown". */
+  hostOffline?: HostOffline;
+};
+
+export type ListOptions = { label?: string; includeArchived?: boolean; local?: boolean };
+
+export type AgentInfo = {
+  id: string; status: string; labels: Record<string, string>; archived: boolean; updatedAt: string | null;
+  /** A path on the agent's own machine: meaningless here when `serverId` is set. */
+  cwd: string | null;
+  host?: string;
+  serverId?: string;
 };
 
 export type CommentRowData = { project: string; pageUrl: string | null; at: string; comments: { target: string; text: string }[]; replied: boolean };
 
 export interface PaseoPort {
   readonly kind: "sdk" | "cli";
-  /** Live (non-archived) agents, optionally only those carrying `label` ("key=value", or just "key"), archived ones too with `includeArchived`. */
-  listAgents(o?: { label?: string; includeArchived?: boolean }): Promise<PortAgent[]>;
-  agentView(id: string): Promise<AgentView>;
+  /**
+   * Live (non-archived) agents, optionally only those carrying `label` ("key=value", or just "key"), archived ones too with
+   * `includeArchived`. Every host's agents are merged in (marked `host`/`serverId`) unless `local` asks for this daemon's only.
+   */
+  listAgents(o?: ListOptions): Promise<PortAgent[]>;
+  /** `last` is the view already shown: an agent that may not be read (closed, on another host) keeps what it says. */
+  agentView(id: string, last?: AgentView): Promise<AgentView>;
   /** Send `text` to the agent, steering it if it is mid-turn (never interrupting). */
   send(id: string, text: string): Promise<void>;
   /** Handle-less peek for the gate sweep (CLI only): status, age, parent and the last DONE:/BLOCKED: line of the trailing log block. */
@@ -119,7 +143,7 @@ export function finalLine(items: readonly TimelineItem[]): string | undefined {
     const it = items[i];
     if (it.type !== "assistant_message") continue;
     const lines = it.text.split("\n");
-    for (let j = lines.length - 1; j >= 0; j--) if (lines[j].startsWith("DONE:") || lines[j].startsWith("BLOCKED:")) return lines[j];
+    for (let j = lines.length - 1; j >= 0; j--) if (lines[j].startsWith("DONE:") || lines[j].startsWith("BLOCKED:")) return redact(lines[j]);
   }
   return undefined;
 }
@@ -142,81 +166,344 @@ export function parseLabel(label: string): [string, string | null] {
   return i < 0 ? [label, null] : [label.slice(0, i), label.slice(i + 1)];
 }
 
+/** Timeouts of calls to another host: a directory listing, a read, a send. */
+export const REMOTE_LIST_MS = 5000;
+export const REMOTE_SEND_MS = 20_000;
+/** A host's agent list is reused for this long. */
+export const REMOTE_TTL_MS = 2000;
+/** How long a caller waits for a slow host before taking what is already known (the read carries on behind it). */
+export const REMOTE_PATIENCE_MS = 1000;
+
+/** How long a lookup of a local relay agent is reused. */
+export const RELAY_TTL_MS = 10_000;
+
+export type SdkPortOptions = HostsOptions & {
+  listTimeoutMs?: number;
+  sendTimeoutMs?: number;
+  remoteTtlMs?: number;
+  patienceMs?: number;
+};
+
+const sleep = <T>(ms: number, v: T) => new Promise<T>((r) => { setTimeout(() => r(v), ms).unref?.(); });
+
+/** One page-walk of a daemon's agent directory. */
+async function listFrom(api: PaseoApi, o: ListOptions, sort?: { key: "updated_at"; direction: "desc" }[]): Promise<PortAgent[]> {
+  const [key, value] = o.label ? parseLabel(o.label) : ["", null];
+  const out: PortAgent[] = [];
+  let cursor: string | undefined;
+  for (let page = 0; page < MAX_PAGES; page++) {
+    const r = await api.agents.list({
+      // includeBackground: crew an agent starts over MCP live in a background workspace, which the default listing hides
+      filter: { ...(key && value !== null ? { labels: { [key]: value } } : {}), ...(o.includeArchived ? { includeArchived: true } : {}), includeBackground: true },
+      ...(sort ? { sort } : {}),
+      page: { limit: PAGE_LIMIT, ...(cursor ? { cursor } : {}) },
+    });
+    for (const { agent: a } of r.entries) {
+      if (key && value === null && !(key in a.labels)) continue;
+      out.push({
+        id: a.id, status: a.status, labels: a.labels, createdAt: a.createdAt, updatedAt: a.updatedAt,
+        model: a.model, thinking: a.effectiveThinkingOptionId ?? a.thinkingOptionId ?? null, title: a.title, archived: !!a.archivedAt,
+        lastActivityAt: a.updatedAt, pendingPermissions: a.pendingPermissions?.length ?? 0,
+      });
+    }
+    if (!r.pageInfo.hasMore || !r.pageInfo.nextCursor) break;
+    cursor = r.pageInfo.nextCursor;
+  }
+  return out;
+}
+
+const matches = (a: PortAgent, o: ListOptions): boolean => {
+  if (a.archived && !o.includeArchived) return false;
+  if (!o.label) return true;
+  const [key, value] = parseLabel(o.label);
+  return value === null ? key in a.labels : a.labels[key] === value;
+};
+
+/** The persisted form of one remote crew of the daemon `owner`. */
+const toRecord = (a: PortAgent, owner: string) => ({
+  id: a.id, task: a.labels["fm.task"], status: a.status, archived: a.archived, createdAt: a.createdAt, lastActivityAt: a.lastActivityAt ?? a.updatedAt,
+  pending: a.pendingPermissions ?? 0, labels: a.labels, owner,
+});
+
+/** A remembered remote crew as a port agent. */
+export function fromRecord(r: RemoteRecord): PortAgent {
+  return {
+    id: r.id, status: r.status, labels: r.labels ?? { "fm.task": r.task }, createdAt: r.createdAt, updatedAt: r.lastActivityAt, lastActivityAt: r.lastActivityAt,
+    model: null, thinking: null, title: null, archived: r.archived, pendingPermissions: r.pending, host: r.host, serverId: r.serverId,
+    ...(r.hostOffline ? { hostOffline: r.hostOffline } : {}),
+  };
+}
+
+/**
+ * The SDK handle's agents: this daemon's, plus ours (ownership.ts) on every other Paseo host it is linked to; anyone else's
+ * there is never listed, read or touched. Per-agent calls go to the host the agent lives on. A host that cannot be listed
+ * keeps its last-known crews, as status "unknown" with `hostOffline`.
+ */
 export class SdkPort implements PaseoPort {
   readonly kind = "sdk" as const;
   private api: PaseoApi;
-  constructor(api: PaseoApi) {
+  /** Null for a daemon without a host directory: then everything is local. */
+  readonly hosts: Hosts | null;
+  private o: SdkPortOptions;
+  /** Last-known remote crews when there is no checkout to persist them in. */
+  private memory: RemoteStore = { version: 1, hosts: {} };
+  private lists = new Map<string, { at: number; agents: PortAgent[] }>();
+  private listing = new Map<string, Promise<PortAgent[] | null>>();
+  private failing = new Set<string>();
+  /** "serverId/agentId" of the agents on other hosts shown to be ours. */
+  private ours = new Set<string>();
+  private relays = new Map<string, { at: number; live: Promise<boolean> }>();
+  constructor(api: PaseoApi, o: SdkPortOptions = {}) {
     this.api = api;
+    this.o = o;
+    this.hosts = (api as Partial<PaseoApi>).hosts ? new Hosts(api, o) : null;
   }
 
-  async listAgents(o: { label?: string; includeArchived?: boolean } = {}): Promise<PortAgent[]> {
-    const [key, value] = o.label ? parseLabel(o.label) : ["", null];
-    const out: PortAgent[] = [];
-    let cursor: string | undefined;
-    for (let page = 0; page < MAX_PAGES; page++) {
-      const r = await this.api.agents.list({
-        // includeBackground: crew an agent starts over MCP live in a background workspace, which the default listing hides
-        filter: { ...(key && value !== null ? { labels: { [key]: value } } : {}), ...(o.includeArchived ? { includeArchived: true } : {}), includeBackground: true },
-        page: { limit: PAGE_LIMIT, ...(cursor ? { cursor } : {}) },
-      });
-      for (const { agent: a } of r.entries) {
-        if (key && value === null && !(key in a.labels)) continue;
-        out.push({
-          id: a.id, status: a.status, labels: a.labels, createdAt: a.createdAt, updatedAt: a.updatedAt,
-          model: a.model, thinking: a.effectiveThinkingOptionId ?? a.thinkingOptionId ?? null, title: a.title, archived: !!a.archivedAt,
-          lastActivityAt: a.updatedAt, pendingPermissions: a.pendingPermissions?.length ?? 0,
-        });
-      }
-      if (!r.pageInfo.hasMore || !r.pageInfo.nextCursor) break;
-      cursor = r.pageInfo.nextCursor;
+  async listAgents(o: ListOptions = {}): Promise<PortAgent[]> {
+    const local = await listFrom(this.api, o);
+    if (!this.hosts || o.local) return local;
+    let remote: PortAgent[] = [];
+    try { remote = await this.remoteAgents(); }
+    catch (e) { this.o.log?.(`listing other hosts' agents failed: ${(e as Error).message}`); }
+    const here = new Set(local.map((a) => a.id));
+    return [...local, ...remote.filter((a) => !here.has(a.id) && matches(a, o))];
+  }
+
+  /** Is `id` exactly a live agent of this daemon? Rejects when it cannot be looked up. */
+  private liveHere(id: string): Promise<boolean> {
+    const have = this.relays.get(id);
+    if (have && Date.now() - have.at < RELAY_TTL_MS) return have.live;
+    const live = within(Promise.resolve().then(() => this.api.agents.ref(id).refresh()), this.o.listTimeoutMs ?? this.o.timeoutMs ?? REMOTE_LIST_MS, "relay lookup")
+      .then((r) => r?.agent?.id === id && !r.agent.archivedAt);
+    this.relays.set(id, { at: Date.now(), live });
+    live.catch(() => this.relays.delete(id)); // a failed lookup decides nothing
+    return live;
+  }
+
+  private store(): RemoteStore {
+    const root = this.o.root?.() || "";
+    return root ? readRemoteStore(root, this.hosts?.self) : this.memory;
+  }
+
+  /** The ids of the crews of one host already on record as ours. */
+  private recorded(serverId: string): Set<string> {
+    return new Set(this.store().hosts[serverId]?.agents.map((a) => a.id) ?? []);
+  }
+
+  /** Is `a`, on the host `serverId`, ours? Once shown to be, it stays so. */
+  async owns(serverId: string, a: { id: string; labels?: Record<string, string> }, recorded?: ReadonlySet<string>): Promise<boolean> {
+    if (!this.hosts) return false;
+    const key = `${serverId}/${a.id}`;
+    if (this.ours.has(key)) return true;
+    await this.hosts.list(); // for our own server id
+    if (!(recorded ?? this.recorded(serverId)).has(a.id) && !(await claims(a.labels, { serverId: this.hosts.self, isLocal: (id) => this.liveHere(id) }))) return false;
+    this.ours.add(key);
+    return true;
+  }
+
+  /** The last check before anything is read from, or done to, an agent on another host. */
+  private async guard(api: PaseoApi, serverId: string, id: string): Promise<void> {
+    if (this.ours.has(`${serverId}/${id}`) || this.recorded(serverId).has(id)) return;
+    const a = (await api.agents.ref(id).refresh())?.agent;
+    if (a?.id !== id || !(await this.owns(serverId, a))) throw new Error(`agent ${id} is not ours: leaving it alone`);
+  }
+
+  private onHost<T>(serverId: string, id: string, op: (api: PaseoApi) => Promise<T>, ms?: number): Promise<T> {
+    return this.hosts!.call(serverId, async (api) => { await this.guard(api, serverId, id); return op(api); }, ms);
+  }
+
+  /** The agents of one host, or null when they cannot be read now. A slow host is waited for only `patienceMs`. */
+  private async hostAgents(h: HostInfo): Promise<PortAgent[] | null> {
+    const id = h.serverId;
+    const have = this.lists.get(id);
+    if (have && Date.now() - have.at < (this.o.remoteTtlMs ?? (this.o.ttlMs ?? REMOTE_TTL_MS))) return have.agents;
+    let flight = this.listing.get(id);
+    if (!flight) {
+      flight = this.hosts!
+        .call(id, (api) => listFrom(api, { includeArchived: true }, [{ key: "updated_at", direction: "desc" }]), this.o.listTimeoutMs ?? this.o.timeoutMs ?? REMOTE_LIST_MS)
+        .then(async (all) => {
+          const recorded = this.recorded(id);
+          const mine = await Promise.all(all.map((a) => this.owns(id, a, recorded)));
+          return all.filter((_, i) => mine[i]);
+        })
+        .then(
+          (all) => {
+            const agents = all.map((a) => ({ ...a, host: h.label, serverId: id }));
+            this.lists.set(id, { at: Date.now(), agents });
+            this.failing.delete(id);
+            return agents;
+          },
+          (e) => {
+            if (!this.failing.has(id)) this.o.log?.(`could not list the agents of host ${h.label}: ${(e as Error).message}`);
+            this.failing.add(id);
+            this.lists.delete(id);
+            return null;
+          },
+        )
+        .finally(() => this.listing.delete(id));
+      this.listing.set(id, flight);
     }
+    // never read: wait for it. Otherwise only briefly, then what is already known.
+    if (!have && !this.failing.has(id)) return flight;
+    return Promise.race([flight, sleep(this.o.patienceMs ?? REMOTE_PATIENCE_MS, have?.agents ?? null)]);
+  }
+
+  private async remoteAgents(): Promise<PortAgent[]> {
+    const root = this.o.root?.() || "";
+    const dir = await this.hosts!.list();
+    const read = (): RemoteStore => this.store();
+    // no directory: every remembered host is one that cannot be listed
+    const seen: (HostSeen & { live: PortAgent[] | null })[] = dir
+      ? await Promise.all(dir.map(async (h) => {
+          const live = h.online ? await this.hostAgents(h) : null;
+          return { serverId: h.serverId, label: h.label, target: h.target, online: h.online, lastOnlineAt: h.online ? null : h.lastOnlineAt, agents: live?.filter((a) => a.labels["fm.task"]).map((a) => toRecord(a, this.hosts!.self)) ?? null, live };
+        }))
+      : Object.entries(read().hosts).map(([serverId, h]) => ({ serverId, label: h.label, online: false, agents: null, live: null }));
+    if (!seen.length && !Object.keys(read().hosts).length) return [];
+    let store: RemoteStore;
+    const records = seen.map(({ live: _, ...h }) => h);
+    try {
+      store = root ? recordHosts(root, records, new Date(), this.hosts!.self) : (this.memory = mergeHosts(this.memory, records, new Date()));
+    } catch (e) {
+      this.o.log?.(`could not record other hosts' crews: ${(e as Error).message}`);
+      store = this.memory = mergeHosts(this.memory, records, new Date());
+    }
+    const remembered = remoteRecords(store);
+    const out = seen.flatMap((h) => h.live ?? remembered.filter((r) => r.serverId === h.serverId).map(fromRecord));
+    for (const a of out) this.hosts!.note(a.id, a.serverId!, a.host!);
     return out;
   }
 
-  async agentView(id: string): Promise<AgentView> {
-    const h = this.api.agents.ref(id);
-    // A bounded tail: for an agent with more than TAIL_LIMIT timeline entries `stepCount` is a lower bound
-    // (`stepsAtLeast` says so and the page shows "N+ steps").
-    const page = await h.timeline.refetch({ direction: "tail", limit: TAIL_LIMIT, projection: "projected" });
-    const a = page.agent ?? h.current() ?? (await h.refresh())?.agent ?? null;
-    if (!a) throw new Error(`agent ${id} not found`);
-    const items = [...page.entries].sort((x, y) => x.seqStart - y.seqStart).map((e) => e.item);
-    const v = viewFromItems(items);
-    return {
-      status: (a.archivedAt ? "archived" : a.status) as AgentView["status"],
-      createdAt: a.createdAt || undefined,
-      updatedAt: a.updatedAt || undefined,
-      model: a.model || a.runtimeInfo?.model || undefined,
-      thinking: a.effectiveThinkingOptionId || a.thinkingOptionId || undefined,
-      ...v,
-      ...(page.hasOlder ? { stepsAtLeast: true } : {}),
-    };
+  /** Something happened on that host: its next listing is read afresh. */
+  invalidate(serverId: string): void {
+    const have = this.lists.get(serverId);
+    if (have) have.at = 0;
   }
 
-  /** Status and labels of one agent, fresh from the daemon (hook events carry no labels). Null when it is gone. */
-  async agentInfo(id: string): Promise<{ id: string; status: string; labels: Record<string, string>; archived: boolean; updatedAt: string | null; cwd: string | null } | null> {
-    const r = await this.api.agents.ref(id).refresh();
-    const a = r?.agent;
-    return a ? { id: a.id, status: a.status, labels: a.labels, archived: !!a.archivedAt, updatedAt: a.updatedAt, cwd: a.cwd || null } : null;
+  /** The other host an agent lives on; undefined for a local (or unknown) one. */
+  hostOf(id: string): HostRef | undefined {
+    return this.hosts?.hostOf(id);
+  }
+
+  /** Ask every online host for an agent of ours that nobody has placed yet. */
+  private async discover(id: string): Promise<HostRef | undefined> {
+    if (!this.hosts) return undefined;
+    const clients = await this.hosts.clients();
+    const found = await Promise.all(clients.map(async (c) => {
+      try {
+        const a = (await within(c.api.agents.ref(id).refresh(), this.o.listTimeoutMs ?? this.o.timeoutMs ?? REMOTE_LIST_MS, "agent lookup"))?.agent;
+        return a?.id === id && (await this.owns(c.serverId, a)) ? c : null;
+      }
+      catch { return null; }
+    }));
+    const c = found.find((x) => !!x);
+    if (!c) return undefined;
+    this.hosts.note(id, c.serverId, c.label);
+    return { serverId: c.serverId, label: c.label };
+  }
+
+  /** Run `op` against the API of the agent's host. An unplaced agent is tried here first, then looked for on the other hosts. */
+  private async routed<T>(id: string, op: (api: PaseoApi, remote: boolean) => Promise<T>, ms?: number): Promise<T> {
+    const there = (host: HostRef) => this.onHost(host.serverId, id, (api) => op(api, true), ms);
+    const owner = this.hostOf(id);
+    if (owner) return there(owner);
+    try {
+      return await op(this.api, false);
+    } catch (e) {
+      const found = await this.discover(id);
+      if (!found) throw e;
+      return there(found);
+    }
+  }
+
+  /**
+   * The agent on another host when it is closed there, else null. Reading a timeline loads (resumes) an unloaded agent on its
+   * host, so a closed one's is never asked for.
+   */
+  private async closedThere(api: PaseoApi, id: string) {
+    const a = (await api.agents.ref(id).refresh())?.agent;
+    return a && a.status === "closed" ? a : null;
+  }
+
+  async agentView(id: string, last?: AgentView): Promise<AgentView> {
+    return this.routed(id, async (api, remote) => {
+      const h = api.agents.ref(id);
+      const shut = remote ? await this.closedThere(api, id) : null;
+      if (shut) {
+        return {
+          status: (shut.archivedAt ? "archived" : "closed") as AgentView["status"],
+          createdAt: shut.createdAt || undefined,
+          updatedAt: shut.updatedAt || undefined,
+          model: shut.model || shut.runtimeInfo?.model || undefined,
+          thinking: shut.effectiveThinkingOptionId || shut.thinkingOptionId || undefined,
+          stepCount: last?.stepCount ?? 0,
+          recent: last?.recent ?? [],
+          ...(last?.stepsAtLeast ? { stepsAtLeast: true } : {}),
+          ...(last?.final ? { final: last.final } : {}),
+        };
+      }
+      // A bounded tail: for an agent with more than TAIL_LIMIT timeline entries `stepCount` is a lower bound
+      // (`stepsAtLeast` says so and the page shows "N+ steps").
+      const page = await h.timeline.refetch({ direction: "tail", limit: TAIL_LIMIT, projection: "projected" });
+      const a = page.agent ?? h.current() ?? (await h.refresh())?.agent ?? null;
+      if (!a) throw new Error(`agent ${id} not found`);
+      const items = [...page.entries].sort((x, y) => x.seqStart - y.seqStart).map((e) => e.item);
+      const v = viewFromItems(items);
+      return {
+        status: (a.archivedAt ? "archived" : a.status) as AgentView["status"],
+        createdAt: a.createdAt || undefined,
+        updatedAt: a.updatedAt || undefined,
+        model: a.model || a.runtimeInfo?.model || undefined,
+        thinking: a.effectiveThinkingOptionId || a.thinkingOptionId || undefined,
+        ...v,
+        ...(page.hasOlder ? { stepsAtLeast: true } : {}),
+      };
+    });
+  }
+
+  /** Status and labels of one agent, fresh from its daemon (hook events carry no labels). Null when it is gone, or not ours. */
+  async agentInfo(id: string): Promise<AgentInfo | null> {
+    const read = async (api: PaseoApi): Promise<AgentInfo | null> => {
+      const a = (await api.agents.ref(id).refresh())?.agent;
+      return a ? { id: a.id, status: a.status, labels: a.labels, archived: !!a.archivedAt, updatedAt: a.updatedAt, cwd: a.cwd || null } : null;
+    };
+    const there = async (host: HostRef) => {
+      const a = await this.hosts!.call(host.serverId, read);
+      if (!a || !(await this.owns(host.serverId, a))) return null;
+      return { ...a, host: host.label, serverId: host.serverId };
+    };
+    const owner = this.hostOf(id);
+    if (owner) return there(owner);
+    let here: AgentInfo | null = null;
+    let failed: unknown;
+    try { here = await read(this.api); } catch (e) { failed = e; }
+    if (here) return here;
+    const found = await this.discover(id);
+    if (found) return there(found);
+    if (failed) throw failed;
+    return null;
   }
 
   /** Answer an open permission request (the permission hook's auto-approve). */
   async respondToPermission(id: string, requestId: string, response: { behavior: "allow" } | { behavior: "deny"; message?: string }): Promise<void> {
-    await this.api.agents.ref(id).respondToPermission({ requestId, response });
+    await this.routed(id, (api) => api.agents.ref(id).respondToPermission({ requestId, response }));
   }
 
-  /** The newest timeline items (oldest first), for the gate's sweep. */
+  /** The newest timeline items (oldest first), for the gate's sweep. None for a closed agent on another host. */
   async tailItems(id: string): Promise<TimelineItem[]> {
-    const page = await this.api.agents.ref(id).timeline.refetch({ direction: "tail", limit: TAIL_LIMIT, projection: "projected" });
-    return [...page.entries].sort((x, y) => x.seqStart - y.seqStart).map((e) => e.item);
+    return this.routed(id, async (api, remote) => {
+      if (remote && (await this.closedThere(api, id))) return [];
+      const page = await api.agents.ref(id).timeline.refetch({ direction: "tail", limit: TAIL_LIMIT, projection: "projected" });
+      return [...page.entries].sort((x, y) => x.seqStart - y.seqStart).map((e) => e.item);
+    });
   }
 
   async send(id: string, text: string): Promise<void> {
-    await this.api.agents.ref(id).send(text, { activeTurnBehavior: "steer" });
+    await this.routed(id, (api) => api.agents.ref(id).send(text, { activeTurnBehavior: "steer" }), this.o.sendTimeoutMs ?? REMOTE_SEND_MS);
   }
 
   async appendTimelineRow(agentId: string, rowId: string, data: CommentRowData): Promise<boolean> {
-    await this.api.agents.ref(agentId).timeline.append({ type: "plugin", id: rowId, kind: COMMENT_ROW_KIND, version: COMMENT_ROW_VERSION, data });
+    await this.routed(agentId, async (api) => { await api.agents.ref(agentId).timeline.append({ type: "plugin", id: rowId, kind: COMMENT_ROW_KIND, version: COMMENT_ROW_VERSION, data }); });
     return true;
   }
 }
@@ -231,11 +518,15 @@ export class PortSelector {
   private makeSdk: (api: PaseoApi) => SdkPort;
   /** Called once, when the very first handle arrives. */
   onFirstHandle?: () => void;
+  /** Called for every new handle (the first one too), after `sdkPort()` moved to it. */
+  onHandle?: () => void;
+  /** The first-mate checkout, for the SdkPort's record of other hosts' crews (the deck sets it). */
+  root?: () => string;
 
-  constructor(cli: PaseoPort, log: (m: string) => void = () => {}, makeSdk: (api: PaseoApi) => SdkPort = (a) => new SdkPort(a)) {
+  constructor(cli: PaseoPort, log: (m: string) => void = () => {}, makeSdk?: (api: PaseoApi) => SdkPort) {
     this.cli = cli;
     this.log = log;
-    this.makeSdk = makeSdk;
+    this.makeSdk = makeSdk ?? ((api) => new SdkPort(api, { root: () => this.root?.() ?? "", log: this.log }));
   }
 
   /** Remember the handle a hook or RPC callback was given (the latest one wins). `source` names the callback, for the log. */
@@ -244,11 +535,12 @@ export class PortSelector {
     if (!api || api === this.handle) return;
     const first = !this.handle;
     this.handle = api;
+    const old = this.sdk;
     this.sdk = this.makeSdk(api);
-    if (first) {
-      this.log(`SDK handle captured (from ${source}); using the SDK from now on`);
-      this.onFirstHandle?.();
-    }
+    if (old && old !== this.sdk) old.hosts?.stop();
+    if (first) this.log(`SDK handle captured (from ${source}); using the SDK from now on`);
+    this.onHandle?.();
+    if (first) this.onFirstHandle?.();
   }
 
   get hasHandle(): boolean {
@@ -272,7 +564,8 @@ export class PortSelector {
     try {
       await port.send(id, text);
     } catch (e) {
-      if (port.kind === "cli") throw e;
+      // not through the CLI for an agent on another host: the first send may have arrived
+      if (port.kind === "cli" || (port as SdkPort).hostOf?.(id)) throw e;
       this.log(`send to ${id} via sdk failed (${(e as Error).message}); retrying via cli`);
       await this.cli.send(id, text);
       this.log(`send to ${id} via cli took ${Date.now() - t0} ms`);
@@ -287,6 +580,9 @@ export class PortSelector {
 
 export { claimedId, projectClaimedId };
 export type FirstMate = { id: string; status: string };
+
+/** The first mate runs on this daemon: an agent of another host is never one. */
+export const isLocal = (a: PortAgent): boolean => !a.serverId && !a.host;
 
 export const NO_CLAIM_MESSAGE = "No first mate claimed this checkout: run bin/page claim in the first mate's session";
 
@@ -333,11 +629,11 @@ export async function resolveFirstMate(port: PaseoPort, label: string, root?: st
       if (!warnedCrewClaims.has(claim)) { warnedCrewClaims.add(claim); log?.(`ignoring the first-mate claim on ${claim}: fleet.json lists it as crew`); }
       continue;
     }
-    agents ??= await port.listAgents();
-    const hit = agents.find((a) => a.id === claim && !a.archived); // archived agents are not live
+    agents ??= await port.listAgents({ local: true });
+    const hit = agents.find((a) => a.id === claim && !a.archived && isLocal(a)); // archived agents are not live
     if (hit) return { id: hit.id, status: hit.status };
   }
-  const list = (await port.listAgents({ label })).filter((a) => !crew.has(a.id));
+  const list = (await port.listAgents({ label, local: true })).filter((a) => !crew.has(a.id) && isLocal(a));
   if (!list.length) return null;
   // A closed agent is a worse target than a live one, whatever its age.
   const rated = list.map((a) => ({ a, created: Date.parse(a.createdAt ?? "") || 0 }));

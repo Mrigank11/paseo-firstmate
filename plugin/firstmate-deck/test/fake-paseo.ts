@@ -19,7 +19,15 @@ export type FakeAgent = {
   cwd?: string;
   /** A background agent (MCP `create_agent` from another agent): listed only when the filter says `includeBackground`. */
   background?: boolean;
+  activeTurn?: { turnId: string; startedAt: string | null } | null;
+  lastUserMessageAt?: string | null;
+  /** Timeline entries carry this turn id. */
+  turnId?: string;
+  /** On another host: exactly these labels. Otherwise it reads as started by this daemon (paseo.parent-server-id). */
+  bare?: boolean;
 };
+
+type Observer = { snapshot(s: unknown): void; update(m: unknown): void; error?(e: unknown): void };
 
 export type FakeSent = { id: string; text: string; options: unknown };
 export type FakeRow = { agentId: string; item: unknown };
@@ -33,52 +41,122 @@ export class FakeWorld {
   responded: { id: string; requestId: string; response: unknown }[] = [];
   respondFails = false;
   refetchFails = new Set<string>();
+  listFails = false;
+  /** `agents.ref(id).refresh()` fails for these. */
+  refreshFails = new Set<string>();
+  /** Set by FakeHosts: the daemon that started this world's agents. */
+  startedBy?: string;
+  /** Every call that reaches the daemon never answers (a sleeping host). */
+  hang = false;
+  observers = new Set<Observer>();
+  /** Change an agent and push the upsert to the agent-list subscribers. */
+  upsert(a: FakeAgent) { this.add(a); for (const o of [...this.observers]) o.update({ type: "agent_update", payload: { kind: "upsert", agent: snapshot(a, this.startedBy) } }); return this; }
   add(...as: FakeAgent[]) { for (const a of as) this.agents.set(a.id, a); return this; }
   count(prefix: string) { return this.calls.filter((c) => c.startsWith(prefix)).length; }
 }
 
-export function snapshot(a: FakeAgent): PaseoAgent {
+const PARENT = "paseo.parent-server-id";
+
+export function snapshot(a: FakeAgent, startedBy?: string): PaseoAgent {
+  const labels = startedBy && !a.bare && !(PARENT in (a.labels ?? {})) ? { ...a.labels, [PARENT]: startedBy } : a.labels ?? {};
   return {
     id: a.id, provider: "claude", cwd: a.cwd ?? "/tmp", model: a.model === undefined ? "claude-sonnet-5-5" : a.model,
-    createdAt: a.createdAt ?? "2026-10-21T10:00:00.000Z", updatedAt: a.updatedAt ?? "2026-10-21T10:05:00.000Z", lastUserMessageAt: null,
+    createdAt: a.createdAt ?? "2026-10-21T10:00:00.000Z", updatedAt: a.updatedAt ?? "2026-10-21T10:05:00.000Z", lastUserMessageAt: a.lastUserMessageAt ?? null,
     status: a.status ?? "idle",
     capabilities: { supportsStreaming: true, supportsSessionPersistence: true, supportsDynamicModes: true, supportsMcpServers: true, supportsReasoningStream: true, supportsToolInvocations: true },
     currentModeId: null, availableModes: [], pendingPermissions: (a.pendingPermissions ?? []) as never[], persistence: null,
-    title: a.title ?? null, labels: a.labels ?? {},
+    ...(a.activeTurn !== undefined ? { activeTurn: a.activeTurn } : {}),
+    title: a.title ?? null, labels,
     effectiveThinkingOptionId: a.thinking ?? null, archivedAt: a.archivedAt ?? null,
   };
 }
 
 type Page = Awaited<ReturnType<PaseoAgentHandle["timeline"]["refetch"]>>;
 
-export function fakePaseo(world: FakeWorld): PaseoApi {
+export type FakeHost = {
+  serverId: string;
+  label: string;
+  world: FakeWorld;
+  status?: "online" | "offline" | "connecting" | "error" | "disabled";
+  enabled?: boolean;
+  lastOnlineAt?: string | null;
+  /** `hosts.client()` fails. */
+  clientFails?: boolean;
+  /** Clients handed out, and how many of them were disposed. */
+  built?: number;
+  disposed?: number;
+};
+
+/** The local daemon's host directory: `hosts.list()` and `hosts.client(serverId)`, each client a fakePaseo over that host's world. */
+export class FakeHosts {
+  self = "srv_local";
+  hosts: FakeHost[];
+  lists = 0;
+  listFails = false;
+  constructor(...hosts: FakeHost[]) { this.hosts = hosts; }
+  actions() {
+    return {
+      list: async () => {
+        this.lists++;
+        if (this.listFails) throw new Error("hosts unsupported");
+        return {
+          self: { serverId: this.self, label: "linux" },
+          hosts: this.hosts.map((h) => ({
+            registrationId: `r-${h.serverId}`, serverId: h.serverId, label: h.label, source: { id: "s", key: "k" }, metadata: {}, enabled: h.enabled ?? true,
+            status: h.status ?? "online", targetDescription: `tcp://${h.label}:6767`, lastOnlineAt: h.lastOnlineAt ?? null, nextRetryAt: null, error: null,
+          })),
+        };
+      },
+      client: async (serverId: string) => {
+        const h = this.hosts.find((x) => x.serverId === serverId);
+        if (!h || h.clientFails || (h.status ?? "online") !== "online") throw new Error(`Host ${serverId} is offline`);
+        h.built = (h.built ?? 0) + 1;
+        h.world.startedBy = this.self;
+        return { ...fakePaseo(h.world), dispose: async () => { h.disposed = (h.disposed ?? 0) + 1; } } as unknown as PaseoApi;
+      },
+    };
+  }
+}
+
+export function fakePaseo(world: FakeWorld, hosts?: FakeHosts): PaseoApi {
+  const reach = () => (world.hang ? new Promise<never>(() => {}) : Promise.resolve());
   const handle = (id: string) => {
     const get = () => world.agents.get(id);
     const h = {
       id,
-      current: () => (get() ? snapshot(get()!) : null),
-      refresh: async () => { world.calls.push(`refresh:${id}`); return get() ? { agent: snapshot(get()!), project: null } : null; },
+      current: () => (get() ? snapshot(get()!, world.startedBy) : null),
+      refresh: async () => {
+        world.calls.push(`refresh:${id}`);
+        await reach();
+        if (world.refreshFails.has(id)) throw new Error("daemon busy");
+        return get() ? { agent: snapshot(get()!, world.startedBy), project: null } : null;
+      },
       send: async (text: string, options?: unknown) => {
         world.calls.push(`send:${id}`);
+        await reach();
         if (world.sendFails) throw new Error("daemon down");
+        if (!get()) throw new Error(`agent ${id} not found`);
         world.sent.push({ id, text, options });
       },
       respondToPermission: async (o: { requestId: string; response: unknown }) => {
         world.calls.push(`respond:${id}`);
+        await reach();
         if (world.respondFails) throw new Error("no such request");
+        if (!get()) throw new Error(`agent ${id} not found`);
         world.responded.push({ id, requestId: o.requestId, response: o.response });
       },
       timeline: {
-        append: async (item: unknown) => { world.calls.push(`append:${id}`); world.rows.push({ agentId: id, item }); return { seq: 1, epoch: "e" }; },
+        append: async (item: unknown) => { world.calls.push(`append:${id}`); if (!get()) throw new Error(`agent ${id} not found`); world.rows.push({ agentId: id, item }); return { seq: 1, epoch: "e" }; },
         refetch: async (opts?: { limit?: number; direction?: string; projection?: string }): Promise<Page> => {
           world.calls.push(`refetch:${id}`);
+          await reach();
           const a = get();
           if (!a || world.refetchFails.has(id)) throw new Error(`agent ${id} unavailable`);
           const items = (a.items ?? []).slice(-(opts?.limit ?? 200));
           return {
-            requestId: "r", agentId: id, agent: snapshot(a), direction: "tail", projection: "projected", epoch: "e", reset: true, staleCursor: false, gap: false,
+            requestId: "r", agentId: id, agent: snapshot(a, world.startedBy), direction: "tail", projection: "projected", epoch: "e", reset: true, staleCursor: false, gap: false,
             window: { minSeq: 1, maxSeq: items.length, nextSeq: items.length + 1 }, startCursor: null, endCursor: null, hasOlder: !!a.hasOlder, hasNewer: false, error: null,
-            entries: items.map((item, i) => ({ provider: "claude", item, timestamp: "2026-10-21T10:00:00.000Z", seqStart: i + 1, seqEnd: i + 1, sourceSeqRanges: [], collapsed: [] })),
+            entries: items.map((item, i) => ({ provider: "claude", item, ...(a.turnId ? { turnId: a.turnId } : {}), timestamp: "2026-10-21T10:00:00.000Z", seqStart: i + 1, seqEnd: i + 1, sourceSeqRanges: [], collapsed: [] })),
           };
         },
       },
@@ -87,16 +165,24 @@ export function fakePaseo(world: FakeWorld): PaseoApi {
   };
   const agents = {
     ref: (id: string | PaseoAgent) => handle(typeof id === "string" ? id : id.id),
-    list: async (o?: { filter?: { labels?: Record<string, string>; includeArchived?: boolean; includeBackground?: boolean } }) => {
+    list: async (o?: { filter?: { labels?: Record<string, string>; includeArchived?: boolean; includeBackground?: boolean }; subscribe?: object }) => {
       world.calls.push(`list${o?.filter?.labels ? ":" + JSON.stringify(o.filter.labels) : ""}`);
+      await reach();
+      if (world.listFails) throw new Error("list failed");
       const want = Object.entries(o?.filter?.labels ?? {});
       const entries = [...world.agents.values()]
         .filter((a) => (o?.filter?.includeArchived || !a.archivedAt) && (o?.filter?.includeBackground || !a.background) && want.every(([k, v]) => a.labels?.[k] === v))
-        .map((a) => ({ agent: snapshot(a), project: null }));
-      return { requestId: "r", entries, pageInfo: { nextCursor: null, prevCursor: null, hasMore: false } };
+        .map((a) => ({ agent: snapshot(a, world.startedBy), project: null }));
+      let mine: Observer | null = null;
+      const subscription = o?.subscribe ? {
+        ready: Promise.resolve({}),
+        subscribe: (ob: Observer) => { mine = ob; world.observers.add(ob); return () => { world.observers.delete(ob); }; },
+        release: async () => { if (mine) world.observers.delete(mine); },
+      } : undefined;
+      return { requestId: "r", entries, pageInfo: { nextCursor: null, prevCursor: null, hasMore: false }, ...(subscription ? { subscription } : {}) };
     },
   };
-  return { agents } as unknown as PaseoApi;
+  return { agents, ...(hosts ? { hosts: hosts.actions() } : {}) } as unknown as PaseoApi;
 }
 
 // timeline item builders

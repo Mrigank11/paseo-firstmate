@@ -7,7 +7,7 @@ import { CliPort } from "../server/paseo-cli.ts";
 import { PortSelector } from "../server/paseo-port.ts";
 import { Enforcer, enforcerOn, GAP_MS, MAX_NUDGES } from "../server/enforcer.ts";
 import type { Snapshot, StageRow } from "../server/stages-file.ts";
-import { FakeWorld, fakePaseo } from "./fake-paseo.ts";
+import { FakeHosts, FakeWorld, fakePaseo, type FakeHost } from "./fake-paseo.ts";
 
 const row = (id: string, over: Partial<StageRow> = {}): StageRow => ({
   id, project: "p", state: "active", stage: "With the first mate", group: "fm", agentId: "crew-1", flags: [], owner: "firstmate",
@@ -193,4 +193,42 @@ test("state/enforcer.json records the count so the next run knows", async () => 
   const saved = JSON.parse(readFileSync(join(s.root, "state", "enforcer.json"), "utf8"));
   assert.deepEqual([saved.items.t1.nudges, saved.items.t1.awaiting, saved.items.t1.stalled], [1, true, false]);
   s.enf.stop();
+});
+
+// ---------- crews on other Paseo hosts ----------
+
+const away = (id: string) => row(id, { host: "mac", group: "running", owner: "crew", stage: "Unknown · mac offline", fp: `Unknown|${id}`, flags: [{ key: "host-offline", text: "mac offline since 2026-10-24T11:00:00Z", drift: false }] });
+
+test("a host going offline does not reset a task's reminder count", async () => {
+  const s = setup();
+  s.feed([row("t1", { host: "mac" })]);
+  await s.enf.checkNow("fm");
+  await s.enf.checkNow("fm", true);
+  s.feed([away("t1")]); // the Mac sleeps
+  s.advance(GAP_MS + 1);
+  await s.enf.checkNow("fm");
+  assert.equal(s.toFm().length, 1, "nothing to do while it is unknown");
+  s.feed([row("t1", { host: "mac" })]); // and wakes in the same situation
+  await s.enf.checkNow("fm");
+  assert.equal(s.toFm().length, 2);
+  assert.match(s.toFm()[1].text, /reminder 2 of 2/);
+  s.enf.stop();
+});
+
+test("a reminder to a crew on a hung host never holds up the first mate's", async () => {
+  const s = setup();
+  const mac: FakeHost = { serverId: "srv_mac", label: "mac", world: new FakeWorld().add({ id: "far", status: "idle", labels: { "fm.task": "t2" } }) };
+  const ports = new PortSelector(new CliPort(async () => "[]"), () => {});
+  ports.capture({ paseo: fakePaseo(s.world, new FakeHosts(mac)) }, "test");
+  await ports.current().listAgents();
+  mac.world.hang = true;
+  const current = snap([row("t1"), row("t2", { host: "mac", agentId: "far", owner: "crew", group: "running", stage: "Crew stopped · no hand-back" })]);
+  const enf = new Enforcer({ ports, root: () => s.root, snapshot: () => current, log: () => {}, settleMs: 1, onChange: () => {} });
+  enf.onTurnEnded("far");
+  await new Promise((r) => setTimeout(r, 20));
+  enf.onTurnEnded("fm");
+  await new Promise((r) => setTimeout(r, 100));
+  assert.equal(s.toFm().length, 1);
+  enf.stop(); s.enf.stop();
+  ports.sdkPort()!.hosts!.stop();
 });

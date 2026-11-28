@@ -1,6 +1,6 @@
 // The deck's daemon-side brain: watches the first mate's state, renders each project page, owns each page's
 // Lavish poll, and relays page comments to the first mate.
-import { existsSync, readdirSync, readFileSync, statSync, watch, type FSWatcher } from "node:fs";
+import { closeSync, existsSync, mkdirSync, openSync, readdirSync, readSync, readFileSync, statSync, unlinkSync, watch, type FSWatcher } from "node:fs";
 import { basename, join, relative } from "node:path";
 import { createHash } from "node:crypto";
 import { execFile, type ChildProcess } from "node:child_process";
@@ -12,11 +12,11 @@ import type { Prompt } from "./toon.ts";
 import { AgentViews } from "./agent-views.ts";
 import { coldLabelled } from "./cold-agents.ts";
 import { CliPort, type Exec } from "./paseo-cli.ts";
-import { NO_CLAIM_MESSAGE, NoFirstMateError, PortSelector, resolveFirstMate, sendToFirstMate, type CommentRowData, type FirstMate, type PortAgent } from "./paseo-port.ts";
+import { NO_CLAIM_MESSAGE, NoFirstMateError, PortSelector, resolveFirstMate, sendToFirstMate, type CommentRowData, type FirstMate, type PortAgent, type SdkPort } from "./paseo-port.ts";
 import { Relay, newEntries, parseTarget, type AskLookup, type TargetInfo } from "./relay.ts";
 import type { Known } from "./target.ts";
 import { CanvasPort, type FmSummary } from "./canvas-port.ts";
-import { liveJs, liveVersionJs, liveVersionFileOf, renderProject, stageOf, stagesOf, type AgentView, type Banner } from "./render.ts";
+import { bodyDirOf, bodyFileName, bodyJs, liveJs, pageSigOf, liveVersionJs, liveVersionFileOf, offlineText, renderProject, stageOf, stagesOf, type AgentView, type Banner, type Body } from "./render.ts";
 import { currentAgent, type LabeledAgent } from "./stage.ts";
 import { inputsMtimeMs, readSnapshot, writeSnapshot, type Snapshot, type StageRow } from "./stages-file.ts";
 import { ownerOf } from "./gate.ts";
@@ -28,7 +28,7 @@ import { appendInbox, inboxPath, pageJsonPath, patchPageJson, pidPath, projectDi
 export type Summary = {
   project: string; title: string; repo: string | null; pageUrl: string | null; session: "open" | "ended" | "stopped" | "unknown";
   needsYou: { taskId: string; askId: string | null; taskTitle: string; text: string; since: string }[];
-  running: { taskId: string; taskTitle: string; agentId: string | null; agentStatus: string; current: string; startedAt: string | null }[];
+  running: { taskId: string; taskTitle: string; agentId: string | null; agentStatus: string; current: string; startedAt: string | null; host?: string }[];
   counts: { needsYou: number; withFirstMate: number; running: number; blocked: number; next: number; parked: number; done: number; failed: number };
   undelivered: number;
   banner: string | null;
@@ -81,6 +81,8 @@ const MIN_GAP_MS = 1000;
 const INSTANT_MS = 30;
 /** An undelivered comment turns amber on the page after this long. */
 const LATE_MS = 10_500;
+/** How long a render waits for another host's agent views before drawing with what it has. */
+const REMOTE_VIEW_PATIENCE_MS = 1000;
 const IGNORED = /(^|\/)(\.[^/]*|[^/]*\.tmp|[^/]*\.lock|page\.html|[^/]*\.live\.js|inbox\.jsonl)$/;
 
 /** Shown for an agent nothing is known about yet (no SDK handle and nothing remembered). */
@@ -157,6 +159,10 @@ export class Deck {
   private labeled = new Map<string, PortAgent[]>();
   /** Ids of the live agents, read only while some crew carries a `canvas.relay` label (null = not read). */
   private relayLive: Set<string> | null = null;
+  /** The labelled agents that live on another Paseo host, as last listed. */
+  private remote = new Map<string, { serverId: string; offline: boolean; seen: string }>();
+  /** Remote agents whose view is being read right now (a slow host is not asked twice). */
+  private farViews = new Set<string>();
   private labeledKey = "";
   private labeledFlight: { at: number; p: Promise<boolean> } | null = null;
   /** When each agent's latest turn started (the `agent.turn_started` hook), in this process lifetime: what "the crew worked after the captain clicked" is measured against. */
@@ -199,7 +205,8 @@ export class Deck {
     this.log = o.log ?? (() => {});
     this.agents = new AgentViews((m) => this.log(m));
     this.marks = new MarksServer(() => this.cfg.root, (m) => this.log(m));
-    this.ports = o.ports ?? new PortSelector(new CliPort(o.exec), (m) => this.log(m));
+    this.ports = o.ports ?? new PortSelector(new CliPort(o.exec, { root: () => this.cfg.root }), (m) => this.log(m));
+    this.ports.root ??= () => this.cfg.root; // where the port remembers other hosts' crews
     // the first handle: everything on the pages was last-known until now, so ask about it all
     this.ports.onFirstHandle = () => this.scheduleAll("handle", 0);
     this.relay = new Relay({
@@ -236,6 +243,9 @@ export class Deck {
   async start(): Promise<void> {
     await this.configure();
     this.timers.push(setInterval(() => void this.configure().catch((e) => this.log(`rescan failed: ${e}`)), this.o.rescanMs ?? RESCAN_MS));
+    // Every tick re-renders: for the things that change by the clock alone (a stage that goes quiet, a day-old answered comment),
+    // and as the page's "still alive" watch, so a page whose rendering has stopped warns. An unchanged payload is not rewritten
+    // (only the tiny version file moves), so an idle tab downloads nothing.
     this.timers.push(setInterval(() => { this.scheduleAll("tick", 0); this.scheduleStages(0); }, this.o.tickMs ?? TICK_MS));
     this.scheduleStages(500);
   }
@@ -357,7 +367,12 @@ export class Deck {
     }
   }
 
-  private agentUrl = (id: string) => `${this.webBase || "http://localhost:6767"}/agent/${id}`;
+  /** The agent's page in the Paseo app: `webBase` is this daemon's (`…/h/<serverId>`), another host's crew has its own id there. */
+  private agentUrl = (id: string) => {
+    const there = this.remote.get(id)?.serverId ?? this.ports.sdkPort()?.hostOf(id)?.serverId;
+    if (!there) return `${this.webBase || "http://localhost:6767"}/agent/${id}`;
+    return `${this.webBase.replace(/\/h\/[^/]+$/, "") || "http://localhost:6767"}/h/${there}/agent/${id}`;
+  };
 
   // ---------- discovery + watching ----------
 
@@ -474,12 +489,13 @@ export class Deck {
   }
 
   /** `agent.turn_started`: remember when, unlike Paseo's updatedAt this does not move on a label change or a steer. */
-  onTurnStarted(agentId: string): void {
-    this.turnStarts.set(agentId, new Date().toISOString());
+  onTurnStarted(agentId: string, at: string = new Date().toISOString()): void {
+    this.turnStarts.set(agentId, at);
   }
 
   /** Agent lifecycle event: that agent's view is refreshed (SDK) by the next render, which these projects get now. Re-render the projects whose tasks use that agent. */
-  onAgentEvent(agentId: string): void {
+  onAgentEvent(agentId: string, serverId?: string): void {
+    if (serverId) this.ports.sdkPort()?.invalidate(serverId); // its host's listing is cached
     this.agents.markDirty(agentId);
     this.labeledFlight = null; // something moved: the next render asks Paseo again
     const projects = this.agentProjects.get(agentId);
@@ -498,16 +514,25 @@ export class Deck {
     if (this.labeledFlight && Date.now() - this.labeledFlight.at < 500) return this.labeledFlight.p;
     const p = (async () => {
       let list: PortAgent[];
-      try { list = sdk ? await sdk.listAgents({ label: "fm.task", includeArchived: true }) : await coldLabelled(this.o.agentsDir!, "fm.task", this.o.exec); }
+      try { list = sdk ? await sdk.listAgents({ label: "fm.task", includeArchived: true }) : await coldLabelled(this.o.agentsDir!, "fm.task", this.o.exec, this.cfg.root); }
       catch (e) { this.log(`listing agents by fm.task label failed: ${(e as Error).message}`); return false; }
+      for (const a of list) {
+        if (!a.serverId) continue;
+        const now = { serverId: a.serverId, offline: !!a.hostOffline, seen: `${a.status}|${a.updatedAt}` };
+        const was = this.remote.get(a.id);
+        // no event may have told us: a view from before the change (or the outage) is asked for again
+        if (was && (was.offline || was.seen !== now.seen)) this.agents.markDirty(a.id);
+        this.remote.set(a.id, now);
+      }
       const by = new Map<string, PortAgent[]>();
       for (const a of list) { const t = a.labels["fm.task"]; if (t) by.set(t, [...(by.get(t) ?? []), a]); }
-      const key = JSON.stringify([...by].sort(([x], [y]) => x.localeCompare(y)).map(([t, as]) => [t, as.map((a) => [a.id, a.status, a.archived, a.createdAt, a.pendingPermissions])]));
+      const key = JSON.stringify([...by].sort(([x], [y]) => x.localeCompare(y)).map(([t, as]) => [t, as.map((a) => [a.id, a.status, a.archived, a.createdAt, a.pendingPermissions, a.serverId, a.hostOffline?.since])]));
       this.labeled = by;
       // only worth a second read when some live crew carries a relay label
       this.relayLive = null;
       if (list.some((a) => !a.archived && a.labels["canvas.relay"])) {
-        try { this.relayLive = new Set((await (sdk ?? this.ports.current()).listAgents()).map((a) => a.id)); }
+        // the relay target is a first mate here; crews listed on other hosts count as alive too
+        try { this.relayLive = new Set([...(await (sdk ?? this.ports.current()).listAgents({ local: true })), ...list.filter((a) => a.serverId)].map((a) => a.id)); }
         catch (e) { this.log(`listing live agents for canvas.relay failed: ${(e as Error).message}`); }
       }
       const key2 = key + JSON.stringify(this.relayLive ? list.filter((a) => a.labels["canvas.relay"] && !this.relayLive!.has(a.labels["canvas.relay"])).map((a) => a.id).sort() : null);
@@ -606,9 +631,10 @@ export class Deck {
       const owedSince = prev && prev.key === key ? prev.since : now.toISOString();
       this.owed.set(t.id, { key, since: owedSince });
       const sum = st.agentId ? canvas.summaries[st.agentId] : undefined;
+      const host = labeled[t.id]?.find((a) => a.id === st.agentId)?.host;
       return {
         id: t.id, project: t.project ?? null, state: t.state, stage: st.stage, group: st.group, agentId: st.agentId, flags: st.flags,
-        owner: st.owner, reason: st.reason, clears: st.clears, fp: st.fp, owedSince,
+        owner: st.owner, reason: st.reason, clears: st.clears, fp: st.fp, owedSince, ...(host ? { host } : {}),
         ...(sum ? { canvas: { verdict: sum.verdict.label, bluf: sum.bluf.replace(/\s+/g, " ").slice(0, 80), asks: sum.openAsks.length } } : {}),
       };
     });
@@ -695,7 +721,7 @@ export class Deck {
         await this.refreshLabeled(); // who is working on which task, straight from Paseo
         const ids2 = this.trackedAgents(project, this.load(project) ?? model);
         const sdk = this.ports.sdkPort();
-        if (sdk) await this.agents.refresh(ids2, sdk); // only the agents that are running, dirty or unseen
+        if (sdk) await this.refreshViews(project, ids2, sdk);
         const key = this.viewsKey(project, ids2);
         if (key !== this.usedViews.get(project)) this.writePage(project, this.load(project) ?? model);
       } while (state.again && !this.stopped);
@@ -703,6 +729,65 @@ export class Deck {
       this.rendering.delete(project);
       this.scheduleStages();
     }
+  }
+
+  /**
+   * Refresh the views of the agents that are running, dirty or unseen. This daemon's are waited for; another host's only
+   * briefly (the page is drawn when they arrive), and an offline host's not at all.
+   */
+  private async refreshViews(project: string, ids: string[], sdk: SdkPort): Promise<void> {
+    const here = this.agents.refresh(ids.filter((id) => !this.remote.has(id)), sdk);
+    const far = ids.filter((id) => this.remote.get(id)?.offline === false && !this.farViews.has(id));
+    if (far.length) {
+      for (const id of far) this.farViews.add(id);
+      let late = false;
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      const there = this.agents.refresh(far, sdk).then(() => {
+        for (const id of far) this.farViews.delete(id);
+        if (!late || this.stopped) return;
+        const model = this.load(project);
+        if (model && this.viewsKey(project, this.trackedAgents(project, model)) !== this.usedViews.get(project)) this.writePage(project, model);
+        this.scheduleStages();
+      }).catch((e) => this.log(`render ${project} failed: ${e}`));
+      await Promise.race([there, new Promise<void>((resolve) => { timer = setTimeout(() => { late = true; resolve(); }, REMOTE_VIEW_PATIENCE_MS); })]);
+      clearTimeout(timer);
+    }
+    await here;
+  }
+
+  /** Body files written so far, per project: content-named, so each is written once and never changes. */
+  private bodyFiles = new Map<string, Set<string>>();
+  private bodyGcAt = new Map<string, number>();
+  /** When each page's content last really changed (ISO): the page shows it as "last update". */
+  private changedAt = new Map<string, string>();
+
+  /**
+   * Writes the bodies of the one-line cards next to the page in `<page>.d/`. Each is named by its content, so an existing one is
+   * never rewritten and a page that holds an older version can still fetch it; files nothing references for 10 minutes are removed.
+   */
+  private writeBodies(project: string, target: string, bodies: Record<string, Body>): void {
+    const dir = bodyDirOf(target);
+    const have = this.bodyFiles.get(project) ?? new Set<string>();
+    this.bodyFiles.set(project, have);
+    const keep = new Set<string>();
+    try {
+      mkdirSync(dir, { recursive: true });
+      for (const [id, b] of Object.entries(bodies)) {
+        const name = bodyFileName(id, b.hash);
+        keep.add(name);
+        if (have.has(name) && existsSync(join(dir, name))) continue;
+        writeAtomic(join(dir, name), bodyJs(id, b));
+        have.add(name);
+      }
+      const now = Date.now();
+      if (now - (this.bodyGcAt.get(project) ?? 0) > 600_000) {
+        this.bodyGcAt.set(project, now);
+        for (const f of readdirSync(dir)) {
+          if (keep.has(f) || !f.endsWith(".js")) continue;
+          try { if (now - statSync(join(dir, f)).mtimeMs > 600_000) { unlinkSync(join(dir, f)); have.delete(f); } } catch { /* gone already */ }
+        }
+      }
+    } catch (e) { this.log(`card bodies for ${project}: ${e}`); }
   }
 
   /** Has `bin/page stop` stopped this page? Remembers it, so the resume is noticed. */
@@ -713,7 +798,7 @@ export class Deck {
 
   private viewsKey(project: string, ids: string[]): string {
     const model = this.lastGood.get(project);
-    return JSON.stringify([ids.map((id) => this.agents.peek(id) ?? null), model ? Object.entries(this.labeledFor(model)).map(([t, as]) => [t, as.map((a) => [a.id, a.status, a.archived, a.pendingPermissions, a.relayGone, a.turnStartedAt, a.nudged])]) : null]);
+    return JSON.stringify([ids.map((id) => this.agents.peek(id) ?? null), model ? Object.entries(this.labeledFor(model)).map(([t, as]) => [t, as.map((a) => [a.id, a.status, a.archived, a.pendingPermissions, a.relayGone, a.turnStartedAt, a.nudged, a.hostOffline?.since])]) : null]);
   }
 
   /**
@@ -771,10 +856,20 @@ export class Deck {
     return [...new Set(ids)];
   }
 
+  /** The signature the page file on disk was written with ("" when it is missing or has none). Reads the first bytes only. */
+  private pageSignature(target: string): string {
+    try {
+      const fd = openSync(target, "r");
+      try { const b = Buffer.alloc(256); return pageSigOf(b.subarray(0, readSync(fd, b, 0, 256, 0)).toString("utf8")); } finally { closeSync(fd); }
+    } catch { return ""; }
+  }
+
   /** Cheap identity of the page on disk (mtime + size); "" when it is missing. */
   private pageStamp(target: string): string {
     try { const st = statSync(target); return `${st.mtimeMs}:${st.size}`; } catch { return ""; }
   }
+
+  private readonly startedAt = Date.now();
 
   private writePage(project: string, model: ProjectModel): void {
     // a project exists only while its project.json does; never resurrect a deleted project's dir
@@ -802,26 +897,34 @@ export class Deck {
     r.page = resolveAssets(r.page, abase, adir);
     r.live = resolveAssets(r.live, abase, adir);
     if (!model.seen && !readUi(this.cfg.root, project).s) updateUi(this.cfg.root, project, { o: {}, r: {}, s: { at: now.toISOString(), keys: r.attention.keys } });
-    const p2 = (n: number) => String(n).padStart(2, "0");
-    const ts = `${p2(now.getHours())}:${p2(now.getMinutes())}:${p2(now.getSeconds())}`;
     let rewrote = false;
     // also rewrite when the file is not the one we wrote (`bin/page start` re-renders it without the canvas stylesheet)
-    if (r.signature !== this.sigs.get(project) || this.pageStamp(target) !== this.stamps.get(project)) {
-      writeAtomic(target, r.page);
+    // Lavish reloads the page frame whenever this file changes, so it is written only when its shell really changed: a plugin
+    // restart finds the signature it would write already on disk and leaves the file (and every open tab) alone.
+    // Just after a restart the canvas stylesheet has not arrived yet, so the shell would differ from the one on disk (no canvas css)
+    // and be rewritten twice (without it, then with it): two reloads of every open tab. A page already on disk waits for it.
+    const cv = this.canvas.data(ids);
+    const waitCss = this.canvas.configured && !cv.css && Date.now() - this.startedAt < 90_000 && this.pageSignature(target) !== "";
+    if (!waitCss && (r.signature !== this.sigs.get(project) || this.pageStamp(target) !== this.stamps.get(project))) {
+      if (this.pageSignature(target) !== r.signature) {
+        writeAtomic(target, r.page);
+        rewrote = true;
+      }
       this.sigs.set(project, r.signature);
       this.stamps.set(project, this.pageStamp(target));
-      rewrote = true;
     }
     // The page polls the tiny version file each second and fetches the full payload only when its content hash moved, so
     // the payload is rewritten only then (the clock stamp is not part of the hash: it shows the last real change).
+    this.writeBodies(project, target, r.bodies);
     const hash = createHash("sha1").update(r.live).digest("hex").slice(0, 16);
     const liveFile = target.replace(/\.[^./]*$/, "") + ".live.js";
     const seq = ++this.liveSeq;
     if (hash !== this.liveHashes.get(project) || !existsSync(liveFile)) {
-      writeAtomic(liveFile, liveJs(r.live.replace(/\{TS\}/g, ts), now.toISOString(), seq, hash));
+      this.changedAt.set(project, now.toISOString());
+      writeAtomic(liveFile, liveJs(r.live, this.changedAt.get(project), seq, hash));
       this.liveHashes.set(project, hash);
     }
-    writeAtomic(liveVersionFileOf(target), liveVersionJs(hash, now.toISOString(), seq));
+    writeAtomic(liveVersionFileOf(target), liveVersionJs(hash, now.toISOString(), seq, this.changedAt.get(project)));
     patchPageJson(pageJsonPath(this.cfg.root, project), { lastRender: now.toISOString(), banner: banner?.text ?? null, agentViews: this.agents.snapshot(ids) });
     if (rewrote) this.log(`rendered ${project} (${r.signature.slice(0, 8)})`);
   }
@@ -1164,10 +1267,13 @@ export class Deck {
           counts.running++;
           const aid = st.agentId;
           const v = aid ? this.agents.peek(aid) : undefined;
+          const crew = this.labeled.get(t.id)?.find((a) => a.id === aid);
+          const away = crew?.hostOffline;
           running.push({
             taskId: t.id, taskTitle: plainTitle(t), agentId: aid ?? null,
-            agentStatus: aid ? (this.agents.status(aid)) : st.stage.toLowerCase(),
-            current: v ? (v.recent[v.recent.length - 1] ?? v.final ?? "") : "", startedAt: v?.createdAt ?? null,
+            agentStatus: away ? "unknown" : aid ? (this.agents.status(aid)) : st.stage.toLowerCase(),
+            current: away ? offlineText(away, new Date()) : v ? (v.recent[v.recent.length - 1] ?? v.final ?? "") : "", startedAt: v?.createdAt ?? null,
+            ...(crew?.host ? { host: crew.host } : {}),
           });
         } else if (g === "done") { if (st.failed) counts.failed++; else counts.done++; }
         else if (g === "parked") counts.parked++;

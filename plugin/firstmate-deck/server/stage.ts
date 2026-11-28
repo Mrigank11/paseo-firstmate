@@ -23,13 +23,21 @@ export type StageAgent = {
   turnStartedAt?: string | null;
   /** The plugin already reminded this idle crew to hand back (`DONE:`/`BLOCKED:`) once. */
   nudged?: boolean;
+  /** The label of the Paseo host it runs on; absent for an agent on this daemon. */
+  host?: string;
+  /** That host is offline: everything else here is the last known state, not a live one. */
+  hostOffline?: HostOffline;
 };
+
+/** `permission`: a request was open when the host was last read. It cannot be answered (or known to still be open) until the host is back. */
+export type HostOffline = { label: string; since: string; permission?: boolean };
 
 /** Who owes the next move. `nobody` = nothing is owed (queued, parked, done). The group is derived from it: owner `firstmate` = group `fm`. */
 export type Owner = "captain" | "firstmate" | "crew" | "outside" | "nobody";
 
 /** What a badge on the card says. `drift` flags are the registry and Paseo disagreeing: the first mate should act. */
-export type StageFlag = { key: string; text: string; drift: boolean };
+/** `since` (ms) is set on a flag whose text counts time ("silent 41 min"): the page writes the count itself from it, so the payload does not change as the minutes pass. */
+export type StageFlag = { key: string; text: string; drift: boolean; since?: number };
 
 export type Stage = {
   /** Human label: "Running", "Needs you", "Review"... */
@@ -100,7 +108,7 @@ export function currentAgent<A extends { archived: boolean; createdAt?: string |
   return newest(agents.filter((a) => !a.archived)) ?? newest(agents.filter((a) => a.archived));
 }
 
-const flag = (key: string, text: string, drift = false): StageFlag => ({ key, text, drift });
+const flag = (key: string, text: string, drift = false, since?: number): StageFlag => ({ key, text, drift, ...(since ? { since } : {}) });
 
 /**
  * `opts.archived`: the task is an archive line (history, frozen): its stage is its verdict and Paseo is not consulted.
@@ -115,9 +123,11 @@ export function computeStage(task: StageTask, agents: readonly StageAgent[], now
     stage, group, agentId: cur?.id ?? null, flags: [...flags, ...extra], failed, owner: OWNER_OF[group], reason: why, clears, fp: `${stage}|${why}|${cur?.id ?? ""}`,
   });
   const live = !opts.archived && !!cur && !cur.archived;
+  // The crew's host is offline: its status is unknown. It is never read as closed, errored, idle or silent.
+  const away = live ? cur!.hostOffline : undefined;
 
   // A pending permission is the captain's whatever the registry says and whatever else is open (an open ask is flagged beside it).
-  if (live && cur!.pendingPermissions > 0) {
+  if (live && !away && cur!.pendingPermissions > 0) {
     const open = task.asks.length ? [flag("ask-open", "an ask is also open")] : [];
     return out("Needs you · permission", "you", `crew ${cur!.id.slice(0, 8)} waits for a permission answer`, "answer the permission request in Paseo", open);
   }
@@ -131,21 +141,23 @@ export function computeStage(task: StageTask, agents: readonly StageAgent[], now
         const open = task.asks.some((a) => !a.repliedAt);
         return out(open ? "Needs you" : "With the first mate", open ? "you" : "fm", open ? "an ask on a finished task is open" : "the captain replied to an ask on a finished task", open ? "the captain answers it" : "bin/page reply, then bin/fleet answer", [], failed);
       }
-      if (cur && RUNNING.has(cur.status) && !cur.archived) return out(label, "done", "finished", "", [flag("done-but-running", "done, but an agent is still running", true)], failed);
+      if (cur && !cur.hostOffline && RUNNING.has(cur.status) && !cur.archived) return out(label, "done", "finished", "", [flag("done-but-running", "done, but an agent is still running", true)], failed);
     }
     return out(label, "done", "finished", "", [], failed);
   }
 
   const canvas = !cur || cur.archived ? undefined : opts.canvas;
   if (cur && !cur.archived && cur.relayGone) extra.push(flag("relay-target-gone", `canvas relay target ${cur.relayGone.slice(0, 8)} is gone: bin/page claim re-points it`, true));
-  if (canvas?.verdict === "Disputed") extra.push(flag("canvas-disputed", "canvas: status disputed"));
-  if (canvas?.verdict === "Stale") extra.push(flag("canvas-stale", "canvas: out of date"));
+  if (away) extra.push(flag("host-offline", `${away.label} offline since ${away.since}`));
+  if (away?.permission) extra.push(flag("permission-was-waiting", "was waiting for a permission"));
+  if (!away && canvas?.verdict === "Disputed") extra.push(flag("canvas-disputed", "canvas: status disputed"));
+  if (!away && canvas?.verdict === "Stale") extra.push(flag("canvas-stale", "canvas: out of date"));
   if (task.commentWaiting) extra.push(flag("comment-waiting", "a comment on this card is waiting for the first mate"));
   // A curated ask whose canvas question is answered or gone has resolved itself: the first mate only has to close it.
   const open = new Set(opts.canvas?.asks.map((a) => a.id));
   const closed = opts.canvas ? task.asks.filter((a) => a.ref?.kind === "canvas" && a.ref.block && !open.has(a.ref.block)) : [];
   if (closed.length) extra.push(flag("ref-closed", "resolved on canvas: run bin/fleet answer", true));
-  const running = !!cur && !cur.archived && RUNNING.has(cur.status);
+  const running = !!cur && !cur.archived && !away && RUNNING.has(cur.status);
   const ids = (xs: { id?: string }[]) => xs.map((a) => a.id ?? "ask").join(", ");
 
   // An open ask is the captain's (or the first mate's follow-up), whatever the registry state and the agent are doing.
@@ -181,7 +193,7 @@ export function computeStage(task: StageTask, agents: readonly StageAgent[], now
   if (canvas && cur && cur.status !== "error") {
     const raw = canvas.asks.filter((a) => !a.pending).length;
     if (raw) {
-      if (RUNNING.has(cur.status)) return out(`Running · ${raw} question${raw > 1 ? "s" : ""}`, "running", `crew is working with ${raw} open canvas question${raw > 1 ? "s" : ""}`);
+      if (running) return out(`Running · ${raw} question${raw > 1 ? "s" : ""}`, "running", `crew is working with ${raw} open canvas question${raw > 1 ? "s" : ""}`);
       return out("Needs you", "you", `crew canvas question${raw > 1 ? "s" : ""} wait for the captain`, "the captain answers on the canvas");
     }
     // a captain pick waiting for the first mate to deliver it
@@ -196,9 +208,10 @@ export function computeStage(task: StageTask, agents: readonly StageAgent[], now
       : out("Dispatching", "running", "waiting for the crew agent to appear");
   }
   if (cur.archived) return out("Agent archived", "fm", "the task's agent is archived while the task is still open", "bin/fleet finish, or re-dispatch", [flag("archived-agent-open-task", "agent archived, task still open", true)]);
+  if (away) return out(`Unknown · ${away.label} offline`, "running", `unknown · ${away.label} offline since ${away.since}`);
   if (RUNNING.has(cur.status)) {
     const quiet = now.getTime() - ms(cur.lastActivityAt);
-    return out("Running", "running", "crew is working", "", cur.lastActivityAt && quiet > SILENT_MS ? [flag("silent", `silent ${Math.round(quiet / 60_000)} min`)] : []);
+    return out("Running", "running", "crew is working", "", cur.lastActivityAt && quiet > SILENT_MS ? [flag("silent", `silent ${Math.round(quiet / 60_000)} min`, false, ms(cur.lastActivityAt))] : []);
   }
   if (cur.status === "unknown") return out("Running", "running", "crew status unknown", "", [flag("status-unknown", "agent status unknown")]);
   if (cur.status === "error") return out("Failed (agent errored)", "fm", "the crew agent errored", "stuck-crew-recovery", [], true);
@@ -238,6 +251,8 @@ export type LabeledAgent = {
   relayGone?: string;
   turnStartedAt?: string | null;
   nudged?: boolean;
+  host?: string;
+  hostOffline?: HostOffline;
 };
 
 /** The agents of one task: the ones Paseo knows by the `fm.task` label. No label, no agent. */
@@ -247,6 +262,6 @@ export function stageAgentsFor(
 ): StageAgent[] {
   return (labeled ?? []).map((a) => ({
     id: a.id, status: a.status, archived: a.archived, createdAt: a.createdAt, lastActivityAt: a.lastActivityAt ?? a.updatedAt,
-    pendingPermissions: a.pendingPermissions ?? 0, final: a.archived ? undefined : view(a.id)?.final, relayGone: a.relayGone, turnStartedAt: a.turnStartedAt, nudged: a.nudged,
+    pendingPermissions: a.pendingPermissions ?? 0, final: a.archived ? undefined : view(a.id)?.final, relayGone: a.relayGone, turnStartedAt: a.turnStartedAt, nudged: a.nudged, host: a.host, hostOffline: a.hostOffline,
   }));
 }

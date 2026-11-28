@@ -30,6 +30,25 @@ cat >"$T/fakebin/paseo" <<'F'
 #!/usr/bin/env bash
 echo "paseo $*" >>"$FAKE_LOG"
 if [[ "$1" == --home ]]; then shift 2; fi
+# other hosts: FAKE_HOSTS is `host ls`; FAKE_REMOTE_AGENTS (started by this daemon) and FAKE_FOREIGN_AGENTS (by another
+# one) live on FAKE_REMOTE_TARGET, so this daemon does not know them
+host="" prev=""; for a in "$@"; do [[ "$prev" == --host ]] && host="$a"; prev="$a"; done
+if [[ "$1 $2" == "host ls" ]]; then echo "${FAKE_HOSTS:-[]}"; exit 0; fi
+aid=""; [[ "$1" != inspect ]] || aid="$2"; [[ "$1 $2" != "agent update" ]] || aid="$3"
+remote=0; [[ -n "$aid" && " ${FAKE_REMOTE_AGENTS:-} ${FAKE_FOREIGN_AGENTS:-} " == *" $aid "* ]] && remote=1
+if [[ -n "$host" ]]; then
+  if [[ " $* " == *" --home "* ]]; then echo "error: Choose either --home or --host, not both." >&2; exit 1; fi
+  if [[ -n "$aid" ]]; then
+    [[ $remote -eq 1 && "$host" == "${FAKE_REMOTE_TARGET:-}" ]] || { echo "agent not found: $aid" >&2; exit 1; }
+    [[ "$1" != inspect ]] || echo '{"Archived":false,"ArchivedAt":null}'
+  elif [[ "$1" == ls && "$host" == "${FAKE_REMOTE_TARGET:-}" ]]; then
+    for pair in "srv_local:${FAKE_REMOTE_AGENTS:-}" "srv_other:${FAKE_FOREIGN_AGENTS:-}"; do
+      for a in ${pair#*:}; do jq -cn --arg id "$a" --arg s "${pair%%:*}" '{id:$id,status:"running",labels:{"fm.task":"scout-1","paseo.parent-server-id":$s}}'; done
+    done | jq -cs .
+  else echo '[]'; fi
+  exit 0
+fi
+if [[ $remote -eq 1 ]]; then echo "agent not found: $aid" >&2; exit 1; fi
 case "$1 $2" in
   "plugin ls")
     if [[ -n "${FAKE_PLUGINS_DISABLED:-}" ]]; then echo "error: plugins are disabled" >&2; exit 1; fi
@@ -248,6 +267,47 @@ echo '[{"id":"crew-9","task":"scout-1","status":"running","archived":false,"crea
 PASEO_AGENT_ID=agent-fm-2 STAGE_AGENTS_JSON="$T/relay-agents.json" "$P" claim >"$T/relay.out" 2>&1
 grep -q "agent update crew-9 --label canvas.relay=agent-fm-2" "$FAKE_LOG" && ok "claim re-labels an open crew's canvas.relay to the new first mate" || bad "claim relabel" "$(cat "$FAKE_LOG")"
 grep -q "agent update crew-8 --label canvas.relay" "$FAKE_LOG" && bad "...but not a crew that already relays to it" || ok "...but not a crew that already relays to it"
+# ---- crews and agents on other Paseo hosts ----
+export FAKE_REMOTE_TARGET="tcp://mac:6767"
+mkdir -p "$PASEO_HOME"; echo srv_local >"$PASEO_HOME/server-id"
+MACUP='[{"serverId":"srv_mac","label":"mac","enabled":true,"status":"online","targetDescription":"tcp://mac:6767"}]'
+MACDOWN='[{"serverId":"srv_mac","label":"mac","enabled":true,"status":"offline","targetDescription":"tcp://mac:6767"}]'
+echo '[{"id":"crew-mac","task":"scout-1","status":"running","archived":false,"createdAt":null,"lastActivityAt":null,"pending":0,"labels":{"canvas.relay":"agent-fm-1"},"host":"mac"}]' >"$T/mac-agents.json"
+: >"$FAKE_LOG"
+msg="$(FAKE_HOSTS="$MACUP" FAKE_REMOTE_AGENTS=crew-mac PASEO_AGENT_ID=agent-fm-2 STAGE_AGENTS_JSON="$T/mac-agents.json" "$P" claim 2>&1)"
+grep -q "agent update crew-mac --label canvas.relay=agent-fm-2 --host tcp://mac:6767" "$FAKE_LOG" && grep -q "crew crew-mac now relays canvas picks to agent-fm-2" <<<"$msg" && ok "claim re-points a crew on another host through --host" || bad "remote relabel" "$msg $(cat "$FAKE_LOG")"
+echo '[{"id":"crew-theirs","task":"scout-1","status":"running","archived":false,"createdAt":null,"lastActivityAt":null,"pending":0,"labels":{"canvas.relay":"agent-fm-1"},"host":"mac"}]' >"$T/theirs-agents.json"
+: >"$FAKE_LOG"
+msg="$(FAKE_HOSTS="$MACUP" FAKE_FOREIGN_AGENTS=crew-theirs PASEO_AGENT_ID=agent-fm-2 STAGE_AGENTS_JSON="$T/theirs-agents.json" "$P" claim 2>&1)"
+grep -qE "(agent update|inspect) crew-theirs .*--host" "$FAKE_LOG" && bad "another daemon's agent on a host is never looked at or relabelled" "$(cat "$FAKE_LOG")" || ok "another daemon's agent on a host is never looked at or relabelled"
+msg="$(FAKE_HOSTS="$MACDOWN" FAKE_REMOTE_AGENTS=crew-mac PASEO_AGENT_ID=agent-fm-2 STAGE_AGENTS_JSON="$T/mac-agents.json" "$P" claim 2>&1)"; rc=$?
+[[ $rc -eq 0 ]] && grep -q "could not re-point crew crew-mac" <<<"$msg" && ok "...an offline host's crew is reported as not re-pointed, and the claim stands" || bad "offline relabel" "rc=$rc $msg"
+out="$(FAKE_HOSTS="$MACUP" FAKE_REMOTE_AGENTS=crew-mac "$P" host-target crew-mac 2>"$T/ht.err")"; rc=$?
+eq "$rc $out" "0 tcp://mac:6767" "host-target prints what --host takes for our crew on another host"
+out="$(FAKE_HOSTS="$MACUP" FAKE_FOREIGN_AGENTS=crew-theirs "$P" host-target crew-theirs 2>"$T/ht.err")"; rc=$?
+[[ $rc -ne 0 && -z "$out" ]] && grep -q "crew-theirs is not our crew on a reachable host" "$T/ht.err" && ok "...and refuses another daemon's agent" || bad "host-target foreign" "rc=$rc out=$out $(cat "$T/ht.err")"
+out="$(FAKE_HOSTS="$MACDOWN" FAKE_REMOTE_AGENTS=crew-mac "$P" host-target crew-mac 2>"$T/ht.err")"; rc=$?
+[[ $rc -ne 0 && -z "$out" ]] && ok "...and a crew whose host is offline" || bad "host-target offline" "rc=$rc out=$out"
+echo '{"agentId":"agent-fm-1","claimedAt":"2026-10-21T00:00:00Z"}' >"$T/root/state/firstmate.json"
+: >"$FAKE_LOG"
+msg="$(FAKE_HOSTS="$MACUP" FAKE_REMOTE_AGENTS=fm-on-mac PASEO_AGENT_ID=fm-on-mac "$P" claim 2>&1)"; rc=$?
+[[ $rc -ne 0 ]] && grep -q "is not on this Paseo daemon" <<<"$msg" && ok "claim still refuses an agent that lives on another host" || bad "claim a remote agent" "$msg"
+eq "$(jq -r .agentId "$T/root/state/firstmate.json")" agent-fm-1 "...the claim is untouched"
+grep -q "agent update" "$FAKE_LOG" && bad "...and no label is touched anywhere" || ok "...and no label is touched anywhere"
+"$P" scaffold remoteheld >/dev/null
+echo '{"agentId":"fm-on-mac","claimedAt":"2026-10-21T00:00:00Z"}' >"$T/root/state/projects/remoteheld/claim.json"
+sim_plugin remoteheld ok "$T/root" null
+msg="$(FAKE_HOSTS="$MACUP" FAKE_REMOTE_AGENTS=fm-on-mac PASEO_AGENT_ID=agent-fm-2 "$P" start remoteheld 2>&1 >"$T/vout")"; end_sim
+grep -q "fm-on-mac is the live first mate" <<<"$msg" && ok "start sees that a claimant of ours on another host is live" || bad "remote claimant" "$msg"
+rm -rf "$T/root/state/projects/remoteheld" "$T/root/state/remote-agents.json"
+"$P" scaffold remoteheld >/dev/null
+echo '{"agentId":"fm-theirs","claimedAt":"2026-10-21T00:00:00Z"}' >"$T/root/state/projects/remoteheld/claim.json"
+sim_plugin remoteheld ok "$T/root" null
+msg="$(FAKE_HOSTS="$MACUP" FAKE_FOREIGN_AGENTS=fm-theirs PASEO_AGENT_ID=agent-fm-2 "$P" start remoteheld 2>&1 >"$T/vout")"; end_sim
+grep -q "fm-theirs is the live first mate" <<<"$msg" && bad "...but someone else's agent there does not hold the page" "$msg" || ok "...but someone else's agent there does not hold the page"
+rm -rf "$T/root/state/projects/remoteheld"
+unset FAKE_REMOTE_TARGET
+rm -f "$PASEO_HOME/server-id" "$T/root/state/remote-agents.json"
 echo '{"agentId":"agent-fm-1","claimedAt":"2026-10-21T00:00:00Z"}' >"$T/root/state/firstmate.json"
 # Paseo is the source of truth: an agent carrying an fm.task label is crew even when fleet.json never recorded it
 echo '{"version":2,"tasks":[]}' >"$T/root/state/fleet.json"

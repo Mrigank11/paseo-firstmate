@@ -3,10 +3,13 @@
 // with an allow through the SDK. It never denies: anything unsafe, unknown or unreadable is escalated, i.e. the first mate is
 // woken with `## Crew PERMISSION · <task>` (plugin-notified crew) and the request stays pending for a human.
 // Every decision is appended to state/permission-log.jsonl.
+// A crew on another Paseo host: rules that need its files fail closed (rules.ts `remote`), its host is asked through the same
+// port, one queue per host, and when it cannot be asked the facts its event carried are enough to escalate.
 import { appendFileSync, mkdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import type { PortSelector } from "./paseo-port.ts";
-import { notifySwitchOn, wakeTarget } from "./gate.ts";
+import type { AgentInfo, PortSelector } from "./paseo-port.ts";
+import { notifySwitchOn, wakeTarget, type HookAgent } from "./gate.ts";
+import { redact } from "./redact.ts";
 import { classify, RulesFile, summarize, type PermissionRequestLike, type RulesState } from "./rules.ts";
 
 export type PermissionDecision = "would-allow" | "allow" | "escalate";
@@ -30,7 +33,7 @@ export type PermissionEntry = {
 };
 
 export type PermissionEvent = {
-  agent: { id: string; parentAgentId?: string | null };
+  agent: HookAgent & { hostLabel?: string };
   request: PermissionRequestLike & Record<string, unknown>;
 };
 
@@ -50,7 +53,7 @@ const BULKY = new Set(["content", "output", "oldString", "newString", "unifiedDi
 /** The request as compact JSON for the wake message: bulky tool payloads dropped, the rest capped. */
 export function requestJson(req: Record<string, unknown>): string {
   const slim = JSON.parse(JSON.stringify(req, (k, v) => (BULKY.has(k) ? undefined : v)));
-  const s = JSON.stringify(slim);
+  const s = redact(JSON.stringify(slim));
   return s.length > 1500 ? s.slice(0, 1500) + "…" : s;
 }
 
@@ -58,7 +61,7 @@ export class Permission {
   private o: PermissionOptions;
   private rules: RulesFile;
   private seen: Set<string> | null = null;
-  private chain: Promise<unknown> = Promise.resolve();
+  private chains = new Map<string, Promise<unknown>>(); // one per host ("" = this one): a hung host holds up only its own
   private lastError: string | null = null;
 
   constructor(o: PermissionOptions) {
@@ -88,7 +91,7 @@ export class Permission {
   }
 
   private append(e: Omit<PermissionEntry, "at">): void {
-    const entry: PermissionEntry = { at: new Date((this.o.now ?? Date.now)()).toISOString(), ...e };
+    const entry: PermissionEntry = { at: new Date((this.o.now ?? Date.now)()).toISOString(), ...e, rule: redact(e.rule), ...(e.note ? { note: redact(e.note) } : {}) };
     this.load().add(`${e.agentId}|${e.requestId}`);
     try {
       mkdirSync(join(this.o.root(), "state"), { recursive: true });
@@ -98,10 +101,25 @@ export class Permission {
     }
   }
 
-  /** `agent.permission_requested`. Serialised so two requests never interleave their log lines and responses. */
+  /** The agent as the port knows it. A remote one whose host cannot be asked is taken from what its event carried. */
+  private async info(agent: PermissionEvent["agent"]): Promise<AgentInfo | null> {
+    const sdk = this.o.ports.sdkPort();
+    const carried: AgentInfo | null = agent.serverId && agent.labels
+      ? { id: agent.id, status: agent.status ?? "running", labels: agent.labels, archived: false, updatedAt: null, cwd: null, serverId: agent.serverId, host: agent.hostLabel }
+      : null;
+    try {
+      return (sdk ? await sdk.agentInfo(agent.id) : null) ?? carried;
+    } catch (e) {
+      if (carried) return carried;
+      throw e;
+    }
+  }
+
+  /** `agent.permission_requested`. Serialised per host, so two requests never interleave their log lines and responses. */
   onRequested(ev: PermissionEvent): Promise<void> {
-    const run = this.chain.then(() => this.handle(ev)).catch((e) => this.o.log(`permission hook failed: ${(e as Error)?.stack ?? e}`));
-    this.chain = run;
+    const host = ev.agent.serverId ?? "";
+    const run = (this.chains.get(host) ?? Promise.resolve()).then(() => this.handle(ev)).catch((e) => this.o.log(`permission hook failed: ${(e as Error)?.stack ?? e}`));
+    this.chains.set(host, run);
     return run as Promise<void>;
   }
 
@@ -109,7 +127,7 @@ export class Permission {
     const root = this.o.root();
     if (!root) return;
     const sdk = this.o.ports.sdkPort();
-    const info = sdk ? await sdk.agentInfo(ev.agent.id) : null;
+    const info = await this.info(ev.agent);
     const task = info?.labels["fm.task"];
     if (!info || !task) return; // not crew
     const req = ev.request;
@@ -120,8 +138,9 @@ export class Permission {
     if (err && err !== this.lastError) this.o.log(`PROBLEM: ${err}`);
     this.lastError = err;
 
+    const serverId = info.serverId ?? ev.agent.serverId;
     const c = state.rules
-      ? classify(state.rules, req, { cwd: info.cwd, root, task, paseoHome: this.o.paseoHome })
+      ? classify(state.rules, req, { cwd: serverId ? null : info.cwd, root, task, paseoHome: this.o.paseoHome, remote: !!serverId })
       : { decision: "escalate" as const, rule: `rules unusable (${err})` };
     const mode = state.rules?.mode ?? "shadow";
     const base = { agentId: ev.agent.id, task, requestId: req.id, kind: req.kind, name: req.name, summary: summarize(req), rule: c.rule, mode };
@@ -144,8 +163,10 @@ export class Permission {
     const message = [
       `## Crew PERMISSION · ${task}`,
       `${base.summary}`,
-      `escalated by rule: ${c.rule}${mode === "shadow" ? " (shadow mode)" : ""}`,
-      `agent ${ev.agent.id} · ${info.labels["fm.shape"] ?? "?"} · project ${info.labels["fm.project"] ?? "-"} · request ${req.id}`,
+      `escalated by rule: ${redact(c.rule)}${mode === "shadow" ? " (shadow mode)" : ""}`,
+      `agent ${ev.agent.id} · ${info.labels["fm.shape"] ?? "?"} · project ${info.labels["fm.project"] ?? "-"}${serverId ? ` · on ${info.host ?? ev.agent.hostLabel ?? serverId}` : ""} · request ${req.id}`,
+      // Paseo's permission tools take no server id, so another host's request is answered with the command line
+      ...(serverId ? [`respond_to_permission reaches only this machine. Answer with: paseo permit allow ${ev.agent.id} ${req.id} --host "$(bin/page host-target ${ev.agent.id})" (or permit deny)`] : []),
       requestJson(req),
     ].join("\n");
     let lastErr = "";

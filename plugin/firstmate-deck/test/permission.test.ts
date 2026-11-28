@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { CliPort } from "../server/paseo-cli.ts";
 import { PortSelector } from "../server/paseo-port.ts";
 import { Permission, requestJson, type PermissionEntry, type PermissionEvent } from "../server/permission.ts";
-import { FakeWorld, fakePaseo } from "./fake-paseo.ts";
+import { FakeHosts, FakeWorld, fakePaseo, type FakeHost } from "./fake-paseo.ts";
 
 const RULES = (mode: string, extra: object = {}) => "# d\n\n- notify: plugin\n\n```json fm-permission-rules\n" + JSON.stringify({
   mode, allowKinds: ["tool"], read: true, writeWithin: ["$WORKTREE", "$ROOT/state/tasks/$TASK"],
@@ -130,4 +130,74 @@ test("requestJson drops bulky fields and caps the rest", () => {
   const j = requestJson({ id: "r", detail: { type: "write", filePath: "/a", content: "x".repeat(5000) }, title: "y".repeat(5000) });
   assert.ok(j.length <= 1501);
   assert.ok(!j.includes('"content"'));
+});
+
+// ---------- crews on other Paseo hosts: nothing about their files can be checked here ----------
+
+/** Crew "far" on host mac. Its cwd looks exactly like a local worktree, which must count for nothing. */
+async function remote(o: { mode?: string; extra?: object } = {}) {
+  const s = setup({ decisions: RULES(o.mode ?? "enforce", o.extra) });
+  const mac: FakeHost = { serverId: "srv_mac", label: "mac", world: new FakeWorld().add({ id: "far", labels: CREW, status: "running", cwd: s.wt }) };
+  const ports = new PortSelector(new CliPort(async () => "[]"), () => {});
+  ports.capture({ paseo: fakePaseo(s.world, new FakeHosts(mac)) }, "test");
+  await ports.current().listAgents();
+  writeFileSync(join(s.root, "state", "firstmate.json"), JSON.stringify({ agentId: "fm" }));
+  const perm = new Permission({ ports, root: () => s.root, paseoHome: join(s.base, "home"), log: () => {}, retryDelayMs: 1 });
+  const ev = (id: string, detail: object): PermissionEvent => ({ agent: { id: "far", parentAgentId: "fm", serverId: "srv_mac", labels: CREW }, request: { id, kind: "tool", name: "Tool", detail } as never });
+  return { ...s, mac, ports, perm, ev };
+}
+
+test("remote: a write that would be inside the worktree here is escalated, never allowed", async () => {
+  const s = await remote();
+  await s.perm.onRequested(s.ev("w1", { type: "write", filePath: join(s.wt, "a.txt") }));
+  await s.perm.onRequested(s.ev("w2", { type: "edit", filePath: "a.txt" }));
+  await s.perm.onRequested(s.ev("w3", { type: "write", filePath: join(s.root, "state", "tasks", "t1", "x") }));
+  assert.deepEqual(s.log().map((e) => [e.decision, e.result]), [["escalate", "woke"], ["escalate", "woke"], ["escalate", "woke"]]);
+  assert.match(s.log()[0].rule, /another host/);
+  assert.equal(s.mac.world.responded.length, 0);
+  assert.equal(s.world.sent.length, 3);
+  assert.match(s.world.sent[0].text, /agent far · ship · project p · on mac · request w1/);
+});
+
+test("remote: the wake says how to answer from this box; a local one needs no such line", async () => {
+  const s = await remote();
+  await s.perm.onRequested(s.ev("w1", { type: "write", filePath: "/x" }));
+  assert.ok(s.world.sent[0].text.includes(`paseo permit allow far w1 --host "$(bin/page host-target far)"`), s.world.sent[0].text);
+  assert.match(s.world.sent[0].text, /respond_to_permission reaches only this machine/);
+  await s.perm.onRequested({ agent: { id: "crew", parentAgentId: "fm" }, request: { id: "r1", kind: "tool", name: "Tool", detail: { type: "write", filePath: "/x" } } as never });
+  assert.equal(s.world.sent.length, 2);
+  assert.ok(!s.world.sent[1].text.includes("permit allow"), s.world.sent[1].text);
+});
+
+test("remote: a shell redirect to a file escalates; /dev/null and string-only checks still allow", async () => {
+  const s = await remote({ extra: { shell: { allow: ["^ls( |$)"] }, fetchHosts: ["example.com", "localhost", "127.0.0.1", "[::1]"] } });
+  await s.perm.onRequested(s.ev("s1", { type: "shell", command: `ls > ${join(s.wt, "out")}` }));
+  await s.perm.onRequested(s.ev("s2", { type: "shell", command: "ls > /dev/null" }));
+  await s.perm.onRequested(s.ev("s3", { type: "read", filePath: "/etc/hosts" }));
+  await s.perm.onRequested(s.ev("f1", { type: "fetch", url: "https://example.com/x" }));
+  for (const [i, url] of ["http://localhost:3000/", "http://127.0.0.1/", "http://[::1]:80/"].entries()) await s.perm.onRequested(s.ev(`l${i}`, { type: "fetch", url }));
+  assert.deepEqual(s.log().map((e) => [e.requestId, e.decision]), [["s1", "escalate"], ["s2", "allow"], ["s3", "allow"], ["f1", "allow"], ["l0", "escalate"], ["l1", "escalate"], ["l2", "escalate"]]);
+  assert.deepEqual(s.mac.world.responded.map((r) => r.requestId), ["s2", "s3", "f1"]);
+  assert.equal(s.world.responded.length, 0);
+});
+
+test("remote: a host that cannot be asked still wakes the first mate and is never answered", async () => {
+  const s = await remote();
+  s.mac.status = "offline";
+  s.mac.world.agents.clear();
+  await s.perm.onRequested(s.ev("w1", { type: "write", filePath: "/x" }));
+  assert.deepEqual(s.log().map((e) => [e.decision, e.result]), [["escalate", "woke"]]);
+  assert.equal(s.mac.world.responded.length, 0);
+});
+
+test("remote: a hung host never delays a local crew's request", async () => {
+  const s = await remote();
+  s.mac.world.hang = true;
+  void s.perm.onRequested(s.ev("w1", { type: "write", filePath: "/x" }));
+  await Promise.race([
+    s.perm.onRequested({ agent: { id: "crew", parentAgentId: "fm" }, request: { id: "r1", kind: "tool", name: "Tool", detail: { type: "read", filePath: "/x" } } as never }),
+    new Promise<never>((_, no) => setTimeout(() => no(new Error("held up")), 500).unref()),
+  ]);
+  assert.deepEqual(s.world.responded.map((r) => r.requestId), ["r1"]);
+  s.ports.sdkPort()!.hosts!.stop();
 });

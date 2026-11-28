@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { CliPort } from "../server/paseo-cli.ts";
 import { PortSelector, type TimelineItem } from "../server/paseo-port.ts";
 import { Gate, messageVerdict, notifySwitchOn, rejectionText, type GateEntry, type TurnEndedEvent } from "../server/gate.ts";
-import { assistant, FakeWorld, fakePaseo, shell } from "./fake-paseo.ts";
+import { assistant, FakeHosts, FakeWorld, fakePaseo, shell, type FakeAgent, type FakeHost } from "./fake-paseo.ts";
 
 const user = (text: string) => ({ type: "user_message", text }) as TimelineItem;
 const CREW = { "fm.task": "t1", "fm.project": "p", "fm.shape": "ship", "fm.notify": "plugin" };
@@ -270,4 +270,118 @@ test("the turn-end event's timeline is empty (deprecated): the verdict comes fro
   await g.onTurnEnded(s.end("", { timeline: [] }));
   assert.deepEqual(s.world.sent.map((m) => m.id), ["crew"]);
   assert.equal(s.log().at(-1)!.result, "bounced");
+});
+
+// ---------- crews on other Paseo hosts ----------
+
+const SWEPT = [user("go"), shell("ls"), assistant("DONE: far")];
+
+/** A local first mate plus crew "far" on host mac, known to the port as the Mac's. */
+async function remote(labels: Record<string, string> = CREW, ...more: FakeAgent[]) {
+  const s = setup();
+  const mac: FakeHost = { serverId: "srv_mac", label: "mac", world: new FakeWorld().add({ id: "far", labels, status: "idle", items: SWEPT, updatedAt: new Date().toISOString() }, ...more) };
+  const ports = new PortSelector(new CliPort(async () => "[]"), () => {});
+  ports.capture({ paseo: fakePaseo(s.world, new FakeHosts(mac)) }, "test");
+  await ports.current().listAgents();
+  s.claim("fm");
+  const mk = () => new Gate({ ports, root: () => s.root, firstmateLabel: () => "firstmate=true", log: () => {}, settleMs: 10, retryDelayMs: 1 });
+  const end = (turnId: string | null, text = "DONE: far"): TurnEndedEvent => ({ agent: { id: "far", parentAgentId: "fm", serverId: "srv_mac", labels, status: "idle" }, turnId, outcome: { kind: "completed" }, timeline: [user("go"), assistant(text)] });
+  return { ...s, ports, mac, mk, end };
+}
+
+const soon = <T>(p: Promise<T>, ms = 500) => Promise.race([p, new Promise<never>((_, no) => setTimeout(() => no(new Error("held up")), ms).unref())]);
+
+test("a remote crew's finish wakes the local first mate", async () => {
+  const s = await remote();
+  await s.mk().onTurnEnded(s.end("t1"));
+  assert.deepEqual(s.world.sent.map((m) => m.id), ["fm"]);
+  assert.equal(s.mac.world.sent.length, 0);
+});
+
+test("a hung host never delays a local crew's finish", async () => {
+  const s = await remote();
+  const g = s.mk();
+  s.mac.world.hang = true;
+  void g.onTurnEnded(s.end("t1"));
+  await soon(g.onTurnEnded({ agent: { id: "crew", parentAgentId: "fm" }, turnId: "l1", outcome: { kind: "completed" }, timeline: [user("go"), assistant("DONE: here")] }));
+  assert.match(s.world.sent[0].text, /DONE: here/);
+  g.stop();
+  s.ports.sdkPort()!.hosts!.stop();
+});
+
+test("a host that cannot be reached does not lose the finish its event already carries", async () => {
+  const s = await remote();
+  s.mac.world.agents.clear();
+  s.mac.status = "offline";
+  await s.mk().onTurnEnded(s.end("t1"));
+  assert.deepEqual(s.world.sent.map((m) => m.id), ["fm"]);
+});
+
+test("the sweep covers remote crews, and the host's own event for that turn is not a second wake", async () => {
+  const s = await remote();
+  assert.equal(await s.mk().sweep(), 1);
+  assert.deepEqual(s.world.sent.map((m) => m.id), ["fm"]);
+  await s.mk().onTurnEnded(s.end("t9"));
+  assert.equal(s.world.sent.length, 1);
+  assert.deepEqual([s.log().at(-1)!.result, s.log().at(-1)!.turnId], ["duplicate", "t9"]);
+  await s.mk().onTurnEnded(s.end("t9")); // a restart keeps it
+  assert.equal(s.world.sent.length, 1);
+  await s.mk().onTurnEnded(s.end("t10")); // a later turn that ends the same way is its own finish
+  assert.equal(s.world.sent.length, 2);
+});
+
+const minutes = (n: number) => new Date(Date.now() + n * 60_000).toISOString();
+
+test("a sweep-logged finish whose event never came does not swallow a later turn ending in the same line", async () => {
+  const s = await remote();
+  assert.equal(await s.mk().sweep(), 1);
+  // the later turn began after the agent was swept: its own finish, restart or not
+  await s.mk().onTurnEnded({ ...s.end("t10"), turnStartedAt: minutes(1) });
+  assert.deepEqual(s.world.sent.map((m) => m.id), ["fm", "fm"]);
+});
+
+test("a sweep and the host's event for one turn still wake once, however late the event is", async () => {
+  const s = await remote();
+  const g = s.mk();
+  assert.equal(await g.sweep(), 1);
+  await s.mk().onTurnEnded({ ...s.end("t9"), turnStartedAt: minutes(-5) });
+  assert.equal(s.world.sent.length, 1);
+  assert.deepEqual([s.log().at(-1)!.result, s.log().at(-1)!.turnId], ["duplicate", "t9"]);
+  await s.mk().onTurnEnded({ ...s.end("t10"), turnStartedAt: minutes(1) });
+  assert.equal(s.world.sent.length, 2);
+});
+
+test("the sweep does not repeat a remote finish whose event is still being delivered", async () => {
+  const s = await remote();
+  const g = s.mk();
+  const send = s.ports.send.bind(s.ports);
+  let release!: () => void;
+  const held = new Promise<void>((r) => { release = r; });
+  s.ports.send = async (id, text) => { await held; return send(id, text); };
+  const event = g.onTurnEnded(s.end("t1"));
+  const swept = g.sweep();
+  await new Promise((r) => setTimeout(r, 30));
+  release();
+  await Promise.all([event, swept]);
+  assert.equal(s.world.sent.length, 1);
+});
+
+test("the sweep leaves an offline host's crews alone", async () => {
+  const s = await remote();
+  s.ports.root = () => s.root;
+  s.mac.status = "offline";
+  const fresh = new PortSelector(new CliPort(async () => "[]"), () => {});
+  fresh.root = () => s.root;
+  fresh.capture({ paseo: fakePaseo(s.world, new FakeHosts(s.mac)) }, "test");
+  const g = new Gate({ ports: fresh, root: () => s.root, firstmateLabel: () => "firstmate=true", log: () => {} });
+  assert.equal(await g.sweep(), 0);
+  assert.equal(s.world.sent.length, 0);
+});
+
+test("a remote agent is never the wake target, by claim or as a parent", async () => {
+  const s = await remote(CREW, { id: "mac-boss", labels: { firstmate: "true" } });
+  s.claim("mac-boss");
+  await s.mk().onTurnEnded({ ...s.end("t1"), agent: { id: "far", parentAgentId: "mac-boss", serverId: "srv_mac", labels: CREW, status: "idle" } });
+  assert.equal(s.world.sent.length + s.mac.world.sent.length, 0);
+  assert.equal(s.log().at(-1)!.result, "no-target");
 });
