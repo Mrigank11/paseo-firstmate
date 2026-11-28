@@ -32,7 +32,7 @@ async function until(cond: () => boolean, ms = 3000) {
 type T = { id: string; state?: string; title?: string; asks?: { id: string; text: string }[] };
 const ask = (id: string, text: string) => ({ id, text, since: "2026-11-28T10:00:00Z" });
 
-async function rig(tasks: T[], o: { cfg?: Record<string, unknown>; deck?: Partial<DeckOpts>; crew?: string[]; brokenFleet?: boolean } = {}) {
+async function rig(tasks: T[], o: { cfg?: Record<string, unknown>; deck?: Partial<DeckOpts>; crew?: string[]; brokenFleet?: boolean; agents?: { broken: boolean } } = {}) {
   const root = mkdtempSync(join(tmpdir(), "deck-nt-"));
   const pdir = join(root, "state", "projects", "demo");
   mkdirSync(join(pdir, "sections"), { recursive: true });
@@ -44,7 +44,10 @@ async function rig(tasks: T[], o: { cfg?: Record<string, unknown>; deck?: Partia
   for (const task of o.crew ?? []) fw.add({ id: `ag-${task}`, status: "idle", createdAt: "2026-11-28T10:00:00Z", labels: { "fm.task": task, "fm.project": "demo" } });
   const exec = async (args: string[]) => (args[0] === "status" ? JSON.stringify({ listen: "127.0.0.1:1", serverId: "srv" }) : args[0] === "ls" ? "[]" : "");
   const ports = new PortSelector(new CliPort(exec));
-  ports.capture({ paseo: fakePaseo(fw) }, "test");
+  const paseo: any = fakePaseo(fw);
+  const list = paseo.agents.list;
+  paseo.agents.list = async (q: any) => { if (o.agents?.broken) throw new Error("daemon busy"); return list(q); };
+  ports.capture({ paseo }, "test");
   const port = 42000 + Math.floor(Math.random() * 1500);
   const cfg = { root, firstmateLabel: "firstmate=true", readMarksPort: port, canvasUrl: "", lavishBin: "/nonexistent/lavish-axi.mjs", lavishPort: "1", lavishStateDir: join(root, "lavish"), ...o.cfg };
   const start = async () => {
@@ -60,6 +63,8 @@ async function rig(tasks: T[], o: { cfg?: Record<string, unknown>; deck?: Partia
   return { root, pdir, fw, base, key, needs, page: () => readFileSync(join(pdir, "page.html"), "utf8"),
     get deck() { return deck; },
     stop() { deck.stop(); },
+    /** fleet.json changes with no deck looking. */
+    write: fleet,
     async restart() { deck.stop(); await sleep(50); deck = await start(); },
     async set(ts: T[]) { fleet(ts); await deck.render("demo"); },
     /** Paseo says something about a crew agent changed. */
@@ -183,6 +188,30 @@ test("until a crew's canvas has been read the list is not ready; with agent-canv
   } finally { r.stop(); }
 });
 
+test("a crew nobody has asked agent-canvas about yet makes the list not ready", async () => {
+  const { c, opts } = fakeCanvas();
+  const r = await rig([WAITING, { id: "first" }, { id: "second" }], { ...opts, crew: ["first"] });
+  try {
+    await needsUntil(r, (n) => n.status === 200 && n.body.partial === false);
+    c.mode = "hang";
+    await sleep(60); // the poll in flight now never answers
+    r.fw.add({ id: "ag-second", status: "idle", createdAt: "2026-11-28T10:00:00Z", labels: { "fm.task": "second", "fm.project": "demo" } });
+    await r.agentMoved("ag-second");
+    assert.equal((await r.needs()).status, 503);
+  } finally { r.stop(); }
+});
+
+test("until Paseo has said which agents are crew the list is not ready", async () => {
+  const agents = { broken: true };
+  const r = await rig([WAITING], { agents });
+  try {
+    assert.equal((await r.needs()).status, 503);
+    agents.broken = false;
+    r.deck.onAgentEvent("fm-1");
+    await needsUntil(r, (n) => n.status === 200);
+  } finally { r.stop(); }
+});
+
 test("an unreadable fleet.json at start-up is not an empty list", async () => {
   const r = await rig([], { brokenFleet: true });
   try {
@@ -277,7 +306,7 @@ test("leaving Needs you and entering it again fires again; a short blip with the
   } finally { r.stop(); }
 });
 
-test("an unreachable deck or one that was restarted changes nothing: what was waiting does not fire when it is back", async () => {
+test("an unreachable or restarted deck: when it is back, only what started waiting meanwhile fires", async () => {
   const r = await rig([WAITING]);
   try {
     const w = await openWindow(r);
@@ -285,10 +314,11 @@ test("an unreachable deck or one that was restarted changes nothing: what was wa
     r.stop(); // the web server is gone
     await w.next(); await w.next(120_000);
     assert.match(w.el("msg").textContent, /Can.t reach/);
+    r.write([WAITING, { id: "during", title: "Started waiting meanwhile", asks: [ask("a1", "Which?")] }]);
     await r.restart();
     await w.next(); await w.next();
     assert.match(w.el("msg").textContent, /Watching/);
-    assert.equal(w.fired.length, 0);
+    assert.deepEqual(w.fired.map((n) => n.title), ["Started waiting meanwhile"], "only what is new since it was last seen");
     assert.ok(w.signals.every((x) => x), "every request gives up after a while");
   } finally { r.stop(); }
 });
