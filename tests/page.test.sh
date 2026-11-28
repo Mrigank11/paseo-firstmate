@@ -282,6 +282,12 @@ msg="$(FAKE_HOSTS="$MACUP" FAKE_FOREIGN_AGENTS=crew-theirs PASEO_AGENT_ID=agent-
 grep -qE "(agent update|inspect) crew-theirs .*--host" "$FAKE_LOG" && bad "another daemon's agent on a host is never looked at or relabelled" "$(cat "$FAKE_LOG")" || ok "another daemon's agent on a host is never looked at or relabelled"
 msg="$(FAKE_HOSTS="$MACDOWN" FAKE_REMOTE_AGENTS=crew-mac PASEO_AGENT_ID=agent-fm-2 STAGE_AGENTS_JSON="$T/mac-agents.json" "$P" claim 2>&1)"; rc=$?
 [[ $rc -eq 0 ]] && grep -q "could not re-point crew crew-mac" <<<"$msg" && ok "...an offline host's crew is reported as not re-pointed, and the claim stands" || bad "offline relabel" "rc=$rc $msg"
+out="$(FAKE_HOSTS="$MACUP" FAKE_REMOTE_AGENTS=crew-mac "$P" host-target crew-mac 2>"$T/ht.err")"; rc=$?
+eq "$rc $out" "0 tcp://mac:6767" "host-target prints what --host takes for our crew on another host"
+out="$(FAKE_HOSTS="$MACUP" FAKE_FOREIGN_AGENTS=crew-theirs "$P" host-target crew-theirs 2>"$T/ht.err")"; rc=$?
+[[ $rc -ne 0 && -z "$out" ]] && grep -q "crew-theirs is not our crew on a reachable host" "$T/ht.err" && ok "...and refuses another daemon's agent" || bad "host-target foreign" "rc=$rc out=$out $(cat "$T/ht.err")"
+out="$(FAKE_HOSTS="$MACDOWN" FAKE_REMOTE_AGENTS=crew-mac "$P" host-target crew-mac 2>"$T/ht.err")"; rc=$?
+[[ $rc -ne 0 && -z "$out" ]] && ok "...and a crew whose host is offline" || bad "host-target offline" "rc=$rc out=$out"
 echo '{"agentId":"agent-fm-1","claimedAt":"2026-10-21T00:00:00Z"}' >"$T/root/state/firstmate.json"
 : >"$FAKE_LOG"
 msg="$(FAKE_HOSTS="$MACUP" FAKE_REMOTE_AGENTS=fm-on-mac PASEO_AGENT_ID=fm-on-mac "$P" claim 2>&1)"; rc=$?

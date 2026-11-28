@@ -159,6 +159,16 @@ test("remote: a write that would be inside the worktree here is escalated, never
   assert.match(s.world.sent[0].text, /agent far · ship · project p · on mac · request w1/);
 });
 
+test("remote: the wake says how to answer from this box; a local one needs no such line", async () => {
+  const s = await remote();
+  await s.perm.onRequested(s.ev("w1", { type: "write", filePath: "/x" }));
+  assert.ok(s.world.sent[0].text.includes(`paseo permit allow far w1 --host "$(bin/page host-target far)"`), s.world.sent[0].text);
+  assert.match(s.world.sent[0].text, /respond_to_permission reaches only this machine/);
+  await s.perm.onRequested({ agent: { id: "crew", parentAgentId: "fm" }, request: { id: "r1", kind: "tool", name: "Tool", detail: { type: "write", filePath: "/x" } } as never });
+  assert.equal(s.world.sent.length, 2);
+  assert.ok(!s.world.sent[1].text.includes("permit allow"), s.world.sent[1].text);
+});
+
 test("remote: a shell redirect to a file escalates; /dev/null and string-only checks still allow", async () => {
   const s = await remote({ extra: { shell: { allow: ["^ls( |$)"] }, fetchHosts: ["example.com", "localhost", "127.0.0.1", "[::1]"] } });
   await s.perm.onRequested(s.ev("s1", { type: "shell", command: `ls > ${join(s.wt, "out")}` }));

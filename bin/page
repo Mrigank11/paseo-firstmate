@@ -48,6 +48,7 @@
 #                                     tasks that have no project
 #   bin/page heal                     reload the firstmate-deck plugin if it has failed or stopped rendering. A state file the
 #                                     plugin cannot read (loadError) is reported, not "healed" by a reload
+#   bin/page host-target <agentId>    what `--host` takes for OUR crew on another Paseo host (docs/STATE.md, "Acting on a crew there")
 #   bin/page render <project> [--out <file>]   render the page file once, no Lavish
 #   Paseo's daemon (daemon.agentProfiles) is the source of truth for the lanes; config/paseo-profiles.json is a seed and a
 #   git-tracked snapshot of it. Edit a profile in Paseo, then --pull to update the file.
@@ -159,6 +160,13 @@ bounded() { if command -v timeout >/dev/null 2>&1; then timeout "${PASEO_HOST_TI
 # looked at or relabelled). Who is ours: plugin/firstmate-deck/server/ownership.ts.
 remote_target() { # agent-id
   NODE_NO_WARNINGS=1 node "$REPO/plugin/firstmate-deck/server/canvas-cmd.ts" host-target "$ROOT" "$1" 2>/dev/null || true
+}
+
+# For the first mate: Paseo tools that take no server id are run as `paseo ... --host "$(bin/page host-target <agent>)"`.
+cmd_host_target() { # agent-id
+  [[ -n "${1:-}" ]] || die "host-target needs an agent id"
+  local t; t="$(remote_target "$1")"; [[ -n "$t" ]] || die "$1 is not our crew on a reachable host"
+  printf '%s\n' "$t"
 }
 
 # `paseo inspect <id> --json` from this daemon, else from the online host that has the agent, if it is ours.
@@ -712,6 +720,7 @@ case "${1:-}" in
   status) shift; cmd_status "$@" ;;
   heal) shift; cmd_heal ;;
   render) shift; cmd_render "$@" ;;
+  host-target) shift; cmd_host_target "$@" ;;
   canvas-snippet) shift; cmd_canvas_snippet "$@" ;;
   canvas-answer) shift; cmd_canvas_answer "$@" ;;
   canvas-snapshot) shift; cmd_canvas_snapshot "$@" ;;

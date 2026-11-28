@@ -165,6 +165,8 @@ export class Permission {
       `${base.summary}`,
       `escalated by rule: ${redact(c.rule)}${mode === "shadow" ? " (shadow mode)" : ""}`,
       `agent ${ev.agent.id} · ${info.labels["fm.shape"] ?? "?"} · project ${info.labels["fm.project"] ?? "-"}${serverId ? ` · on ${info.host ?? ev.agent.hostLabel ?? serverId}` : ""} · request ${req.id}`,
+      // Paseo's permission tools take no server id, so another host's request is answered with the command line
+      ...(serverId ? [`respond_to_permission reaches only this machine. Answer with: paseo permit allow ${ev.agent.id} ${req.id} --host "$(bin/page host-target ${ev.agent.id})" (or permit deny)`] : []),
       requestJson(req),
     ].join("\n");
     let lastErr = "";

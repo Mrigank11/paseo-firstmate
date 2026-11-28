@@ -43,6 +43,8 @@ Most scouts inherit a **shared** read-only checkout (e.g. the campaigns local ch
 
 The test is **ownership, not shape**: archive the `workspaceId` of the task's current agent (`get_agent_status`; find the agent with `bin/fleet stage <id>`) when it is `kind: worktree` and no other live agent with a different `fm.task` label sits in it; never archive one another task's agent also uses (a shared checkout), and never a `local_checkout`. REFUSE teardown if the workspace holds unlanded work (a dirty tree or unpushed commits) — surface it to the captain instead of archiving.
 
+A scout on another host (`<id>@<host>` in `bin/fleet stages`) is out of reach of `archive_workspace`: use the commands in `docs/STATE.md`, "Acting on a crew there".
+
 ## Verify before trust
 
 Scout crew members often run on cheap/fast models whose output can be plausible but wrong, so treat every load-bearing factual claim (a file exists, an API behaves a certain way, a doc says X) as unverified until spot-checked.
